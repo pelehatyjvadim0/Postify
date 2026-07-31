@@ -1,0 +1,43 @@
+# Секреты и локальная конфигурация
+.env
+.env.*
+!.env.example
+
+# Зависимости и сборка
+node_modules/
+dist/
+build/
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Локальные данные, логи и временные файлы
+*.log
+tmp/
+temp/
+.cache/
+
+# IDE и ОС
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Служебные файлы агентов и их локальные артефакты
+AGENTS.md
+AGENTS.MD
+CLAUDE.md
+GEMINI.md
+.codex/
+.claude/
+.cursor/
+.agents/
+.opencode/
+docs/superpowers/
