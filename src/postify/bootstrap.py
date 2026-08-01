@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from time import monotonic, sleep
 
 import httpx
@@ -28,8 +29,9 @@ def open_importer(
     settings: Settings, *, transport: httpx.BaseTransport | None = None
 ) -> Iterator[ImportCandidates]:
     engine = create_engine_from_settings(settings)
-    client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
+    client: httpx.Client | None = None
     try:
+        client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
         source = HnAlgoliaCandidateSource(
             client=client,
             url=settings.hn_algolia_url,
@@ -40,7 +42,8 @@ def open_importer(
         repository = SqlAlchemyCandidateRepository(sessionmaker(engine))
         yield ImportCandidates(source, repository)
     finally:
-        client.close()
+        if client is not None:
+            client.close()
         engine.dispose()
 
 
@@ -65,7 +68,9 @@ def wait_for_database(settings: Settings) -> None:
 
 
 def migrations_at_head(settings: Settings) -> bool:
-    alembic_config = Config("alembic.ini")
+    project_root = Path(__file__).resolve().parents[2]
+    alembic_config = Config(str(project_root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(project_root / "migrations"))
     expected_heads = set(ScriptDirectory.from_config(alembic_config).get_heads())
     engine = create_engine_from_settings(settings)
     try:

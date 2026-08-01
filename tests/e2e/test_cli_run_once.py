@@ -54,7 +54,12 @@ class FakeSystemd:
         return "inactive"
 
     def active_state(self, unit: str) -> str:
-        return {"postgresql-custom.service": "active", "postify-run-once.timer": "active"}[unit]
+        self.events.append(f"state:{unit}")
+        return {
+            "postgresql-custom.service": "active",
+            "postify-run-once.timer": "active",
+            "postify-run-once.service": "inactive",
+        }[unit]
 
     def timer_properties(self) -> dict[str, str]:
         return {"LastTriggerUSec": "сегодня", "NextElapseUSecRealtime": "завтра"}
@@ -162,12 +167,36 @@ def test_start_does_not_enable_timer_when_migrations_are_behind(monkeypatch) -> 
     assert events == ["postgresql:start", "database:ready"]
 
 
+def test_start_normalizes_alembic_check_error_without_enabling_timer(monkeypatch) -> None:
+    # Break caught: a traceback after PostgreSQL starts when Alembic cannot find its scripts.
+    from alembic.util.exc import CommandError
+    from postify import cli
+
+    events: list[str] = []
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(cli, "create_systemd_controller", lambda configured_settings: FakeSystemd(events))
+    monkeypatch.setattr(cli, "wait_for_database", lambda configured_settings: events.append("database:ready"))
+    monkeypatch.setattr(
+        cli,
+        "migrations_at_head",
+        lambda configured_settings: (_ for _ in ()).throw(CommandError("No 'script_location' key")),
+    )
+
+    result = runner.invoke(cli.app, ["start"])
+
+    assert result.exit_code != 0
+    assert "Не удалось проверить миграции" in result.output
+    assert "Traceback" not in result.output
+    assert events == ["postgresql:start", "database:ready"]
+
+
 def test_status_reports_real_boundary_data_without_inventing_queue_or_errors(monkeypatch) -> None:
     # Break caught: status omits a required state or invents future queue/error information.
     from postify import cli
 
+    events: list[str] = []
     monkeypatch.setattr(cli, "Settings", settings)
-    monkeypatch.setattr(cli, "create_systemd_controller", lambda configured_settings: FakeSystemd([]))
+    monkeypatch.setattr(cli, "create_systemd_controller", lambda configured_settings: FakeSystemd(events))
     monkeypatch.setattr(cli, "database_is_ready", lambda configured_settings: True)
     monkeypatch.setattr(cli, "candidate_count", lambda configured_settings: 4)
 
@@ -177,9 +206,14 @@ def test_status_reports_real_boundary_data_without_inventing_queue_or_errors(mon
     assert "PostgreSQL unit: postgresql-custom.service; state: active" in result.output
     assert "БД: доступна; кандидатов: 4" in result.output
     assert "Таймер: active; последнее: сегодня; следующее: завтра" in result.output
-    assert "run-once: unavailable" in result.output
+    assert "run-once: inactive" in result.output
     assert "очеред" not in result.output.lower()
     assert "ошибк" not in result.output.lower()
+    assert events == [
+        "state:postgresql-custom.service",
+        "state:postify-run-once.timer",
+        "state:postify-run-once.service",
+    ]
 
 
 def test_stop_keeps_postgresql_running_when_run_once_wait_times_out(monkeypatch) -> None:

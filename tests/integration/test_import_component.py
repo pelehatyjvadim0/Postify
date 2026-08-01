@@ -7,12 +7,14 @@ import httpx
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from typer.testing import CliRunner
 
 from postify.config import Settings
 from postify.infrastructure.database.models import CandidateModel
 
 
 pytestmark = pytest.mark.integration
+runner = CliRunner()
 
 
 def configured_settings(database_url: str) -> Settings:
@@ -121,3 +123,68 @@ def test_open_importer_closes_client_and_disposes_engine_on_success_and_source_e
             importer.execute()
 
     assert events == ["client:close", "engine:dispose"]
+
+
+def test_open_importer_disposes_engine_when_http_client_construction_fails(monkeypatch) -> None:
+    # Break caught: leaking the already-created engine if HTTPX cannot construct its client.
+    from postify import bootstrap
+
+    events: list[str] = []
+
+    class TrackingEngine:
+        def dispose(self) -> None:
+            events.append("engine:dispose")
+
+    def failing_client(**kwargs: object) -> httpx.Client:
+        raise RuntimeError("не удалось создать HTTP client")
+
+    monkeypatch.setattr(bootstrap, "create_engine_from_settings", lambda settings: TrackingEngine())
+    monkeypatch.setattr(bootstrap.httpx, "Client", failing_client)
+
+    with pytest.raises(RuntimeError, match="не удалось создать HTTP client"):
+        with bootstrap.open_importer(configured_settings("postgresql+psycopg://unused")):
+            pass
+
+    assert events == ["engine:dispose"]
+
+
+def test_migrations_at_head_uses_project_configuration_outside_current_directory(
+    migrated_database_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # Break caught: resolving alembic.ini/scripts from the process CWD rather than the project.
+    from postify.bootstrap import migrations_at_head
+
+    monkeypatch.chdir(tmp_path)
+
+    assert migrations_at_head(configured_settings(tcp_database_url(migrated_database_url))) is True
+
+
+def test_start_reaches_alembic_head_check_from_another_current_directory(
+    migrated_database_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # Break caught: postify start failing outside the project after PostgreSQL has already started.
+    from postify import cli
+
+    events: list[str] = []
+
+    class Systemd:
+        def start_postgresql(self) -> None:
+            events.append("postgresql:start")
+
+        def enable_and_start_timer(self) -> None:
+            events.append("timer:enable-start")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "Settings",
+        lambda: configured_settings(tcp_database_url(migrated_database_url)),
+    )
+    monkeypatch.setattr(cli, "create_systemd_controller", lambda settings: Systemd())
+    monkeypatch.setattr(cli, "wait_for_database", lambda settings: events.append("database:ready"))
+
+    result = runner.invoke(cli.app, ["start"])
+
+    assert result.exit_code == 0
+    assert result.output == "Таймер Postify запущен\n"
+    assert events == ["postgresql:start", "database:ready", "timer:enable-start"]

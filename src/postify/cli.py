@@ -4,6 +4,7 @@ import subprocess
 from time import monotonic, sleep
 
 import typer
+from alembic.util.exc import CommandError
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -66,7 +67,12 @@ def start() -> None:
         systemd = create_systemd_controller(settings)
         systemd.start_postgresql()
         wait_for_database(settings)
-        if not migrations_at_head(settings):
+        try:
+            migrations_ready = migrations_at_head(settings)
+        except (CommandError, OSError):
+            _fail(RuntimeError("Не удалось проверить миграции"))
+            return
+        if not migrations_ready:
             raise RuntimeError("Миграции БД не находятся на Alembic head")
         systemd.enable_and_start_timer()
     except (ValidationError, DatabaseUnavailableError, SystemdCommandError, SQLAlchemyError, RuntimeError) as error:
@@ -84,6 +90,7 @@ def status() -> None:
         systemd = create_systemd_controller(settings)
         postgresql_state = systemd.active_state(settings.postgresql_systemd_unit)
         timer_state = systemd.active_state("postify-run-once.timer")
+        run_once_state = systemd.active_state("postify-run-once.service")
         timer = systemd.timer_properties()
         ready = database_is_ready(settings)
         count = candidate_count(settings) if ready else None
@@ -98,7 +105,7 @@ def status() -> None:
         f"{timer_state}; последнее: {timer.get('LastTriggerUSec', 'неизвестно')}; "
         f"следующее: {timer.get('NextElapseUSecRealtime', 'неизвестно')}"
     )
-    typer.echo("run-once: unavailable")
+    typer.echo(f"run-once: {run_once_state}")
 
 
 @app.command()
