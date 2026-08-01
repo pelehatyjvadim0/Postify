@@ -2,16 +2,27 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from postify.domain.candidates.models import Candidate
 
 
 pytestmark = pytest.mark.integration
+
+
+class RollbackTrackingSession(Session):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.rollback_calls = 0
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+        super().rollback()
 
 
 def candidate(source_id: str, **overrides: object) -> Candidate:
@@ -106,6 +117,15 @@ def test_concurrent_saves_of_one_source_key_create_exactly_one_row(
     engine = create_engine(migrated_database_url)
     session_factory = sessionmaker(engine)
     repository = SqlAlchemyCandidateRepository(session_factory)
+    insert_barrier = Barrier(2)
+
+    def synchronize_candidate_inserts(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        if statement.startswith("INSERT INTO candidates"):
+            insert_barrier.wait(timeout=5)
+
+    event.listen(engine, "before_cursor_execute", synchronize_candidate_inserts)
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -117,25 +137,34 @@ def test_concurrent_saves_of_one_source_key_create_exactly_one_row(
         assert sum(created_counts) == 1
         assert total == 1
     finally:
+        event.remove(engine, "before_cursor_execute", synchronize_candidate_inserts)
         engine.dispose()
 
 
-def test_save_new_rolls_back_serialization_error_and_accepts_the_next_batch(
+def test_save_new_explicitly_rolls_back_and_reuses_session_after_serialization_error(
     migrated_database_url: str,
 ) -> None:
+    from postify.infrastructure.database.models import CandidateModel
     from postify.infrastructure.repositories.sqlalchemy_candidates import (
         SqlAlchemyCandidateRepository,
     )
 
     engine = create_engine(migrated_database_url)
-    session_factory = sessionmaker(engine)
-    repository = SqlAlchemyCandidateRepository(session_factory)
+    shared_session = RollbackTrackingSession(bind=engine)
+    repository = SqlAlchemyCandidateRepository(lambda: shared_session)  # type: ignore[arg-type]
     invalid = candidate("invalid", raw_payload={"not_json": object()})
 
     try:
         with pytest.raises(TypeError, match="not JSON serializable"):
             repository.save_new([invalid])
 
+        assert shared_session.rollback_calls == 1
         assert repository.save_new([candidate("valid")]) == 1
+
+        with sessionmaker(engine)() as verification_session:
+            total = verification_session.scalar(select(func.count()).select_from(CandidateModel))
+
+        assert total == 1
     finally:
+        shared_session.close()
         engine.dispose()
