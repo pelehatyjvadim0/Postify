@@ -113,13 +113,32 @@ def test_fetch_skips_invalid_hits_without_losing_valid_ones() -> None:
     assert [candidate.source_id for candidate in candidates] == ["valid"]
 
 
+@pytest.mark.parametrize("status_code", [429, 500])
+def test_fetch_wraps_unsuccessful_http_status_before_reading_valid_json(
+    status_code: int,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"hits": []}, request=request)
+
+    source = HnAlgoliaCandidateSource(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        url="https://hn.algolia.test/api/v1/search",
+        query="security testing",
+        tags="story",
+        hits=10,
+    )
+
+    with pytest.raises(SourceFetchError) as error:
+        source.fetch()
+
+    assert isinstance(error.value.__cause__, httpx.HTTPStatusError)
+
+
 @pytest.mark.parametrize(
     "handler",
     [
         lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=request)),
         lambda request: (_ for _ in ()).throw(httpx.ConnectError("offline", request=request)),
-        lambda request: httpx.Response(429, request=request),
-        lambda request: httpx.Response(503, request=request),
         lambda request: httpx.Response(200, text="not json", request=request),
         lambda request: httpx.Response(200, json={"nbHits": 1}, request=request),
     ],
@@ -139,4 +158,3 @@ def test_fetch_wraps_transport_and_invalid_response_failures(handler: Any) -> No
     assert error.value.__cause__ is not None
     assert "security testing" not in str(error.value)
     assert "not json" not in str(error.value)
-

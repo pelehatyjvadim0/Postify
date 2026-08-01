@@ -64,4 +64,3 @@ def test_rejects_repository_count_outside_received_range(created: int) -> None:
 
     with pytest.raises(ValueError, match="created"):
         ImportCandidates(source, repository).execute()
-
