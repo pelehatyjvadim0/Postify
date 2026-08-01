@@ -17,7 +17,12 @@ def write_fake_binaries(tmp_path: Path) -> tuple[Path, Path]:
     for name, body in {
         "systemctl": (
             'printf "systemctl %s\\n" "$*" >> "$COMMAND_LOG"\n'
-            'if [ "${FAIL_DAEMON_RELOAD:-}" = "1" ] && [ "$1" = "daemon-reload" ]; then exit 23; fi\n'
+            'if [ "${FAIL_DAEMON_RELOAD:-}" = "1" ] && [ "$1" = "daemon-reload" ]; then\n'
+            '  count=$(cat "$DAEMON_RELOAD_COUNT_FILE" 2>/dev/null || printf 0)\n'
+            '  count=$((count + 1))\n'
+            '  printf "%s" "$count" > "$DAEMON_RELOAD_COUNT_FILE"\n'
+            '  [ "$count" -ne 1 ] || exit 23\n'
+            'fi\n'
         ),
         "systemd-analyze": (
             'printf "systemd-analyze %s\\n" "$*" >> "$COMMAND_LOG"\n'
@@ -91,6 +96,7 @@ def run_installer(
         "PATH": f"{binary_dir}:{os.environ['PATH']}",
         "COMMAND_LOG": str(log_file),
         "INSTALL_COUNT_FILE": str(tmp_path / "install-count"),
+        "DAEMON_RELOAD_COUNT_FILE": str(tmp_path / "daemon-reload-count"),
     }
     if fail_verify:
         environment["FAIL_VERIFY"] = "1"
@@ -164,7 +170,7 @@ def test_installer_rejects_invalid_values_without_changing_destination(
     tmp_path: Path, calendars: list[str] | None, project_dir: str | None
 ) -> None:
     # Break caught: accepting unsafe schedule/path input and writing any unit nevertheless.
-    result, destination, _ = run_installer(
+    result, destination, log_file = run_installer(
         tmp_path, calendars=calendars, project_dir=project_dir
     )
 
@@ -197,7 +203,7 @@ def test_installer_restores_existing_units_when_finalization_fails(
     tmp_path: Path, failure: str
 ) -> None:
     # Break caught: returning an error after changing only part of the installed unit pair.
-    result, destination, _ = run_installer(
+    result, destination, log_file = run_installer(
         tmp_path,
         fail_daemon_reload=failure == "daemon-reload",
         interrupt_after_first_install=failure == "signal",
@@ -207,3 +213,5 @@ def test_installer_restores_existing_units_when_finalization_fails(
     assert result.returncode != 0
     assert (destination / "postify-run-once.service").read_text() == "old service\n"
     assert (destination / "postify-run-once.timer").read_text() == "old timer\n"
+    if failure == "daemon-reload":
+        assert log_file.read_text().splitlines().count("systemctl daemon-reload") == 2

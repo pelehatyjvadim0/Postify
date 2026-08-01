@@ -103,6 +103,7 @@ destination_timer="$destination/postify-run-once.timer"
 service_was_present=0
 timer_was_present=0
 installation_started=0
+daemon_reload_started=0
 
 cleanup() {
     exit_status=$?
@@ -116,6 +117,9 @@ cleanup() {
             cp "$backup_dir/postify-run-once.timer" "$destination_timer"
         else
             rm -f "$destination_timer"
+        fi
+        if [ "$daemon_reload_started" -eq 1 ]; then
+            systemctl daemon-reload || :
         fi
     fi
     rm -rf "$temp_dir"
@@ -162,5 +166,7 @@ fi
 installation_started=1
 install -D -m 0644 "$temp_dir/postify-run-once.service" "$destination_service"
 install -D -m 0644 "$temp_dir/postify-run-once.timer" "$destination_timer"
+daemon_reload_started=1
 systemctl daemon-reload
+daemon_reload_started=0
 installation_started=0
