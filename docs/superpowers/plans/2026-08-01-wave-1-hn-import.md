@@ -1,37 +1,39 @@
 # План реализации волны 1: импорт HN Algolia
 
-> **Для агентных исполнителей:** обязательный навык — `superpowers:executing-plans`. Шаги отмечаются чекбоксами и выполняются последовательно.
+> **Для агентных исполнителей:** выполнять задачи строго последовательно через TDD. Перед следующей волной обязателен свежий reviewer Terra 5.6 high: сначала тесты и критичные мутации, затем код.
 
-**Цель:** по команде `postify run-once` получать кандидатов HN Algolia, сохранять новые записи в PostgreSQL и безопасно пропускать дубли; подготовить локальный запуск задачи через systemd timer.
+**Цель:** команда `postify run-once` получает кандидатов HN Algolia, сохраняет новые записи в PostgreSQL и безопасно пропускает дубли; `start`, `status` и `stop` безопасно управляют system unit'ами.
 
-**Архитектура:** синхронный CLI собирает зависимости в `bootstrap.py`. Сценарий импорта зависит только от портов источника и репозитория; HTTPX и SQLAlchemy остаются в адаптерах и инфраструктуре. Уникальная пара `source_name` и `source_id` гарантирует идемпотентность хранения.
+**Архитектура:** CLI собирает зависимости в `bootstrap.py`. Сценарий импорта зависит от порта источника и порта репозитория; HTTPX и SQLAlchemy остаются на внешних границах. Идемпотентность хранения обеспечивает ограничение PostgreSQL на `(source_name, source_id)`.
 
 **Стек:** Python 3.12, uv, Typer, Pydantic Settings, HTTPX, SQLAlchemy, Psycopg, Alembic, PostgreSQL 16, Pytest, systemd.
 
 ## Общие ограничения
 
-- Локальная Ubuntu и будущий VPS используют одинаковый код; отличаются только `.env`, системный пользователь и путь к окружению.
 - Docker и контейнеры не используются.
-- Секреты не добавляются в Git; в репозитории хранится только `.env.example`.
-- Код пишется через TDD: сначала падающий тест, затем минимальная реализация.
-- Во время модульных и CLI-тестов запрещены реальные запросы в Algolia, Telegram, systemd и PostgreSQL.
-- Каждая команда Git фиксируется локально; отправка в GitHub требует отдельного подтверждения пользователя.
+- Секреты не попадают в Git; в репозитории хранится только `.env.example`.
+- Ниша и поисковый запрос не зашиваются в адаптер: `HN_QUERY` приходит из конфигурации текущей фермы.
+- Модульные и CLI-тесты не обращаются к сети, PostgreSQL и systemd.
+- Интеграционные тесты используют только отдельную обязательную `TEST_DATABASE_URL`. В обязательной проверке волны отсутствие переменной — ошибка, а не `skip`; CI поднимает чистую PostgreSQL 16 для этого набора.
+- Каждый тестовый пример проходит цикл «красный по ожидаемой причине → минимальный зелёный код». Тест, который падает из-за отсутствия `pyproject.toml` или зависимости вместо проверяемого контракта, не считается красным TDD-тестом.
+- Код и новые файлы добавляются только для работающего сценария этой волны. Не создаются заготовки будущих генератора, Telegram или наблюдаемости.
+- Локальные коммиты допустимы; отправка в GitHub требует отдельного подтверждения пользователя.
 
----
+## Операционное условие
+
+HN Algolia — выбранный первый источник; все его параметры поиска приходят из конфигурации. До задачи 5 оператор предоставляет абсолютные пути к Python-окружению и `EnvironmentFile`, системного пользователя службы, три времени с часовым поясом, `POSTGRESQL_SYSTEMD_UNIT` и явное значение владения БД: `dedicated` либо `shared_allowed`. Используются system unit'ы. `postify start` и `stop` выполняют команды PostgreSQL только при одном из этих явно указанных значений; при `shared_allowed` оператор подтверждает остановку общего экземпляра для всех клиентов.
 
 ## Карта файлов волны
 
-Создаются только эти файлы. Другие каталоги из целевой архитектуры пока не создаются.
+Создаются только файлы, нужные для импорта, хранения и его проверки:
 
 ```text
 pyproject.toml
+uv.lock
 .env.example
 alembic.ini
 migrations/env.py
 migrations/versions/*_create_candidates.py
-deploy/systemd/postify-run-once.service
-deploy/systemd/postify-run-once.timer
-scripts/install-systemd.sh
 src/postify/__init__.py
 src/postify/config.py
 src/postify/bootstrap.py
@@ -40,27 +42,30 @@ src/postify/domain/candidates/models.py
 src/postify/application/ports/candidate_source.py
 src/postify/application/ports/candidate_repository.py
 src/postify/application/ingestion/import_candidates.py
-src/postify/application/jobs/run_once.py
 src/postify/adapters/sources/hn_algolia.py
 src/postify/infrastructure/database/engine.py
 src/postify/infrastructure/database/models.py
 src/postify/infrastructure/repositories/sqlalchemy_candidates.py
 src/postify/infrastructure/systemd.py
+deploy/systemd/postify-run-once.service
+deploy/systemd/postify-run-once.timer
+scripts/install-systemd.sh
+tests/unit/config/test_settings.py
 tests/unit/domain/candidates/test_models.py
 tests/unit/application/ingestion/test_import_candidates.py
 tests/unit/adapters/sources/test_hn_algolia.py
+tests/unit/infrastructure/test_systemd.py
+tests/integration/conftest.py
+tests/integration/test_migrations.py
 tests/integration/infrastructure/test_sqlalchemy_candidates.py
+tests/integration/test_import_component.py
 tests/e2e/test_cli_run_once.py
+tests/e2e/test_systemd_installer.py
 ```
 
-Изменяются существующие файлы:
+Изменяется `README.md`: после успешного завершения волны добавить инструкцию `uv sync`, настройку `.env`, миграцию, разовый запуск и установку system unit'ов. Не обещать отбор, генерацию, Telegram или расширенный `status`.
 
-```text
-.gitignore  — добавить исключения виртуального окружения, кэшей, локальных журналов и `.env`, не затрагивая уже заданные правила.
-README.md   — добавить короткий раздел установки и проверки первой волны после успешной реализации.
-```
-
-## Контракт данных
+## Контракты
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -77,308 +82,75 @@ class ImportResult:
     received: int
     created: int
     duplicates: int
+
+class CandidateSource(Protocol):
+    def fetch(self) -> Sequence[Candidate]: ...
+
+class CandidateRepository(Protocol):
+    def save_new(self, candidates: Sequence[Candidate]) -> int: ...
 ```
 
-`Candidate` не допускает пустые `source_name`, `source_id`, `title` или `url`. Поле `discovered_at` обязано быть timezone-aware. Репозиторий хранит запись один раз по уникальной паре `(source_name, source_id)`.
+`Candidate` отклоняет пустые или состоящие из пробелов строковые поля, URL без схемы `http`/`https` и хоста, а также наивное время; он хранит независимую JSON-совместимую копию `raw_payload`. `ImportCandidates.execute()` вызывает источник и репозиторий ровно по одному разу, возвращает `duplicates = received - created` и отклоняет число созданных записей вне диапазона от нуля до числа полученных. Репозиторий не изменяет существующую запись при конфликте.
 
-## Задача 1: каркас проекта и конфигурация
+### Задача 1: окружение и конфигурация
 
-**Файлы:**
+**Файлы:** `pyproject.toml`, `uv.lock`, `.env.example`, `src/postify/__init__.py`, `src/postify/config.py`, `tests/unit/config/test_settings.py`.
 
-- Создать: `pyproject.toml`, `.env.example`, `src/postify/__init__.py`, `src/postify/config.py`.
-- Изменить: `.gitignore`.
+- [ ] Создать минимальный `pyproject.toml` с Python `>=3.12`, runtime-зависимостями `alembic`, `httpx`, `psycopg[binary]`, `pydantic-settings`, `sqlalchemy`, `typer`, dev-зависимостью `pytest` и entry point `postify = "postify.cli:app"`; выполнить `uv lock && uv sync --all-groups`. Это подготовка инструмента, а не зелёная реализация контракта.
+- [ ] Написать красные тесты `Settings` в `tests/unit/config/test_settings.py`: URL PostgreSQL, `HN_QUERY`, `HN_TAGS`, `HN_HITS_PER_PAGE`, `POSTGRESQL_SYSTEMD_UNIT`, режим владения и расписание читаются из окружения; окружение приоритетнее переданному `.env`; отсутствие `DATABASE_URL`, неверный DSN, имя unit'а не вида `*.service` и иной режим владения дают ошибку валидации. Запустить `uv run pytest tests/unit/config/test_settings.py -v`; ожидание — импорт `postify.config` отсутствует.
+- [ ] Реализовать минимальный `Settings` с этими полями. В `.env.example` указать только образцы `DATABASE_URL`, HN-параметров, `POSTGRESQL_SYSTEMD_UNIT=postgresql.service`, режима владения, расписания и адреса Algolia без секретов.
+- [ ] Повторно выполнить тот же тест; ожидание — PASS.
+- [ ] Закоммитить каркас понятным русским сообщением.
 
-**Интерфейсы:**
+### Задача 2: доменный контракт и порты
 
-- Производит `Settings` с полями `database_url: PostgresDsn`, `hn_algolia_url: HttpUrl`, `systemd_unit_directory: Path` и `systemctl_command: str`.
-- `Settings()` читает `.env`, но явные переменные среды имеют приоритет.
+**Файлы:** `src/postify/domain/candidates/models.py`, `src/postify/application/ports/candidate_source.py`, `src/postify/application/ports/candidate_repository.py`, `tests/unit/domain/candidates/test_models.py`.
 
-- [ ] **Шаг 1: Написать падающий тест конфигурации в новом `tests/unit/domain/candidates/test_models.py` не следует.**
+- [ ] Написать красные тесты: каждый обязательный строковый атрибут отвергает пустое и пробельное значение; URL без схемы или хоста отвергается; наивный `discovered_at` отвергается; UTC-время и корректный URL принимаются; мутация исходного словаря после создания кандидата не меняет его payload. Запустить `uv run pytest tests/unit/domain/candidates/test_models.py -v`; ожидание — ошибка импорта модели.
+- [ ] Реализовать `Candidate`, `CandidateValidationError` и два порта через `typing.Protocol`, без импортов HTTPX и SQLAlchemy.
+- [ ] Повторно выполнить тесты; ожидание — PASS.
+- [ ] Закоммитить доменный контракт понятным русским сообщением.
 
-Тест конфигурации добавляется в `tests/e2e/test_cli_run_once.py`, потому что он проверяет точку входа. В начале файла поместить:
+### Задача 3: сценарий импорта и HN Algolia
 
-```python
-from postify.config import Settings
+**Файлы:** `src/postify/application/ingestion/import_candidates.py`, `src/postify/adapters/sources/hn_algolia.py`, `tests/unit/application/ingestion/test_import_candidates.py`, `tests/unit/adapters/sources/test_hn_algolia.py`.
 
-def test_settings_reads_database_url_from_environment(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://postify:secret@localhost:5432/postify")
-    settings = Settings(_env_file=None)
-    assert str(settings.database_url).startswith("postgresql+psycopg://postify:")
-```
+- [ ] Написать красные тесты сценария с подставными портами: три полученных кандидата и два сохранённых дают `ImportResult(3, 2, 1)`; источник и репозиторий вызваны ровно раз; создано `-1` или `4` при трёх полученных вызывает `ValueError`. Запустить тест сценария; ожидание — ошибка импорта.
+- [ ] Написать красные тесты адаптера на `httpx.MockTransport`: запрос содержит конфигурационные `HN_TAGS`, `HN_HITS_PER_PAGE` и `HN_QUERY`; корректный hit преобразуется в UTC-кандидат; `story_url` используется при отсутствии `url`; смешанный ответ оставляет только валидные hit; hit без обязательного поля или с неверным временем пропускается; не-JSON, 429/5xx и timeout дают нормализованную ошибку источника. Параметры двух профилей дают разные запросы.
+- [ ] Реализовать минимальные `ImportCandidates` и `HnAlgoliaCandidateSource`. Адаптер принимает готовый `httpx.Client`, URL и запрос явно, вызывает `raise_for_status()` и не меняет `raw_payload`.
+- [ ] Запустить оба набора: `uv run pytest tests/unit/application/ingestion tests/unit/adapters/sources -v`; ожидание — PASS без сети.
+- [ ] Закоммитить импорт понятным русским сообщением.
 
-- [ ] **Шаг 2: Запустить тест и убедиться, что он падает.**
+### Задача 4: миграция PostgreSQL и идемпотентный репозиторий
 
-Запустить: `uv run pytest tests/e2e/test_cli_run_once.py::test_settings_reads_database_url_from_environment -v`.
+**Файлы:** `alembic.ini`, `migrations/env.py`, `migrations/versions/*_create_candidates.py`, `src/postify/infrastructure/database/engine.py`, `src/postify/infrastructure/database/models.py`, `src/postify/infrastructure/repositories/sqlalchemy_candidates.py`, `tests/integration/conftest.py`, `tests/integration/infrastructure/test_sqlalchemy_candidates.py`.
 
-Ожидание: ошибка импорта `postify.config` до реализации.
+- [ ] Написать красную интеграционную фикстуру: она требует `TEST_DATABASE_URL`, создаёт уникальную схему/БД, передаёт этот URL в Alembic явно через `POSTIFY_ALEMBIC_DATABASE_URL`, применяет миграции только туда и удаляет только свой ресурс. Несовпадение тестового URL с URL разработки обязательно. В проверке волны отсутствие переменной завершается ошибкой конфигурации, а не `skip`.
+- [ ] Написать красные миграционные тесты: на пустой тестовой БД выполнить `base → head`, проверить JSONB и именованное уникальное ограничение, затем `downgrade base` и повторный `upgrade head`. Написать красные тесты репозитория: первая сессия фиксирует запись и видна второй; повторный вызов, дубли `[A, A, B]` и одновременные вставки из двух независимых сессий создают ровно одну запись на ключ; конфликт не перезаписывает поля; ошибка сериализации payload делает rollback и не ломает следующее валидное сохранение.
+- [ ] Реализовать `target_metadata`, источник URL и транзакции Alembic, модель, миграцию и репозиторий. Использовать PostgreSQL-вставку с `on_conflict_do_nothing` по именованному ограничению и `RETURNING` для точного числа созданных записей.
+- [ ] Написать компонентный тест: `httpx.MockTransport` + настоящий PostgreSQL + `open_importer` создают строку из одного JSON-hit, а повтор возвращает `created=0`; systemd в тест не вызывается. Повторно выполнить `TEST_DATABASE_URL=… uv run pytest -m integration -v`; ожидание — PASS. Не выполнять миграции и очистку на `DATABASE_URL` разработки.
+- [ ] Закоммитить хранение понятным русским сообщением.
 
-- [ ] **Шаг 3: Добавить минимальную конфигурацию и зависимости.**
+### Задача 5: CLI и systemd
 
-В `pyproject.toml` объявить Python `>=3.12`, пакеты `alembic`, `httpx`, `psycopg[binary]`, `pydantic-settings`, `sqlalchemy`, `typer` и группу разработки с `pytest`. Точка входа должна быть `postify = "postify.cli:app"`.
+**Файлы:** `src/postify/bootstrap.py`, `src/postify/cli.py`, `src/postify/infrastructure/systemd.py`, `deploy/systemd/postify-run-once.service`, `deploy/systemd/postify-run-once.timer`, `scripts/install-systemd.sh`, `tests/unit/infrastructure/test_systemd.py`, `tests/e2e/test_cli_run_once.py`, `tests/e2e/test_systemd_installer.py`.
 
-В `config.py` определить:
+- [ ] Написать красные CLI-тесты с подставными фабриками: успешный `run-once` печатает `Получено: 3; новых: 2; дубликатов: 1`; ошибка источника даёт ненулевой код и понятное сообщение без traceback; `start` вызывает в порядке «валидация → запуск PostgreSQL-unit → ожидание БД → проверка миграций → включение timer» и при ошибке миграции не включает timer; `stop` вызывает «отключение и остановка timer → ожидание завершения активной задачи до timeout → остановка PostgreSQL-unit», а при timeout не останавливает БД; `status` показывает PostgreSQL-unit, доступность БД, состояние timer, последнее и следующее срабатывание, число кандидатов и последний результат задачи. Настоящие HTTP-клиент, БД и systemctl не создаются.
+- [ ] Написать красные тесты контроллера: все вызовы `systemctl` передаются списком аргументов без `shell=True`; PostgreSQL-unit берётся из `Settings`; `wait_for_run_once()` не вызывает остановку service и имеет конечный timeout; ошибка systemctl не скрывается. Написать тест установщика с подставными `install`, `systemctl` и `systemd-analyze`: он создаёт system unit'ы с абсолютными `ExecStart`, `WorkingDirectory`, `EnvironmentFile`, `User`, `Group`, `After/Wants=network-online.target`, `TimeoutStartSec`, `SyslogIdentifier` и `Persistent=true`; отклоняет пустое, многострочное и незаменённое расписание; проверяет календарь и unit-файлы, затем вызывает `daemon-reload`.
+- [ ] Реализовать контекстный `open_importer(settings)`, который закрывает HTTP-клиент и engine при успехе и исключении, команды `run-once`, `start`, `status`, `stop` и тонкий `SystemdController`. `start` не включает timer, если PostgreSQL, БД или миграции не готовы. `stop` не убивает активную задачу, а ждёт её с timeout; при timeout PostgreSQL остаётся запущенным и команда завершается ошибкой. Известная ошибка источника даёт ненулевой код. Unit `postify-run-once.service` имеет `Type=oneshot`, абсолютные пути и `EnvironmentFile`; timer запускает именно его. Установщик работает только в system-режиме и не исполняет shell-код из `.env`.
+- [ ] Запустить `uv run pytest tests/unit/infrastructure tests/e2e -v`; ожидание — PASS без настоящего systemctl.
+- [ ] Закоммитить CLI и запуск понятным русским сообщением.
 
-```python
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-    database_url: PostgresDsn
-    hn_algolia_url: HttpUrl = "https://hn.algolia.com/api/v1/search_by_date"
-    systemd_unit_directory: Path = Path("/etc/systemd/system")
-    systemctl_command: str = "systemctl"
-```
+### Задача 6: полная проверка, README и ревью волны
 
-В `.env.example` оставить `DATABASE_URL=postgresql+psycopg://postify:change-me@localhost:5432/postify`; не добавлять рабочие токены.
+**Файлы:** `README.md`.
 
-- [ ] **Шаг 4: Повторно запустить тест.**
+- [ ] Запустить `uv run pytest -m "not integration" -v`, затем `TEST_DATABASE_URL=… uv run pytest -m integration -v`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic check`, `uv run python -m compileall -q src` и `git diff --check`. Все команды должны завершиться с кодом 0.
+- [ ] Обновить README только проверяемой инструкцией разового импорта.
+- [ ] Передать весь diff свежему reviewer Terra 5.6 high. Он сначала проверяет тесты, временно внося и откатывая мутации: убрать проверку пробельного поля, не вызвать `raise_for_status`, заменить запрос конфигурации строкой `AI`, убрать `on_conflict_do_nothing`, поменять порядок `stop`, включить timer до проверки БД. Каждая мутация обязана сделать соответствующий тест красным.
+- [ ] После успешной проверки тестов тот же reviewer проверяет код: границы зависимостей, транзакцию, отсутствие лишних файлов и честность обработки ошибки.
+- [ ] Устранить замечания, повторить полный набор и закоммитить завершённую волну понятным русским сообщением. Только после этого разрешена работа над планом волны 2.
 
-Запустить: `uv sync --all-groups && uv run pytest tests/e2e/test_cli_run_once.py::test_settings_reads_database_url_from_environment -v`.
+## Вне объёма
 
-Ожидание: PASS.
-
-- [ ] **Шаг 5: Зафиксировать каркас.**
-
-```bash
-git add pyproject.toml uv.lock .env.example .gitignore src/postify/__init__.py src/postify/config.py tests/e2e/test_cli_run_once.py
-git commit -m "Подготовил конфигурацию первой волны"
-```
-
-## Задача 2: доменная модель и порты импорта
-
-**Файлы:**
-
-- Создать: `src/postify/domain/candidates/models.py`, `src/postify/application/ports/candidate_source.py`, `src/postify/application/ports/candidate_repository.py`, `tests/unit/domain/candidates/test_models.py`.
-
-**Интерфейсы:**
-
-- Производит `Candidate` и `CandidateValidationError`.
-- Производит протоколы `CandidateSource.fetch() -> Sequence[Candidate]` и `CandidateRepository.save_new(candidates: Sequence[Candidate]) -> int`.
-
-- [ ] **Шаг 1: Написать падающие тесты инвариантов.**
-
-```python
-def test_candidate_rejects_empty_source_id():
-    with pytest.raises(CandidateValidationError, match="source_id"):
-        Candidate("hn_algolia", "", "Title", "https://example.com", aware_datetime, {})
-
-def test_candidate_rejects_naive_discovered_at():
-    with pytest.raises(CandidateValidationError, match="discovered_at"):
-        Candidate("hn_algolia", "42", "Title", "https://example.com", datetime(2026, 8, 1), {})
-```
-
-- [ ] **Шаг 2: Запустить тесты и убедиться, что они падают.**
-
-Запустить: `uv run pytest tests/unit/domain/candidates/test_models.py -v`.
-
-Ожидание: ошибка импорта `Candidate`.
-
-- [ ] **Шаг 3: Реализовать минимальную модель и порты.**
-
-`Candidate.__post_init__` проверяет четыре строковых идентификатора и timezone-aware дату; `raw_payload` не изменяется моделью. Порты определяются через `typing.Protocol`, без импорта HTTPX или SQLAlchemy.
-
-- [ ] **Шаг 4: Повторно запустить тесты.**
-
-Запустить: `uv run pytest tests/unit/domain/candidates/test_models.py -v`.
-
-Ожидание: PASS.
-
-- [ ] **Шаг 5: Зафиксировать доменный контракт.**
-
-```bash
-git add src/postify/domain/candidates/models.py src/postify/application/ports tests/unit/domain/candidates/test_models.py
-git commit -m "Добавил модель кандидата и порты импорта"
-```
-
-## Задача 3: сценарий импорта и адаптер HN Algolia
-
-**Файлы:**
-
-- Создать: `src/postify/application/ingestion/import_candidates.py`, `src/postify/application/jobs/run_once.py`, `src/postify/adapters/sources/hn_algolia.py`, `tests/unit/application/ingestion/test_import_candidates.py`, `tests/unit/adapters/sources/test_hn_algolia.py`.
-
-**Интерфейсы:**
-
-- Потребляет порты из задачи 2.
-- Производит `ImportCandidates.execute() -> ImportResult`, `run_once(importer: ImportCandidates) -> ImportResult` и `HnAlgoliaCandidateSource`.
-- `HnAlgoliaCandidateSource.fetch()` отправляет `GET` на `hn_algolia_url` с параметрами `tags=story`, `query=AI`, `hitsPerPage=100`.
-
-- [ ] **Шаг 1: Написать падающий тест сценария с подставными портами.**
-
-```python
-def test_import_candidates_reports_created_and_duplicates():
-    source = FakeSource([candidate_a, candidate_b, candidate_c])
-    repository = FakeRepository(created=2)
-    assert ImportCandidates(source, repository).execute() == ImportResult(3, 2, 1)
-```
-
-- [ ] **Шаг 2: Запустить тест и убедиться, что он падает.**
-
-Запустить: `uv run pytest tests/unit/application/ingestion/test_import_candidates.py -v`.
-
-Ожидание: ошибка импорта `ImportCandidates`.
-
-- [ ] **Шаг 3: Написать падающий тест преобразования ответа Algolia.**
-
-```python
-def test_fetch_maps_algolia_hit_to_candidate(httpx_mock_transport):
-    source = HnAlgoliaCandidateSource(httpx.Client(transport=httpx_mock_transport), settings)
-    candidate = source.fetch()[0]
-    assert (candidate.source_name, candidate.source_id) == ("hn_algolia", "123")
-    assert candidate.url == "https://example.com/tool"
-```
-
-Транспорт возвращает JSON с одним `hit`: `objectID`, `title`, `url`, `created_at_i`. Второй тест проверяет, что `story_url` применяется, когда у `hit` нет `url`.
-
-- [ ] **Шаг 4: Реализовать сценарий и адаптер.**
-
-`ImportCandidates.execute()` вызывает источник ровно один раз, передаёт всю последовательность в `save_new()` и возвращает `duplicates = len(candidates) - created`; отрицательное значение `created` или значение больше числа кандидатов вызывает `ValueError`.
-
-`HnAlgoliaCandidateSource` принимает готовый `httpx.Client` и URL строкой. Он вызывает `response.raise_for_status()`, пропускает записи без `objectID`, заголовка или URL и переводит `created_at_i` в UTC `datetime`.
-
-- [ ] **Шаг 5: Запустить тесты сценария и адаптера.**
-
-Запустить: `uv run pytest tests/unit/application/ingestion tests/unit/adapters/sources -v`.
-
-Ожидание: PASS, без сетевых обращений.
-
-- [ ] **Шаг 6: Зафиксировать импорт HN Algolia.**
-
-```bash
-git add src/postify/application/ingestion src/postify/application/jobs src/postify/adapters/sources tests/unit/application tests/unit/adapters
-git commit -m "Добавил импорт кандидатов из HN Algolia"
-```
-
-## Задача 4: PostgreSQL, миграция и идемпотентный репозиторий
-
-**Файлы:**
-
-- Создать: `alembic.ini`, `migrations/env.py`, `migrations/versions/*_create_candidates.py`, `src/postify/infrastructure/database/engine.py`, `src/postify/infrastructure/database/models.py`, `src/postify/infrastructure/repositories/sqlalchemy_candidates.py`, `tests/integration/infrastructure/test_sqlalchemy_candidates.py`.
-
-**Интерфейсы:**
-
-- Потребляет `Candidate` и `CandidateRepository`.
-- Производит `create_engine_from_settings(settings: Settings) -> Engine` и `SqlAlchemyCandidateRepository(session_factory)`.
-- Таблица `candidates`: `id`, `source_name`, `source_id`, `title`, `url`, `discovered_at`, `raw_payload`, `created_at`; уникальный индекс на `source_name, source_id`.
-
-- [ ] **Шаг 1: Написать падающий интеграционный тест повторного сохранения.**
-
-```python
-def test_save_new_inserts_candidate_once(session_factory):
-    repository = SqlAlchemyCandidateRepository(session_factory)
-    assert repository.save_new([candidate_a]) == 1
-    assert repository.save_new([candidate_a]) == 0
-```
-
-Фикстура применяет миграции к PostgreSQL из `TEST_DATABASE_URL`. Если переменная не задана, тест помечается `skip`, не подменяет PostgreSQL SQLite-базой.
-
-- [ ] **Шаг 2: Запустить интеграционный тест и убедиться, что он падает.**
-
-Запустить: `TEST_DATABASE_URL="$DATABASE_URL" uv run pytest tests/integration/infrastructure/test_sqlalchemy_candidates.py -v`.
-
-Ожидание: ошибка импорта репозитория до реализации.
-
-- [ ] **Шаг 3: Реализовать схему, миграцию и репозиторий.**
-
-Модель SQLAlchemy использует `JSONB` для исходного payload. `save_new()` строит PostgreSQL-вставку SQLAlchemy с `on_conflict_do_nothing(index_elements=["source_name", "source_id"])` и возвращает число добавленных строк. Миграция Alembic создаёт таблицу и уникальное ограничение с теми же именами.
-
-- [ ] **Шаг 4: Применить миграцию и повторно запустить тест.**
-
-Запустить: `uv run alembic upgrade head && TEST_DATABASE_URL="$DATABASE_URL" uv run pytest tests/integration/infrastructure/test_sqlalchemy_candidates.py -v`.
-
-Ожидание: PASS; второй вызов `save_new()` возвращает ноль.
-
-- [ ] **Шаг 5: Зафиксировать слой хранения.**
-
-```bash
-git add alembic.ini migrations src/postify/infrastructure/database src/postify/infrastructure/repositories tests/integration/infrastructure
-git commit -m "Добавил хранение кандидатов в PostgreSQL"
-```
-
-## Задача 5: CLI, systemd и сборка зависимостей
-
-**Файлы:**
-
-- Создать: `src/postify/bootstrap.py`, `src/postify/cli.py`, `src/postify/infrastructure/systemd.py`, `deploy/systemd/postify-run-once.service`, `deploy/systemd/postify-run-once.timer`, `scripts/install-systemd.sh`.
-- Дополнить: `tests/e2e/test_cli_run_once.py`.
-
-**Интерфейсы:**
-
-- Производит Typer-приложение `app` с командами `run-once`, `start`, `status`, `stop`.
-- `build_importer(settings: Settings) -> ImportCandidates` собирает HTTP-клиент, Algolia-адаптер и SQLAlchemy-репозиторий.
-- `SystemdController` предоставляет `enable_and_start_timer()`, `stop_and_disable_timer()` и `timer_status() -> str`.
-
-- [ ] **Шаг 1: Написать падающие CLI-тесты с подставным контроллером.**
-
-```python
-def test_start_enables_timer(monkeypatch):
-    controller = FakeSystemdController()
-    monkeypatch.setattr("postify.cli.build_systemd_controller", lambda _: controller)
-    result = CliRunner().invoke(app, ["start"])
-    assert result.exit_code == 0
-    assert controller.enabled is True
-
-def test_run_once_prints_import_result(monkeypatch):
-    monkeypatch.setattr("postify.cli.build_importer", lambda _: FakeImporter(ImportResult(3, 2, 1)))
-    result = CliRunner().invoke(app, ["run-once"])
-    assert result.output == "Получено: 3; новых: 2; дубликатов: 1\\n"
-```
-
-- [ ] **Шаг 2: Запустить CLI-тесты и убедиться, что они падают.**
-
-Запустить: `uv run pytest tests/e2e/test_cli_run_once.py -v`.
-
-Ожидание: ошибка импорта `app` до реализации команд.
-
-- [ ] **Шаг 3: Реализовать минимальные команды и unit-файлы.**
-
-`run-once` вызывает `run_once(build_importer(Settings()))` и печатает точную строку из теста. `start` включает и запускает `postify-run-once.timer`; `stop` останавливает и отключает его; `status` печатает состояние timer. Контроллер вызывает `subprocess.run([command, "enable", "--now", "postify-run-once.timer"], check=True, text=True, capture_output=True)` и аналогичные списки аргументов для остановки и статуса; `shell=True` не используется.
-
-Сервис systemd запускает `postify run-once` с `Type=oneshot` и читает настройки приложения из `EnvironmentFile`. В timer-файле используется литерал `@POSTIFY_ON_CALENDAR@`; скрипт установки принимает путь к `.env`, читает из него обязательную переменную `POSTIFY_ON_CALENDAR`, подставляет её в копируемый timer и вызывает `systemctl daemon-reload`. Так systemd получает валидный `OnCalendar`, а расписание остаётся конфигурацией среды. Скрипт не требует и не содержит паролей.
-
-- [ ] **Шаг 4: Запустить CLI-тесты.**
-
-Запустить: `uv run pytest tests/e2e/test_cli_run_once.py -v`.
-
-Ожидание: PASS и отсутствие настоящих вызовов systemd.
-
-- [ ] **Шаг 5: Зафиксировать управляемый запуск.**
-
-```bash
-git add src/postify/bootstrap.py src/postify/cli.py src/postify/infrastructure/systemd.py deploy/systemd scripts/install-systemd.sh tests/e2e/test_cli_run_once.py
-git commit -m "Добавил команды и запуск задачи через systemd"
-```
-
-## Задача 6: полная проверка и документация
-
-**Файлы:**
-
-- Изменить: `README.md`.
-
-- [ ] **Шаг 1: Добавить в README короткую инструкцию.**
-
-Указать `uv sync --all-groups`, настройку `.env` из `.env.example`, миграцию `uv run alembic upgrade head`, разовый импорт `uv run postify run-once` и установку timer через `scripts/install-systemd.sh`. Не включать реальные значения `DATABASE_URL` или токены.
-
-- [ ] **Шаг 2: Запустить весь набор тестов.**
-
-Запустить: `uv run pytest -v`.
-
-Ожидание: все модульные и CLI-тесты проходят; PostgreSQL-интеграционный тест либо проходит при заданном `TEST_DATABASE_URL`, либо явно отмечен `SKIPPED`.
-
-- [ ] **Шаг 3: Проверить форматирование и конфигурацию пакета.**
-
-Запустить: `uv run python -m compileall -q src && uv run alembic check && git diff --check`.
-
-Ожидание: все команды завершаются с кодом 0.
-
-- [ ] **Шаг 4: Зафиксировать завершение волны.**
-
-```bash
-git add README.md
-git commit -m "Описал запуск первой волны Postify"
-```
-
-## Самопроверка плана
-
-- Импорт из HN Algolia: задачи 2–3.
-- PostgreSQL, миграции и дедупликация: задача 4.
-- `run-once`, CLI и systemd timer: задача 5.
-- Локальная документация и проверка: задача 6.
-- Telegram, генератор, очередь публикаций, журнал ошибок и видеосервис не входят в эту волну и не получают файлов заранее.
+Отбор, журнал решений, генератор, визуал, Telegram, очередь, расширенный `status` и долговечный журнал ошибок не создаются в этой волне.
