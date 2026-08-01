@@ -47,9 +47,15 @@ class SystemdController:
         self._run([self._command_name, "enable", self._timer_unit])
         self._run([self._command_name, "start", self._timer_unit])
 
+    def enable_and_start_timer(self) -> None:
+        self.enable_timer()
+
     def disable_timer(self) -> None:
         self._run([self._command_name, "disable", self._timer_unit])
         self._run([self._command_name, "stop", self._timer_unit])
+
+    def disable_and_stop_timer(self) -> None:
+        self.disable_timer()
 
     def active_state(self, unit: str) -> str:
         result = self._runner([self._command_name, "is-active", unit])

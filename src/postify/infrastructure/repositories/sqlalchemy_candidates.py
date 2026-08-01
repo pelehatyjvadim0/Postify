@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -43,3 +44,7 @@ class SqlAlchemyCandidateRepository:
             except Exception:
                 session.rollback()
                 raise
+
+    def count(self) -> int:
+        with self._session_factory() as session:
+            return session.scalar(select(func.count()).select_from(CandidateModel)) or 0

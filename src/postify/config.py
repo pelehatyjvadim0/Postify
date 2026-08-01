@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     hn_query: str = Field(min_length=1)
     hn_tags: str = "story"
     hn_hits_per_page: int = Field(default=100, ge=1)
+    database_readiness_timeout_seconds: float = Field(default=30.0, gt=0)
+    run_once_wait_timeout_seconds: float = Field(default=30.0, gt=0)
     postgresql_systemd_unit: str = "postgresql.service"
     postgresql_ownership: Literal["dedicated", "shared_allowed"]
     postify_on_calendar: str = Field(min_length=1)

@@ -36,6 +36,8 @@ def test_settings_reads_all_values_from_environment(monkeypatch: pytest.MonkeyPa
     assert settings.hn_query == REQUIRED_ENVIRONMENT["HN_QUERY"]
     assert settings.hn_tags == REQUIRED_ENVIRONMENT["HN_TAGS"]
     assert settings.hn_hits_per_page == 42
+    assert settings.database_readiness_timeout_seconds == 30.0
+    assert settings.run_once_wait_timeout_seconds == 30.0
     assert settings.postgresql_systemd_unit == REQUIRED_ENVIRONMENT["POSTGRESQL_SYSTEMD_UNIT"]
     assert settings.postgresql_ownership == REQUIRED_ENVIRONMENT["POSTGRESQL_OWNERSHIP"]
     assert settings.postify_on_calendar == REQUIRED_ENVIRONMENT["POSTIFY_ON_CALENDAR"]
@@ -72,6 +74,8 @@ def test_environment_has_priority_over_passed_env_file(
         ("DATABASE_URL", "not-a-dsn"),
         ("POSTGRESQL_SYSTEMD_UNIT", "postgresql"),
         ("HN_HITS_PER_PAGE", "0"),
+        ("DATABASE_READINESS_TIMEOUT_SECONDS", "0"),
+        ("RUN_ONCE_WAIT_TIMEOUT_SECONDS", "0"),
         ("POSTGRESQL_OWNERSHIP", "other"),
     ],
 )

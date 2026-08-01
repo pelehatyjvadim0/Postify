@@ -98,6 +98,29 @@ def test_enable_and_disable_timer_start_and_stop_the_timer() -> None:
     ]
 
 
+def test_cli_lifecycle_methods_keep_enable_start_and_disable_stop_atomic() -> None:
+    # Break caught: CLI orchestration calling only half of either timer lifecycle operation.
+    systemd = importlib.import_module("postify.infrastructure.systemd")
+    runner = RecordingRunner()
+    controller = systemd.SystemdController(
+        command_name="systemctl",
+        postgresql_unit="postgresql.service",
+        clock=lambda: 0.0,
+        sleeper=lambda _: None,
+        runner=runner,
+    )
+
+    controller.enable_and_start_timer()
+    controller.disable_and_stop_timer()
+
+    assert runner.calls == [
+        ["systemctl", "enable", "postify-run-once.timer"],
+        ["systemctl", "start", "postify-run-once.timer"],
+        ["systemctl", "disable", "postify-run-once.timer"],
+        ["systemctl", "stop", "postify-run-once.timer"],
+    ]
+
+
 def test_reads_active_state_and_timer_properties() -> None:
     # Break caught: reading a timer state through a command other than systemctl show/is-active.
     systemd = importlib.import_module("postify.infrastructure.systemd")

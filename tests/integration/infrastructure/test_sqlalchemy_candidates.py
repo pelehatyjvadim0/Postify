@@ -106,6 +106,22 @@ def test_save_new_keeps_original_fields_when_source_key_already_exists(
         engine.dispose()
 
 
+def test_count_returns_all_saved_candidates(migrated_database_url: str) -> None:
+    # Break caught: status reporting a stale or fabricated number of persisted candidates.
+    from postify.infrastructure.repositories.sqlalchemy_candidates import (
+        SqlAlchemyCandidateRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    repository = SqlAlchemyCandidateRepository(sessionmaker(engine))
+    try:
+        repository.save_new([candidate("1"), candidate("2")])
+
+        assert repository.count() == 2
+    finally:
+        engine.dispose()
+
+
 def test_concurrent_saves_of_one_source_key_create_exactly_one_row(
     migrated_database_url: str,
 ) -> None:
