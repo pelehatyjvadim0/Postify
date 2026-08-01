@@ -40,4 +40,5 @@ GEMINI.md
 .cursor/
 .agents/
 .opencode/
+.worktrees/
 docs/superpowers/
