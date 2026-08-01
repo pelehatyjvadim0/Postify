@@ -1,0 +1,14 @@
+[Unit]
+Description=Postify one-shot import
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@ENV_FILE@
+ExecStart=@PYTHON@ -m postify.cli run-once
+TimeoutStartSec=15min
+SyslogIdentifier=postify
