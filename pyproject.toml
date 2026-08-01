@@ -23,3 +23,8 @@ dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: тесты с настоящей PostgreSQL",
+]
