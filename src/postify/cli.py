@@ -86,7 +86,10 @@ def start() -> None:
         if not migrations_ready:
             raise RuntimeError("Миграции БД не находятся на Alembic head")
         systemd.enable_and_start_timer()
-    except (ValidationError, DatabaseUnavailableError, SystemdCommandError, SQLAlchemyError, RuntimeError) as error:
+    except ValidationError:
+        _fail(RuntimeError("Некорректная конфигурация"))
+        return
+    except (DatabaseUnavailableError, SystemdCommandError, SQLAlchemyError, RuntimeError) as error:
         _fail(error)
         return
 
@@ -105,7 +108,10 @@ def status() -> None:
         timer = systemd.timer_properties()
         ready = database_is_ready(settings)
         count = candidate_count(settings) if ready else None
-    except (ValidationError, SystemdCommandError, SQLAlchemyError, OSError) as error:
+    except ValidationError:
+        _fail(RuntimeError("Некорректная конфигурация"))
+        return
+    except (SystemdCommandError, SQLAlchemyError, OSError) as error:
         _fail(error)
         return
 
@@ -131,7 +137,10 @@ def stop() -> None:
             poll_interval=0.1,
         )
         systemd.stop_postgresql()
-    except (ValidationError, RunOnceTimeoutError, SystemdCommandError) as error:
+    except ValidationError:
+        _fail(RuntimeError("Некорректная конфигурация"))
+        return
+    except (RunOnceTimeoutError, SystemdCommandError) as error:
         _fail(error)
         return
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.resources import as_file, files
 from time import monotonic, sleep
@@ -12,7 +13,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from postify.adapters.sources.hn_algolia import HnAlgoliaCandidateSource
 from postify.application.ingestion.import_candidates import ImportCandidates
@@ -30,27 +31,45 @@ class DatabaseUnavailableError(RuntimeError):
     """PostgreSQL не стал доступен до истечения заданного времени."""
 
 
+@dataclass(frozen=True, slots=True)
+class _ImportResources:
+    source: HnAlgoliaCandidateSource
+    session_factory: sessionmaker[Session]
+
+
 @contextmanager
-def open_importer(
+def _open_import_resources(
     settings: Settings, *, transport: httpx.BaseTransport | None = None
-) -> Iterator[ImportCandidates]:
+) -> Iterator[_ImportResources]:
     engine = create_engine_from_settings(settings)
     client: httpx.Client | None = None
     try:
         client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
-        source = HnAlgoliaCandidateSource(
-            client=client,
-            url=settings.hn_algolia_url,
-            query=settings.hn_query,
-            tags=settings.hn_tags,
-            hits=settings.hn_hits_per_page,
+        yield _ImportResources(
+            source=HnAlgoliaCandidateSource(
+                client=client,
+                url=settings.hn_algolia_url,
+                query=settings.hn_query,
+                tags=settings.hn_tags,
+                hits=settings.hn_hits_per_page,
+            ),
+            session_factory=sessionmaker(engine),
         )
-        repository = SqlAlchemyCandidateRepository(sessionmaker(engine))
-        yield ImportCandidates(source, repository)
     finally:
         if client is not None:
             client.close()
         engine.dispose()
+
+
+@contextmanager
+def open_importer(
+    settings: Settings, *, transport: httpx.BaseTransport | None = None
+) -> Iterator[ImportCandidates]:
+    with _open_import_resources(settings, transport=transport) as resources:
+        yield ImportCandidates(
+            resources.source,
+            SqlAlchemyCandidateRepository(resources.session_factory),
+        )
 
 
 def selection_profile_from_settings(settings: Settings) -> SelectionProfile:
@@ -74,26 +93,17 @@ def open_run_once(
     settings: Settings, *, transport: httpx.BaseTransport | None = None
 ) -> Iterator[RunOnce]:
     profile = selection_profile_from_settings(settings)
-    engine = create_engine_from_settings(settings)
-    client: httpx.Client | None = None
-    try:
-        client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
-        source = HnAlgoliaCandidateSource(
-            client=client, url=settings.hn_algolia_url, query=settings.hn_query,
-            tags=settings.hn_tags, hits=settings.hn_hits_per_page,
-        )
-        session_factory = sessionmaker(engine)
+    with _open_import_resources(settings, transport=transport) as resources:
         yield RunOnce(
-            ImportCandidates(source, SqlAlchemyCandidateRepository(session_factory)),
+            ImportCandidates(
+                resources.source,
+                SqlAlchemyCandidateRepository(resources.session_factory),
+            ),
             SelectCandidates(
-                SqlAlchemyDecisionRepository(session_factory), profile,
+                SqlAlchemyDecisionRepository(resources.session_factory), profile,
                 lambda: datetime.now(UTC),
             ),
         )
-    finally:
-        if client is not None:
-            client.close()
-        engine.dispose()
 
 
 def database_is_ready(settings: Settings) -> bool:

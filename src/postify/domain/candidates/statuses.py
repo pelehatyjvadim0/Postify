@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Mapping, TypeAlias
+from types import MappingProxyType
+from typing import TypeAlias
 
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
@@ -30,6 +32,14 @@ class RejectionRule(StrEnum):
     TECHNICAL_WITHOUT_USE = "technical_without_use"
 
 
+def _freeze_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_freeze_json(item) for item in value)
+    return deepcopy(value)
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateDecision:
     candidate_id: int
@@ -51,4 +61,4 @@ class CandidateDecision:
             self.reason is DecisionReason.ELIGIBLE_FOR_AI
         ):
             raise ValueError("status and reason must be consistent")
-        object.__setattr__(self, "signals", deepcopy(dict(self.signals)))
+        object.__setattr__(self, "signals", _freeze_json(self.signals))

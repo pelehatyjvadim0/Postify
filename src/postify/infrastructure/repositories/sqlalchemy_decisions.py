@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -48,7 +48,7 @@ class SqlAlchemyDecisionRepository:
                 "status": decision.status.value,
                 "reason": decision.reason.value,
                 "explanation": decision.explanation,
-                "signals": dict(decision.signals),
+                "signals": _thaw_json(decision.signals),
                 "policy_version": decision.policy_version,
                 "decided_at": decision.decided_at,
             }
@@ -68,3 +68,11 @@ class SqlAlchemyDecisionRepository:
             except Exception:
                 session.rollback()
                 raise
+
+
+def _thaw_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
