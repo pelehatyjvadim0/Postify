@@ -14,7 +14,7 @@ from postify.bootstrap import (
     candidate_count,
     database_is_ready,
     migrations_at_head,
-    open_importer,
+    open_run_once,
     wait_for_database,
 )
 from postify.config import Settings
@@ -45,17 +45,28 @@ def _fail(error: Exception) -> None:
 
 @app.command()
 def run_once() -> None:
-    """Импортировать кандидатов Hacker News один раз."""
+    """Импортировать кандидатов и применить отбор один раз."""
     try:
         settings = Settings()
-        with open_importer(settings) as importer:
-            result = importer.execute()
-    except (ValidationError, SourceFetchError, SQLAlchemyError, OSError) as error:
+        with open_run_once(settings) as job:
+            result = job.execute()
+    except SourceFetchError as error:
         _fail(error)
+        return
+    except ValidationError:
+        _fail(RuntimeError("Некорректная конфигурация отбора"))
+        return
+    except (SQLAlchemyError, OSError, ValueError):
+        _fail(RuntimeError("Не удалось выполнить отбор кандидатов"))
         return
 
     typer.echo(
-        f"Получено: {result.received}; новых: {result.created}; дубликатов: {result.duplicates}"
+        f"Получено: {result.import_result.received}; новых: {result.import_result.created}; "
+        f"дубликатов: {result.import_result.duplicates}; "
+        f"проверено: {result.selection_result.examined}; "
+        f"selected: {result.selection_result.selected}; "
+        f"rejected: {result.selection_result.rejected}; "
+        f"конфликты: {result.selection_result.conflicts}"
     )
 
 

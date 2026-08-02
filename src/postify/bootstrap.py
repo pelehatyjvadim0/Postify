@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from importlib.resources import as_file, files
 from time import monotonic, sleep
 
@@ -15,9 +16,14 @@ from sqlalchemy.orm import sessionmaker
 
 from postify.adapters.sources.hn_algolia import HnAlgoliaCandidateSource
 from postify.application.ingestion.import_candidates import ImportCandidates
+from postify.application.jobs.run_once import RunOnce
+from postify.application.selection.select_candidates import SelectCandidates
 from postify.config import Settings
+from postify.domain.candidates.selection import SelectionProfile
+from postify.domain.candidates.statuses import RejectionRule
 from postify.infrastructure.database.engine import create_engine_from_settings
 from postify.infrastructure.repositories.sqlalchemy_candidates import SqlAlchemyCandidateRepository
+from postify.infrastructure.repositories.sqlalchemy_decisions import SqlAlchemyDecisionRepository
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -41,6 +47,49 @@ def open_importer(
         )
         repository = SqlAlchemyCandidateRepository(sessionmaker(engine))
         yield ImportCandidates(source, repository)
+    finally:
+        if client is not None:
+            client.close()
+        engine.dispose()
+
+
+def selection_profile_from_settings(settings: Settings) -> SelectionProfile:
+    return SelectionProfile(
+        version=settings.selection_policy_version,
+        language=settings.selection_language,
+        audience=settings.selection_audience,
+        rules=tuple(RejectionRule(rule) for rule in settings.selection_rules),
+        topic_terms=settings.selection_topic_terms,
+        topic_exclusion_terms=settings.selection_topic_exclusion_terms,
+        advertising_terms=settings.selection_advertising_terms,
+        hiring_terms=settings.selection_hiring_terms,
+        technical_release_terms=settings.selection_technical_release_terms,
+        practical_terms=settings.selection_practical_terms,
+        freshness_window=timedelta(days=settings.selection_freshness_days),
+    )
+
+
+@contextmanager
+def open_run_once(
+    settings: Settings, *, transport: httpx.BaseTransport | None = None
+) -> Iterator[RunOnce]:
+    profile = selection_profile_from_settings(settings)
+    engine = create_engine_from_settings(settings)
+    client: httpx.Client | None = None
+    try:
+        client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
+        source = HnAlgoliaCandidateSource(
+            client=client, url=settings.hn_algolia_url, query=settings.hn_query,
+            tags=settings.hn_tags, hits=settings.hn_hits_per_page,
+        )
+        session_factory = sessionmaker(engine)
+        yield RunOnce(
+            ImportCandidates(source, SqlAlchemyCandidateRepository(session_factory)),
+            SelectCandidates(
+                SqlAlchemyDecisionRepository(session_factory), profile,
+                lambda: datetime.now(UTC),
+            ),
+        )
     finally:
         if client is not None:
             client.close()
