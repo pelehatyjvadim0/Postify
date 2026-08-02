@@ -80,8 +80,8 @@ class FakeDecisionRepository:
         return set(self.created_ids)
 
 
-def test_empty_undecided_set_returns_zero_result_and_saves_one_empty_batch() -> None:
-    # Поломка: пустой запуск пропускает единый repository contract или выдумывает счётчики.
+def test_empty_undecided_set_returns_zero_without_starting_transaction() -> None:
+    # Поломка: пустой запуск начинает бессмысленную транзакцию записи.
     (
         _,
         _,
@@ -98,7 +98,7 @@ def test_empty_undecided_set_returns_zero_result_and_saves_one_empty_batch() -> 
 
     assert result == SelectionResult(examined=0, selected=0, rejected=0, conflicts=0)
     assert repository.find_calls == 1
-    assert repository.save_calls == 1
+    assert repository.save_calls == 0
     assert repository.saved_decisions == []
 
 

@@ -31,6 +31,16 @@ def _selection_api():
     )
 
 
+def _decision_api():
+    from postify.domain.candidates.statuses import (
+        CandidateDecision,
+        DecisionReason,
+        DecisionStatus,
+    )
+
+    return CandidateDecision, DecisionReason, DecisionStatus
+
+
 def _candidate(**overrides: object) -> Candidate:
     values: dict[str, object] = {
         "source_name": "generic_feed",
@@ -44,13 +54,15 @@ def _candidate(**overrides: object) -> Candidate:
     return Candidate(**values)  # type: ignore[arg-type]
 
 
-def _developer_tools_profile(*, rules: tuple[object, ...] | None = None):
+def _developer_tools_profile(
+    *, rules: tuple[object, ...] | None = None, **overrides: object
+):
     SelectionProfile, _, _, _, _, RejectionRule = _selection_api()
-    return SelectionProfile(
-        version="developer-tools-v1",
-        language="ru",
-        audience="Разработчики прикладных инструментов",
-        rules=rules
+    values: dict[str, object] = {
+        "version": "developer-tools-v1",
+        "language": "ru",
+        "audience": "Разработчики прикладных инструментов",
+        "rules": rules
         if rules is not None
         else (
             RejectionRule.ADVERTISING,
@@ -58,14 +70,16 @@ def _developer_tools_profile(*, rules: tuple[object, ...] | None = None):
             RejectionRule.HIRING,
             RejectionRule.TECHNICAL_WITHOUT_USE,
         ),
-        topic_terms=("инструмент", "postgresql"),
-        topic_exclusion_terms=("рецепт", "кулинария"),
-        advertising_terms=("реклама", "партнёрский материал", "partner"),
-        hiring_terms=("вакансия", "нанимаем", "hiring"),
-        technical_release_terms=("релиз", "версия", "release"),
-        practical_terms=("руководство", "пример", "tutorial"),
-        freshness_window=timedelta(days=30),
-    )
+        "topic_terms": ("инструмент", "postgresql"),
+        "topic_exclusion_terms": ("рецепт", "кулинария"),
+        "advertising_terms": ("реклама", "партнёрский материал", "partner"),
+        "hiring_terms": ("вакансия", "нанимаем", "hiring"),
+        "technical_release_terms": ("релиз", "версия", "release"),
+        "practical_terms": ("руководство", "пример", "tutorial"),
+        "freshness_window": timedelta(days=30),
+    }
+    values.update(overrides)
+    return SelectionProfile(**values)
 
 
 def _cooking_profile():
@@ -364,3 +378,173 @@ def test_candidate_decision_keeps_independent_deep_copy_of_signals() -> None:
         "matched_terms": ["релиз"],
         "freshness": {"state": "fresh"},
     }
+
+
+@pytest.mark.parametrize(
+    ("status_name", "reason_name"),
+    [
+        ("selected", "advertising"),
+        ("rejected", "eligible_for_ai"),
+    ],
+)
+def test_candidate_decision_rejects_inconsistent_status_and_reason(
+    status_name: str,
+    reason_name: str,
+) -> None:
+    # Поломка: бинарный статус и машинная причина противоречат друг другу.
+    CandidateDecision, DecisionReason, DecisionStatus = _decision_api()
+
+    with pytest.raises(ValueError):
+        CandidateDecision(
+            candidate_id=61,
+            status=DecisionStatus(status_name),
+            reason=DecisionReason(reason_name),
+            explanation="Проверяемое решение",
+            signals={},
+            policy_version="generic-v1",
+            decided_at=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("status_name", "reason_name"),
+    [
+        ("selected", "eligible_for_ai"),
+        ("rejected", "advertising"),
+    ],
+)
+def test_candidate_decision_accepts_consistent_status_and_reason(
+    status_name: str,
+    reason_name: str,
+) -> None:
+    # Поломка: согласованная пара status/reason ошибочно отвергается общей проверкой.
+    CandidateDecision, DecisionReason, DecisionStatus = _decision_api()
+
+    decision = CandidateDecision(
+        candidate_id=62,
+        status=DecisionStatus(status_name),
+        reason=DecisionReason(reason_name),
+        explanation="Проверяемое решение",
+        signals={},
+        policy_version="generic-v1",
+        decided_at=NOW,
+    )
+
+    assert decision.status.value == status_name
+    assert decision.reason.value == reason_name
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("candidate_id", 0),
+        ("candidate_id", -1),
+        ("explanation", " \t "),
+        ("policy_version", " \n "),
+        ("decided_at", datetime(2026, 8, 2, 12, 0)),
+    ],
+)
+def test_candidate_decision_rejects_invalid_required_invariant(
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    # Поломка: журнал принимает неидентифицируемое или необъяснимое решение.
+    CandidateDecision, DecisionReason, DecisionStatus = _decision_api()
+    values: dict[str, object] = {
+        "candidate_id": 63,
+        "status": DecisionStatus.SELECTED,
+        "reason": DecisionReason.ELIGIBLE_FOR_AI,
+        "explanation": "Допущен к будущему AI-анализу",
+        "signals": {},
+        "policy_version": "generic-v1",
+        "decided_at": NOW,
+    }
+    values[field_name] = invalid_value
+
+    with pytest.raises(ValueError):
+        CandidateDecision(**values)
+
+
+@pytest.mark.parametrize("field_name", ["version", "language", "audience"])
+def test_selection_profile_rejects_blank_identity_field(field_name: str) -> None:
+    # Поломка: доменный профиль невозможно идентифицировать без Pydantic Settings.
+    with pytest.raises(ValueError):
+        _developer_tools_profile(**{field_name: " \t "})
+
+
+@pytest.mark.parametrize("freshness_window", [timedelta(0), timedelta(days=-1)])
+def test_selection_profile_requires_positive_freshness_window(
+    freshness_window: timedelta,
+) -> None:
+    # Поломка: доменный профиль принимает бессмысленное окно свежести.
+    with pytest.raises(ValueError):
+        _developer_tools_profile(freshness_window=freshness_window)
+
+
+def test_selection_profile_rejects_duplicate_rules() -> None:
+    # Поломка: одно правило выполняется дважды и искажает настроенный порядок.
+    _, _, _, _, _, RejectionRule = _selection_api()
+
+    with pytest.raises(ValueError):
+        _developer_tools_profile(
+            rules=(RejectionRule.HIRING, RejectionRule.HIRING),
+        )
+
+
+@pytest.mark.parametrize(
+    "terms_field",
+    [
+        "topic_terms",
+        "topic_exclusion_terms",
+        "advertising_terms",
+        "hiring_terms",
+        "technical_release_terms",
+        "practical_terms",
+    ],
+)
+def test_selection_profile_rejects_normalized_duplicate_terms(
+    terms_field: str,
+) -> None:
+    # Поломка: UI-клиент может обойти Settings и передать повторный термин.
+    with pytest.raises(ValueError):
+        _developer_tools_profile(**{terms_field: ("Маркер", " маркер ")})
+
+
+@pytest.mark.parametrize(
+    ("rule_name", "empty_dictionary"),
+    [
+        ("advertising", "advertising_terms"),
+        ("out_of_scope", "topic_exclusion_terms"),
+        ("hiring", "hiring_terms"),
+        ("technical_without_use", "technical_release_terms"),
+        ("technical_without_use", "practical_terms"),
+    ],
+)
+def test_selection_profile_rejects_empty_dictionary_for_enabled_rule(
+    rule_name: str,
+    empty_dictionary: str,
+) -> None:
+    # Поломка: сам домен принимает включённое правило, которое не способно доказать отказ.
+    _, _, _, _, _, RejectionRule = _selection_api()
+
+    with pytest.raises(ValueError):
+        _developer_tools_profile(
+            rules=(RejectionRule(rule_name),),
+            **{empty_dictionary: ()},
+        )
+
+
+def test_selection_profile_allows_empty_dictionaries_for_disabled_rules() -> None:
+    # Поломка: профиль требует данные для правил, которые пользователь явно отключил.
+    _, _, _, _, _, RejectionRule = _selection_api()
+
+    profile = _developer_tools_profile(
+        rules=(RejectionRule.HIRING,),
+        topic_terms=(),
+        topic_exclusion_terms=(),
+        advertising_terms=(),
+        technical_release_terms=(),
+        practical_terms=(),
+    )
+
+    assert profile.rules == (RejectionRule.HIRING,)
