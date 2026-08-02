@@ -32,6 +32,17 @@ def configured_settings(database_url: str) -> Settings:
         postgresql_ownership="dedicated",
         postify_on_calendar="0 9 * * 1-5",
         postify_timezone="Europe/Moscow",
+        selection_policy_version="generic-v1",
+        selection_language="ru",
+        selection_audience="Тестовая аудитория",
+        selection_rules="advertising,out_of_scope,hiring,technical_without_use",
+        selection_topic_terms="инструмент",
+        selection_topic_exclusion_terms="рецепт",
+        selection_advertising_terms="реклама",
+        selection_hiring_terms="вакансия",
+        selection_technical_release_terms="релиз",
+        selection_practical_terms="пример",
+        selection_freshness_days=30,
     )
 
 
@@ -236,7 +247,13 @@ def test_installed_wheel_checks_migrations_at_head_outside_checkout(
             "import os; "
             "settings = Settings(database_url=os.environ['WHEEL_TEST_DATABASE_URL'], "
             "hn_query='test', postgresql_ownership='dedicated', "
-            "postify_on_calendar='0 9 * * *', postify_timezone='Europe/Moscow'); "
+            "postify_on_calendar='0 9 * * *', postify_timezone='Europe/Moscow', "
+            "selection_policy_version='generic-v1', selection_language='ru', "
+            "selection_audience='test', selection_rules='advertising', "
+            "selection_topic_terms='tools', selection_topic_exclusion_terms='recipes', "
+            "selection_advertising_terms='ads', selection_hiring_terms='jobs', "
+            "selection_technical_release_terms='release', selection_practical_terms='guide', "
+            "selection_freshness_days=30); "
             "raise SystemExit(0 if migrations_at_head(settings) else 1)",
         ],
         cwd="/tmp",

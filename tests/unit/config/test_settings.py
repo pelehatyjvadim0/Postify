@@ -18,7 +18,33 @@ REQUIRED_ENVIRONMENT = {
     "POSTGRESQL_OWNERSHIP": "shared_allowed",
     "POSTIFY_ON_CALENDAR": "0 9 * * 1-5",
     "POSTIFY_TIMEZONE": "Europe/Moscow",
+    "SELECTION_POLICY_VERSION": "developer-tools-v1",
+    "SELECTION_LANGUAGE": "ru",
+    "SELECTION_AUDIENCE": "Разработчики прикладных инструментов",
+    "SELECTION_RULES": "advertising,out_of_scope,hiring,technical_without_use",
+    "SELECTION_TOPIC_TERMS": "инструменты,postgresql",
+    "SELECTION_TOPIC_EXCLUSION_TERMS": "рецепт,кулинария",
+    "SELECTION_ADVERTISING_TERMS": "реклама,партнёрский",
+    "SELECTION_HIRING_TERMS": "вакансия,нанимаем",
+    "SELECTION_TECHNICAL_RELEASE_TERMS": "релиз,версия",
+    "SELECTION_PRACTICAL_TERMS": "руководство,пример",
+    "SELECTION_FRESHNESS_DAYS": "30",
 }
+
+
+SELECTION_REQUIRED_NAMES = [
+    "SELECTION_POLICY_VERSION",
+    "SELECTION_LANGUAGE",
+    "SELECTION_AUDIENCE",
+    "SELECTION_RULES",
+    "SELECTION_TOPIC_TERMS",
+    "SELECTION_TOPIC_EXCLUSION_TERMS",
+    "SELECTION_ADVERTISING_TERMS",
+    "SELECTION_HIRING_TERMS",
+    "SELECTION_TECHNICAL_RELEASE_TERMS",
+    "SELECTION_PRACTICAL_TERMS",
+    "SELECTION_FRESHNESS_DAYS",
+]
 
 
 def set_required_environment(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
@@ -56,6 +82,17 @@ def test_environment_has_priority_over_passed_env_file(
                 "POSTGRESQL_OWNERSHIP=dedicated",
                 "POSTIFY_ON_CALENDAR=0 8 * * *",
                 "POSTIFY_TIMEZONE=UTC",
+                "SELECTION_POLICY_VERSION=file-v1",
+                "SELECTION_LANGUAGE=ru",
+                "SELECTION_AUDIENCE=Читатели тестового профиля",
+                "SELECTION_RULES=advertising,hiring",
+                "SELECTION_TOPIC_TERMS=данные",
+                "SELECTION_TOPIC_EXCLUSION_TERMS=спорт",
+                "SELECTION_ADVERTISING_TERMS=реклама",
+                "SELECTION_HIRING_TERMS=вакансия",
+                "SELECTION_TECHNICAL_RELEASE_TERMS=релиз",
+                "SELECTION_PRACTICAL_TERMS=пример",
+                "SELECTION_FRESHNESS_DAYS=14",
             ]
         )
     )
@@ -96,6 +133,7 @@ def test_settings_rejects_invalid_configuration(
         "POSTGRESQL_OWNERSHIP",
         "POSTIFY_ON_CALENDAR",
         "POSTIFY_TIMEZONE",
+        *SELECTION_REQUIRED_NAMES,
     ],
 )
 def test_settings_requires_mandatory_values(
@@ -106,3 +144,86 @@ def test_settings_requires_mandatory_values(
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_selection_profile_preserves_rule_order_and_normalizes_csv_values() -> None:
+    # Поломка: профиль сортирует правила либо сохраняет пробелы/регистр CSV-словарей.
+    values = {name.lower(): value for name, value in REQUIRED_ENVIRONMENT.items()}
+    values.update(
+        selection_rules="  Hiring, advertising  ",
+        selection_topic_terms="  PostgreSQL,  Инструменты разработчика ",
+    )
+
+    configured = Settings(**values)
+
+    assert configured.selection_rules == ("hiring", "advertising")
+    assert configured.selection_topic_terms == ("postgresql", "инструменты разработчика")
+
+
+@pytest.mark.parametrize(
+    "selection_rules",
+    ["advertising,unknown", "advertising,ADVERTISING"],
+)
+def test_selection_profile_rejects_unknown_or_case_insensitive_duplicate_rules(
+    selection_rules: str,
+) -> None:
+    # Поломка: неизвестное или повторное правило молча меняет состав/приоритет политики.
+    values = {name.lower(): value for name, value in REQUIRED_ENVIRONMENT.items()}
+    values["selection_rules"] = selection_rules
+
+    with pytest.raises(ValidationError):
+        Settings(**values)
+
+
+@pytest.mark.parametrize(
+    ("selection_rules", "dictionary_name"),
+    [
+        ("advertising", "selection_advertising_terms"),
+        ("out_of_scope", "selection_topic_exclusion_terms"),
+        ("hiring", "selection_hiring_terms"),
+        ("technical_without_use", "selection_technical_release_terms"),
+        ("technical_without_use", "selection_practical_terms"),
+    ],
+)
+def test_selection_profile_rejects_empty_dictionary_for_enabled_rule(
+    selection_rules: str,
+    dictionary_name: str,
+) -> None:
+    # Поломка: включённое правило без маркеров выглядит рабочим, но никогда не срабатывает.
+    values = {name.lower(): value for name, value in REQUIRED_ENVIRONMENT.items()}
+    values.update(selection_rules=selection_rules, **{dictionary_name: " ,  , "})
+
+    with pytest.raises(ValidationError):
+        Settings(**values)
+
+
+@pytest.mark.parametrize(
+    "dictionary_name",
+    [
+        "selection_topic_terms",
+        "selection_topic_exclusion_terms",
+        "selection_advertising_terms",
+        "selection_hiring_terms",
+        "selection_technical_release_terms",
+        "selection_practical_terms",
+    ],
+)
+def test_selection_profile_rejects_case_insensitive_duplicate_terms(
+    dictionary_name: str,
+) -> None:
+    # Поломка: один и тот же нормализованный термин хранится в профиле дважды.
+    values = {name.lower(): value for name, value in REQUIRED_ENVIRONMENT.items()}
+    values[dictionary_name] = "Маркер, маркер"
+
+    with pytest.raises(ValidationError):
+        Settings(**values)
+
+
+@pytest.mark.parametrize("freshness_days", ["0", "-1"])
+def test_selection_profile_requires_positive_freshness_days(freshness_days: str) -> None:
+    # Поломка: нулевое/отрицательное окно делает сигнал свежести бессмысленным.
+    values = {name.lower(): value for name, value in REQUIRED_ENVIRONMENT.items()}
+    values["selection_freshness_days"] = freshness_days
+
+    with pytest.raises(ValidationError):
+        Settings(**values)

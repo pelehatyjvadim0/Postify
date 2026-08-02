@@ -13,12 +13,26 @@ from postify.application.ports.candidate_source import SourceFetchError
 runner = CliRunner()
 
 
+@dataclass(frozen=True)
+class FakeSelectionResult:
+    examined: int
+    selected: int
+    rejected: int
+    conflicts: int
+
+
+@dataclass(frozen=True)
+class FakeRunOnceResult:
+    import_result: ImportResult
+    selection_result: FakeSelectionResult
+
+
 @dataclass
-class FakeImporter:
-    result: ImportResult | None = None
+class FakeRunOnce:
+    result: FakeRunOnceResult | None = None
     error: Exception | None = None
 
-    def execute(self) -> ImportResult:
+    def execute(self) -> FakeRunOnceResult:
         if self.error is not None:
             raise self.error
         assert self.result is not None
@@ -26,8 +40,8 @@ class FakeImporter:
 
 
 @contextmanager
-def importer_context(importer: FakeImporter):
-    yield importer
+def run_once_context(run_once: FakeRunOnce):
+    yield run_once
 
 
 class FakeSystemd:
@@ -73,21 +87,31 @@ def settings() -> SimpleNamespace:
     )
 
 
-def test_run_once_prints_import_result_from_real_typer_command(monkeypatch) -> None:
-    # Break caught: a CLI command that does not expose all three import counters.
+def test_run_once_prints_import_and_selection_result_from_real_typer_command(monkeypatch) -> None:
+    # Поломка: CLI не показывает все счётчики общего import → selection сценария.
     from postify import cli
 
     monkeypatch.setattr(cli, "Settings", settings)
     monkeypatch.setattr(
         cli,
-        "open_importer",
-        lambda configured_settings: importer_context(FakeImporter(ImportResult(3, 2, 1))),
+        "open_run_once",
+        lambda configured_settings: run_once_context(
+            FakeRunOnce(
+                FakeRunOnceResult(
+                    import_result=ImportResult(3, 2, 1),
+                    selection_result=FakeSelectionResult(4, 3, 1, 0),
+                )
+            )
+        ),
     )
 
     result = runner.invoke(cli.app, ["run-once"])
 
     assert result.exit_code == 0
-    assert result.output == "Получено: 3; новых: 2; дубликатов: 1\n"
+    assert result.output == (
+        "Получено: 3; новых: 2; дубликатов: 1; "
+        "проверено: 4; selected: 3; rejected: 1; конфликты: 0\n"
+    )
 
 
 def test_run_once_reports_source_error_without_traceback(monkeypatch) -> None:
@@ -97,8 +121,10 @@ def test_run_once_reports_source_error_without_traceback(monkeypatch) -> None:
     monkeypatch.setattr(cli, "Settings", settings)
     monkeypatch.setattr(
         cli,
-        "open_importer",
-        lambda configured_settings: importer_context(FakeImporter(error=SourceFetchError("источник недоступен"))),
+        "open_run_once",
+        lambda configured_settings: run_once_context(
+            FakeRunOnce(error=SourceFetchError("источник недоступен"))
+        ),
     )
 
     result = runner.invoke(cli.app, ["run-once"])
@@ -106,6 +132,73 @@ def test_run_once_reports_source_error_without_traceback(monkeypatch) -> None:
     assert result.exit_code != 0
     assert "источник недоступен" in result.output
     assert "Traceback" not in result.output
+
+
+def test_run_once_reports_selection_sql_error_without_sensitive_data(monkeypatch) -> None:
+    # Поломка: ошибка SQL возвращает код 0 либо раскрывает кандидата/raw_payload.
+    from sqlalchemy.exc import SQLAlchemyError
+    from postify import cli
+
+    leaked_error = SQLAlchemyError(
+        "insert failed; raw_payload={'title': 'Секретный кандидат', 'points': 9000}"
+    )
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_run_once",
+        lambda configured_settings: run_once_context(FakeRunOnce(error=leaked_error)),
+    )
+
+    result = runner.invoke(cli.app, ["run-once"])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "raw_payload" not in result.output
+    assert "Секретный кандидат" not in result.output
+    assert "points" not in result.output
+
+
+def test_run_once_does_not_hide_selection_contract_error_or_leak_candidate(monkeypatch) -> None:
+    # Поломка (mutation 13): selection ValueError скрывается с кодом 0 или раскрывает данные.
+    from postify import cli
+
+    leaked_error = ValueError(
+        "unknown candidate 999; raw_payload={'title': 'Закрытый материал'}"
+    )
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_run_once",
+        lambda configured_settings: run_once_context(FakeRunOnce(error=leaked_error)),
+    )
+
+    result = runner.invoke(cli.app, ["run-once"])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "raw_payload" not in result.output
+    assert "Закрытый материал" not in result.output
+
+
+def test_run_once_reports_invalid_profile_without_exposing_dictionary(monkeypatch) -> None:
+    # Поломка: Pydantic error печатает секретный словарь профиля и traceback.
+    from pydantic import BaseModel, Field
+    from postify import cli
+
+    class InvalidProfile(BaseModel):
+        advertising_terms: str = Field(min_length=100)
+
+    def invalid_settings():
+        return InvalidProfile(advertising_terms="секретный-рекламный-словарь")
+
+    monkeypatch.setattr(cli, "Settings", invalid_settings)
+
+    result = runner.invoke(cli.app, ["run-once"])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "секретный-рекламный-словарь" not in result.output
+    assert "advertising_terms" not in result.output
 
 
 def test_start_does_not_enable_timer_when_database_is_unavailable(monkeypatch) -> None:
