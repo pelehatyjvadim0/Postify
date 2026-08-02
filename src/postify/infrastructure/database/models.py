@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -32,3 +32,24 @@ class CandidateModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class CandidateDecisionModel(Base):
+    __tablename__ = "candidate_decisions"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", name="uq_candidate_decisions_candidate_id"),
+        CheckConstraint("status IN ('selected', 'rejected')", name="ck_candidate_decisions_status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("candidates.id", name="fk_candidate_decisions_candidate_id_candidates"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
