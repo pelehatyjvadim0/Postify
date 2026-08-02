@@ -24,6 +24,12 @@ dev = ["pytest"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+postify = [
+    "infrastructure/database/migrations/*.py",
+    "infrastructure/database/migrations/versions/*.py",
+]
+
 [tool.pytest.ini_options]
 markers = [
     "integration: тесты с настоящей PostgreSQL",

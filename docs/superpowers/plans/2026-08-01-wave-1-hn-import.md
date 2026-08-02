@@ -32,8 +32,8 @@ pyproject.toml
 uv.lock
 .env.example
 alembic.ini
-migrations/env.py
-migrations/versions/*_create_candidates.py
+src/postify/infrastructure/database/migrations/env.py
+src/postify/infrastructure/database/migrations/versions/*_create_candidates.py
 src/postify/__init__.py
 src/postify/config.py
 src/postify/bootstrap.py
@@ -123,11 +123,11 @@ class CandidateRepository(Protocol):
 
 ### Задача 4: миграция PostgreSQL и идемпотентный репозиторий
 
-**Файлы:** `alembic.ini`, `migrations/env.py`, `migrations/versions/*_create_candidates.py`, `src/postify/infrastructure/database/engine.py`, `src/postify/infrastructure/database/models.py`, `src/postify/infrastructure/repositories/sqlalchemy_candidates.py`, `tests/integration/conftest.py`, `tests/integration/infrastructure/test_sqlalchemy_candidates.py`.
+**Файлы:** `alembic.ini` (только разработка), `src/postify/infrastructure/database/migrations/env.py`, `src/postify/infrastructure/database/migrations/versions/*_create_candidates.py`, `src/postify/infrastructure/database/engine.py`, `src/postify/infrastructure/database/models.py`, `src/postify/infrastructure/repositories/sqlalchemy_candidates.py`, `tests/integration/conftest.py`, `tests/integration/infrastructure/test_sqlalchemy_candidates.py`.
 
 - [ ] Написать красную интеграционную фикстуру: она требует `TEST_DATABASE_URL`, создаёт уникальную схему/БД, передаёт этот URL в Alembic явно через `POSTIFY_ALEMBIC_DATABASE_URL`, применяет миграции только туда и удаляет только свой ресурс. Несовпадение тестового URL с URL разработки обязательно. В проверке волны отсутствие переменной завершается ошибкой конфигурации, а не `skip`.
 - [ ] Написать красные миграционные тесты: на пустой тестовой БД выполнить `base → head`, проверить JSONB и именованное уникальное ограничение, затем `downgrade base` и повторный `upgrade head`. Написать красные тесты репозитория: первая сессия фиксирует запись и видна второй; повторный вызов, дубли `[A, A, B]` и одновременные вставки из двух независимых сессий создают ровно одну запись на ключ; конфликт не перезаписывает поля; ошибка сериализации payload делает rollback и не ломает следующее валидное сохранение.
-- [ ] Реализовать `target_metadata`, источник URL и транзакции Alembic, модель, миграцию и репозиторий. Использовать PostgreSQL-вставку с `on_conflict_do_nothing` по именованному ограничению и `RETURNING` для точного числа созданных записей.
+- [ ] Реализовать `target_metadata`, источник URL и транзакции Alembic, модель, миграцию и репозиторий. Миграции хранятся только в `src/postify/infrastructure/database/migrations/`, входят в wheel; корневой `alembic.ini` направлен в тот же каталог и служит только разработке. Runtime находит migration scripts через package resources. Использовать PostgreSQL-вставку с `on_conflict_do_nothing` по именованному ограничению и `RETURNING` для точного числа созданных записей.
 - [ ] Написать компонентный тест: `httpx.MockTransport` + настоящий PostgreSQL + `open_importer` создают строку из одного JSON-hit, а повтор возвращает `created=0`; systemd в тест не вызывается. Повторно выполнить `TEST_DATABASE_URL=… uv run pytest -m integration -v`; ожидание — PASS. Не выполнять миграции и очистку на `DATABASE_URL` разработки.
 - [ ] Закоммитить хранение понятным русским сообщением.
 
@@ -145,7 +145,7 @@ class CandidateRepository(Protocol):
 
 **Файлы:** `README.md`.
 
-- [ ] Запустить `uv run pytest -m "not integration" -v`, затем `TEST_DATABASE_URL=… uv run pytest -m integration -v`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic check`, `uv run python -m compileall -q src` и `git diff --check`. Все команды должны завершиться с кодом 0.
+- [ ] Запустить `uv run pytest -m "not integration" -v`, затем `TEST_DATABASE_URL=… uv run pytest -m integration -v`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic upgrade head`, `POSTIFY_ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run alembic check`, `uv run python -m compileall -q src` и `git diff --check`. Дополнительно собрать wheel, установить его в чистое временное venv и из `/tmp` проверить `migrations_at_head()` на временном PostgreSQL 16. Все команды должны завершиться с кодом 0.
 - [ ] Обновить README только проверяемой инструкцией разового импорта.
 - [ ] Передать весь diff свежему reviewer Terra 5.6 high. Он сначала проверяет тесты, временно внося и откатывая мутации: убрать проверку пробельного поля, не вызвать `raise_for_status`, заменить запрос конфигурации строкой `AI`, убрать `on_conflict_do_nothing`, поменять порядок `stop`, включить timer до проверки БД. Каждая мутация обязана сделать соответствующий тест красным.
 - [ ] После успешной проверки тестов тот же reviewer проверяет код: границы зависимостей, транзакцию, отсутствие лишних файлов и честность обработки ошибки.

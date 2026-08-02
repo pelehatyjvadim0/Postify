@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import os
+from pathlib import Path
+import subprocess
+import sys
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -188,3 +192,57 @@ def test_start_reaches_alembic_head_check_from_another_current_directory(
     assert result.exit_code == 0
     assert result.output == "Таймер Postify запущен\n"
     assert events == ["postgresql:start", "database:ready", "timer:enable-start"]
+
+
+def test_installed_wheel_checks_migrations_at_head_outside_checkout(
+    migrated_database_url: str, tmp_path
+) -> None:
+    # Break caught: wheel without package-owned Alembic scripts cannot check head from /tmp.
+    project_root = Path(__file__).resolve().parents[2]
+    wheel_dir = tmp_path / "wheel"
+    venv_dir = tmp_path / "venv"
+    venv_python = venv_dir / "bin" / "python"
+
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel = next(wheel_dir.glob("postify-*.whl"))
+    subprocess.run(
+        ["uv", "venv", "--clear", "--python", sys.executable, str(venv_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(venv_python), str(wheel)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["WHEEL_TEST_DATABASE_URL"] = tcp_database_url(migrated_database_url)
+    result = subprocess.run(
+        [
+            str(venv_python),
+            "-c",
+            "from postify.bootstrap import migrations_at_head; "
+            "from postify.config import Settings; "
+            "import os; "
+            "settings = Settings(database_url=os.environ['WHEEL_TEST_DATABASE_URL'], "
+            "hn_query='test', postgresql_ownership='dedicated', "
+            "postify_on_calendar='0 9 * * *', postify_timezone='Europe/Moscow'); "
+            "raise SystemExit(0 if migrations_at_head(settings) else 1)",
+        ],
+        cwd="/tmp",
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr

@@ -13,7 +13,7 @@
 - `adapters` реализуют интеграции с Algolia, Telegram, OpenRouter и медиа-источниками;
 - `infrastructure` содержит PostgreSQL, реализации репозиториев, журналирование и управление systemd;
 - `deploy` содержит только файлы развёртывания Ubuntu/VPS;
-- `migrations` содержит миграции Alembic;
+- `src/postify/infrastructure/database/migrations` содержит единственный набор миграций Alembic, поставляемый вместе с пакетом;
 - `tests` повторяет границы приложения: модульные, интеграционные и сквозные тесты.
 
 Это проще микросервисов для первого запуска: один процесс задачи, одна БД и один набор команд. В то же время правила отбора и контентный бриф не зависят от Telegram. Будущий независимый видеосервис сможет использовать тот же нейтральный медиабриф через отдельный пакет или API, не меняя Telegram-конвейер.
@@ -48,8 +48,7 @@ Postify/
 ├── pyproject.toml
 ├── uv.lock
 ├── .env.example
-├── alembic.ini
-├── migrations/
+├── alembic.ini                 # конфигурация Alembic только для разработки
 ├── deploy/systemd/
 ├── scripts/
 ├── src/postify/
@@ -76,6 +75,7 @@ Postify/
 │   │   └── media/
 │   └── infrastructure/
 │       ├── database/
+│       │   └── migrations/
 │       ├── repositories/
 │       ├── observability/
 │       └── systemd.py
@@ -99,8 +99,8 @@ Postify/
 pyproject.toml
 .env.example
 alembic.ini
-migrations/env.py
-migrations/versions/*_create_candidates.py
+src/postify/infrastructure/database/migrations/env.py
+src/postify/infrastructure/database/migrations/versions/*_create_candidates.py
 deploy/systemd/postify-run-once.service
 deploy/systemd/postify-run-once.timer
 scripts/install-systemd.sh
@@ -141,7 +141,7 @@ tests/e2e/test_systemd_installer.py
 Новые файлы:
 
 ```text
-migrations/versions/*_add_candidate_decisions.py
+src/postify/infrastructure/database/migrations/versions/*_add_candidate_decisions.py
 src/postify/domain/candidates/selection.py
 src/postify/domain/candidates/statuses.py
 src/postify/application/ports/decision_repository.py
@@ -171,7 +171,7 @@ tests/integration/infrastructure/test_sqlalchemy_decisions.py
 Новые файлы:
 
 ```text
-migrations/versions/*_add_run_logs.py
+src/postify/infrastructure/database/migrations/versions/*_add_run_logs.py
 src/postify/domain/shared/errors.py
 src/postify/application/ports/run_log_repository.py
 src/postify/application/jobs/get_status.py

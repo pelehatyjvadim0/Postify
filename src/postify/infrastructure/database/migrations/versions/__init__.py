@@ -1,0 +1,1 @@
+"""Ревизии Alembic Postify."""

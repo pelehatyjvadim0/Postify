@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from importlib.resources import as_file, files
 from time import monotonic, sleep
 
 import httpx
@@ -68,17 +68,18 @@ def wait_for_database(settings: Settings) -> None:
 
 
 def migrations_at_head(settings: Settings) -> bool:
-    project_root = Path(__file__).resolve().parents[2]
-    alembic_config = Config(str(project_root / "alembic.ini"))
-    alembic_config.set_main_option("script_location", str(project_root / "migrations"))
-    expected_heads = set(ScriptDirectory.from_config(alembic_config).get_heads())
-    engine = create_engine_from_settings(settings)
-    try:
-        with engine.connect() as connection:
-            current_heads = set(MigrationContext.configure(connection).get_current_heads())
-        return current_heads == expected_heads
-    finally:
-        engine.dispose()
+    migration_resources = files("postify.infrastructure.database.migrations")
+    with as_file(migration_resources) as migration_path:
+        alembic_config = Config()
+        alembic_config.set_main_option("script_location", str(migration_path))
+        expected_heads = set(ScriptDirectory.from_config(alembic_config).get_heads())
+        engine = create_engine_from_settings(settings)
+        try:
+            with engine.connect() as connection:
+                current_heads = set(MigrationContext.configure(connection).get_current_heads())
+            return current_heads == expected_heads
+        finally:
+            engine.dispose()
 
 
 def candidate_count(settings: Settings) -> int:
