@@ -68,3 +68,72 @@ decision.signals["injected"] = "yes"
 - Important: 2.
 - Minor: 0.
 - Переход к live acceptance: **не готов**. Нужен fix-loop для обоих Important, новых RED-тестов и повторного независимого review.
+
+## Re-review fix-loop (`3e5550c`)
+
+Проверен диапазон `22d1c84..3e5550c`. После Sol RED `55dc89e` production-исправление
+ограничено четырьмя файлами: `statuses.py`, `sqlalchemy_decisions.py`, `bootstrap.py`
+и `cli.py`; тесты после RED-коммита не менялись. В новых тестах нет скрытых skip/xfail.
+
+### Повторные mutation gates
+
+| Gate | Точная временная мутация | Узкий результат |
+| --- | --- | --- |
+| 1 | fallback `selected/eligible_for_ai` заменён на `rejected/advertising` | RED: 2 failed (`title_only`, отсутствие positive-term) |
+| 2 | stale-кандидат немедленно получает `rejected/out_of_scope` | RED: 1 failed |
+| freeze | `_freeze_json` заменён на обычный `deepcopy` | RED: 4 failed (replace/add верхнего уровня, вложенные mapping/list) |
+| thaw | `_thaw_json` возвращает frozen object без рекурсивного преобразования | RED: JSONB `TypeError: mappingproxy is not JSON serializable` |
+| 7 | сохраняемая `policy_version` заменена на константу | RED: 1 failed, точные сохранённые поля не совпали |
+| 10 | удалён `session.commit()` | RED: 1 failed, `commit_calls == 0` |
+| 13 | обработчик selection `ValueError` завершался без `_fail` | RED: 1 failed, CLI вернул код 0 |
+
+После каждой мутации production-файл восстановлен; focused набор deep-copy/freeze/thaw,
+lifecycle `open_run_once` и PostgreSQL прошёл: `16 passed`.
+
+### Закрытие findings
+
+1. **Important из предыдущего review закрыт.** `CandidateDecision.signals` теперь
+   рекурсивно заморожен: mapping становится `MappingProxyType`, JSON-sequence — tuple,
+   а scalar глубоко копируется. Новые domain tests запрещают replace/add верхнего уровня,
+   вложенное присваивание и append; прежний deep-copy test остаётся GREEN. Репозиторий
+   рекурсивно превращает frozen mapping/tuple обратно в JSONB-compatible `dict`/`list`,
+   что подтверждено настоящим PostgreSQL.
+2. **Important о duplicated lifecycle закрыт.** `_open_import_resources` — один private
+   contextmanager механики engine/client/source/session factory; `open_importer` и
+   `open_run_once` оставляют у себя только разные application-сценарии. Helper не читает
+   решения, не обращается к БД напрямую и не объединяет domain policy, поэтому не создаёт
+   god-service или leaky abstraction. Новые lifecycle tests проверяют success, source error,
+   selection error и ошибку конструктора client; все пути закрывают client и dispose engine.
+3. **Important, добавленный root в CLI boundary, закрыт.** `ValidationError` нормализован
+   до безопасного сообщения во всех `run-once`, `start`, `status`, `stop`. Параметризованный
+   e2e test доказывает ненулевой код, отсутствие field/value/traceback и отсутствие вызова
+   downstream boundary.
+
+### Финальная проверка
+
+```text
+uv run pytest -m "not integration" -q
+160 passed, 26 deselected
+
+TEST_DATABASE_URL='postgresql+psycopg://user@127.0.0.1:55432/postify_test' \
+  uv run pytest -m integration -q
+26 passed, 160 deselected
+
+uv run python -m compileall -q src
+uv run ruff check .
+All checks passed!
+
+git diff --check
+git status --short
+```
+
+Предыдущие 14/14 остаются валидными: повторены gates 1, 2, 7, 10, 13; код для 3–6,
+8–9, 11–12 и package/migration gate 14 не менялся, а полный GREEN подтверждает сохранение
+контрактов.
+
+### Итог re-review
+
+- Critical: 0.
+- Important: 0.
+- Minor: 0.
+- Переход к live acceptance: **готов**.
