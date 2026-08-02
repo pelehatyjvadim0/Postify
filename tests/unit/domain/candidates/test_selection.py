@@ -374,10 +374,68 @@ def test_candidate_decision_keeps_independent_deep_copy_of_signals() -> None:
     source_signals["matched_terms"].append("подмена")
     source_signals["freshness"]["state"] = "stale"
 
-    assert decision.signals == {
-        "matched_terms": ["релиз"],
-        "freshness": {"state": "fresh"},
-    }
+    assert tuple(decision.signals["matched_terms"]) == ("релиз",)
+    assert decision.signals["freshness"]["state"] == "fresh"
+
+
+def _decision_with_nested_signals():
+    CandidateDecision, DecisionReason, DecisionStatus = _decision_api()
+    return CandidateDecision(
+        candidate_id=56,
+        status=DecisionStatus.REJECTED,
+        reason=DecisionReason.TECHNICAL_WITHOUT_USE,
+        explanation="Технический релиз без практического применения",
+        signals={
+            "matched_terms": ["релиз"],
+            "freshness": {"state": "fresh", "age_days": 1},
+        },
+        policy_version="developer-tools-v1",
+        decided_at=NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "replacement"),
+    [
+        ("freshness", {"state": "stale"}),
+        ("injected", "yes"),
+    ],
+)
+def test_candidate_decision_signals_reject_top_level_mutation(
+    key: str,
+    replacement: object,
+) -> None:
+    # Поломка Important: после создания можно заменить либо добавить верхнеуровневый сигнал.
+    decision = _decision_with_nested_signals()
+
+    with pytest.raises((TypeError, AttributeError)):
+        decision.signals[key] = replacement  # type: ignore[index]
+
+    assert set(decision.signals) == {"matched_terms", "freshness"}
+    assert decision.signals["freshness"]["state"] == "fresh"
+
+
+def test_candidate_decision_signals_reject_nested_mapping_assignment() -> None:
+    # Поломка Important: вложенный JSON-object остаётся изменяемым после создания решения.
+    decision = _decision_with_nested_signals()
+    freshness = decision.signals["freshness"]
+
+    with pytest.raises((TypeError, AttributeError)):
+        freshness["state"] = "stale"  # type: ignore[index]
+
+    assert freshness["state"] == "fresh"  # type: ignore[index]
+    assert freshness["age_days"] == 1  # type: ignore[index]
+
+
+def test_candidate_decision_signals_reject_nested_sequence_append() -> None:
+    # Поломка Important: вложенный JSON-array допускает append после создания решения.
+    decision = _decision_with_nested_signals()
+    matched_terms = decision.signals["matched_terms"]
+
+    with pytest.raises((TypeError, AttributeError)):
+        getattr(matched_terms, "append")("подмена")
+
+    assert tuple(matched_terms) == ("релиз",)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

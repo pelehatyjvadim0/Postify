@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from postify.application.ingestion.import_candidates import ImportResult
@@ -180,8 +181,12 @@ def test_run_once_does_not_hide_selection_contract_error_or_leak_candidate(monke
     assert "Закрытый материал" not in result.output
 
 
-def test_run_once_reports_invalid_profile_without_exposing_dictionary(monkeypatch) -> None:
-    # Поломка: Pydantic error печатает секретный словарь профиля и traceback.
+@pytest.mark.parametrize("command", ["run-once", "start", "status", "stop"])
+def test_command_reports_invalid_profile_without_exposing_data_or_calling_boundaries(
+    monkeypatch,
+    command: str,
+) -> None:
+    # Поломка Important: lifecycle-команда печатает field/value ValidationError либо идёт дальше.
     from pydantic import BaseModel, Field
     from postify import cli
 
@@ -191,13 +196,31 @@ def test_run_once_reports_invalid_profile_without_exposing_dictionary(monkeypatc
     def invalid_settings():
         return InvalidProfile(advertising_terms="секретный-рекламный-словарь")
 
-    monkeypatch.setattr(cli, "Settings", invalid_settings)
+    boundary_calls: list[str] = []
 
-    result = runner.invoke(cli.app, ["run-once"])
+    def forbidden_boundary(*args: object, **kwargs: object):
+        boundary_calls.append("called")
+        raise AssertionError("Граница не должна вызываться после ошибки Settings")
+
+    monkeypatch.setattr(cli, "Settings", invalid_settings)
+    for boundary_name in (
+        "open_run_once",
+        "create_systemd_controller",
+        "wait_for_database",
+        "migrations_at_head",
+        "database_is_ready",
+        "candidate_count",
+    ):
+        monkeypatch.setattr(cli, boundary_name, forbidden_boundary)
+
+    result = runner.invoke(cli.app, [command])
 
     assert result.exit_code != 0
+    assert boundary_calls == []
     assert "Traceback" not in result.output
     assert "секретный-рекламный-словарь" not in result.output
+    assert "секретный" not in result.output
+    assert "словарь" not in result.output
     assert "advertising_terms" not in result.output
 
 

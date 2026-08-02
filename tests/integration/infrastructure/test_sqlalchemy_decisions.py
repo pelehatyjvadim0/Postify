@@ -175,6 +175,47 @@ def test_save_new_persists_every_decision_field_exactly_and_commits_one_batch(
         engine.dispose()
 
 
+def test_save_new_converts_recursively_frozen_signals_to_jsonb_values(
+    migrated_database_url: str,
+) -> None:
+    # Поломка Important: immutable JSON-представление нельзя сериализовать в JSONB без thaw.
+    SqlAlchemyDecisionRepository, _, _, _ = _repository_api()
+    engine = create_engine(migrated_database_url)
+    session_factory = sessionmaker(engine)
+    candidate_id = _seed_candidates(session_factory, ("frozen-signals",))[0]
+    repository = SqlAlchemyDecisionRepository(session_factory)
+    expected_signals = {
+        "freshness": {"state": "fresh", "age_days": 1},
+        "matched_terms": ["руководство"],
+        "evidence": [{"field": "title", "matched": True}],
+    }
+    decision = _decision(candidate_id, signals=expected_signals)
+
+    try:
+        with pytest.raises((TypeError, AttributeError)):
+            decision.signals["freshness"]["state"] = "stale"  # type: ignore[index]
+
+        assert repository.save_new([decision]) == {candidate_id}
+
+        with engine.connect() as connection:
+            stored_signals = connection.execute(
+                text(
+                    "SELECT signals FROM candidate_decisions "
+                    "WHERE candidate_id = :candidate_id"
+                ),
+                {"candidate_id": candidate_id},
+            ).scalar_one()
+
+        assert isinstance(stored_signals, dict)
+        assert isinstance(stored_signals["freshness"], dict)
+        assert isinstance(stored_signals["matched_terms"], list)
+        assert isinstance(stored_signals["evidence"], list)
+        assert isinstance(stored_signals["evidence"][0], dict)
+        assert stored_signals == expected_signals
+    finally:
+        engine.dispose()
+
+
 def test_save_new_is_immutable_and_idempotent_without_overwrite(
     migrated_database_url: str,
 ) -> None:

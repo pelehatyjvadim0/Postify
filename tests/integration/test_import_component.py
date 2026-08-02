@@ -73,6 +73,27 @@ def full_hn_hit() -> dict[str, object]:
     }
 
 
+def _patch_run_once_lifecycle_resources(monkeypatch, bootstrap, events: list[str]):
+    class TrackingClient(httpx.Client):
+        def close(self) -> None:
+            events.append("client:close")
+            super().close()
+
+    class TrackingEngine:
+        def dispose(self) -> None:
+            events.append("engine:dispose")
+
+    session_factory = object()
+    monkeypatch.setattr(bootstrap.httpx, "Client", TrackingClient)
+    monkeypatch.setattr(
+        bootstrap,
+        "create_engine_from_settings",
+        lambda settings: TrackingEngine(),
+    )
+    monkeypatch.setattr(bootstrap, "sessionmaker", lambda engine: session_factory)
+    return session_factory
+
+
 def test_open_importer_persists_one_hn_hit_and_keeps_duplicate_out_of_second_session(
     migrated_database_url: str,
 ) -> None:
@@ -161,6 +182,188 @@ def test_open_importer_disposes_engine_when_http_client_construction_fails(monke
             pass
 
     assert events == ["engine:dispose"]
+
+
+def test_open_run_once_executes_import_then_selection_and_closes_resources(monkeypatch) -> None:
+    # Поломка Important: общий boundary не достигает обоих сценариев либо течёт на success.
+    from postify import bootstrap
+
+    events: list[str] = []
+    session_factory = _patch_run_once_lifecycle_resources(monkeypatch, bootstrap, events)
+
+    class RecordingSource:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def fetch(self) -> list[object]:
+            events.append("source:fetch")
+            return []
+
+    class CandidateRepository:
+        def __init__(self, used_session_factory: object) -> None:
+            assert used_session_factory is session_factory
+
+        def save_new(self, candidates: list[object]) -> int:
+            events.append("candidates:save")
+            return 0
+
+    class DecisionRepository:
+        def __init__(self, used_session_factory: object) -> None:
+            assert used_session_factory is session_factory
+
+        def find_undecided(self) -> list[object]:
+            events.append("decisions:find")
+            return []
+
+        def save_new(self, decisions: list[object]) -> set[int]:
+            events.append("decisions:save")
+            return set()
+
+    monkeypatch.setattr(bootstrap, "HnAlgoliaCandidateSource", RecordingSource)
+    monkeypatch.setattr(bootstrap, "SqlAlchemyCandidateRepository", CandidateRepository)
+    monkeypatch.setattr(bootstrap, "SqlAlchemyDecisionRepository", DecisionRepository)
+
+    with bootstrap.open_run_once(
+        configured_settings("postgresql+psycopg://unused")
+    ) as run_once:
+        result = run_once.execute()
+
+    assert result.import_result.received == 0
+    assert result.import_result.created == 0
+    assert result.selection_result.examined == 0
+    assert result.selection_result.selected == 0
+    assert result.selection_result.rejected == 0
+    assert result.selection_result.conflicts == 0
+    assert events == [
+        "source:fetch",
+        "candidates:save",
+        "decisions:find",
+        "client:close",
+        "engine:dispose",
+    ]
+
+
+def test_open_run_once_closes_resources_on_source_execution_error(monkeypatch) -> None:
+    # Поломка Important: SourceFetchError из job.execute обходит lifecycle cleanup.
+    from postify import bootstrap
+    from postify.application.ports.candidate_source import SourceFetchError
+
+    events: list[str] = []
+    _patch_run_once_lifecycle_resources(monkeypatch, bootstrap, events)
+
+    class FailingSource:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def fetch(self) -> list[object]:
+            events.append("source:fetch")
+            raise SourceFetchError("источник недоступен")
+
+    monkeypatch.setattr(bootstrap, "HnAlgoliaCandidateSource", FailingSource)
+    monkeypatch.setattr(
+        bootstrap,
+        "SqlAlchemyCandidateRepository",
+        lambda used_session_factory: object(),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "SqlAlchemyDecisionRepository",
+        lambda used_session_factory: object(),
+    )
+
+    with pytest.raises(SourceFetchError, match="источник недоступен"):
+        with bootstrap.open_run_once(
+            configured_settings("postgresql+psycopg://unused")
+        ) as run_once:
+            run_once.execute()
+
+    assert events == ["source:fetch", "client:close", "engine:dispose"]
+
+
+def test_open_run_once_closes_resources_on_selection_execution_error(monkeypatch) -> None:
+    # Поломка Important: ошибка selection после успешного import оставляет ресурсы открытыми.
+    from postify import bootstrap
+
+    events: list[str] = []
+    session_factory = _patch_run_once_lifecycle_resources(monkeypatch, bootstrap, events)
+
+    class EmptySource:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def fetch(self) -> list[object]:
+            events.append("source:fetch")
+            return []
+
+    class CandidateRepository:
+        def __init__(self, used_session_factory: object) -> None:
+            assert used_session_factory is session_factory
+
+        def save_new(self, candidates: list[object]) -> int:
+            events.append("candidates:save")
+            return 0
+
+    class FailingDecisionRepository:
+        def __init__(self, used_session_factory: object) -> None:
+            assert used_session_factory is session_factory
+
+        def find_undecided(self) -> list[object]:
+            events.append("decisions:find")
+            raise RuntimeError("решения не загружены")
+
+    monkeypatch.setattr(bootstrap, "HnAlgoliaCandidateSource", EmptySource)
+    monkeypatch.setattr(bootstrap, "SqlAlchemyCandidateRepository", CandidateRepository)
+    monkeypatch.setattr(
+        bootstrap,
+        "SqlAlchemyDecisionRepository",
+        FailingDecisionRepository,
+    )
+
+    with pytest.raises(RuntimeError, match="решения не загружены"):
+        with bootstrap.open_run_once(
+            configured_settings("postgresql+psycopg://unused")
+        ) as run_once:
+            run_once.execute()
+
+    assert events == [
+        "source:fetch",
+        "candidates:save",
+        "decisions:find",
+        "client:close",
+        "engine:dispose",
+    ]
+
+
+def test_open_run_once_disposes_engine_when_http_client_construction_fails(
+    monkeypatch,
+) -> None:
+    # Поломка Important: ошибка HTTP client construction теряет уже созданный engine.
+    from postify import bootstrap
+
+    events: list[str] = []
+
+    class TrackingEngine:
+        def dispose(self) -> None:
+            events.append("engine:dispose")
+
+    def failing_client(**kwargs: object) -> httpx.Client:
+        events.append("client:construct")
+        raise RuntimeError("не удалось создать HTTP client")
+
+    monkeypatch.setattr(
+        bootstrap,
+        "create_engine_from_settings",
+        lambda settings: TrackingEngine(),
+    )
+    monkeypatch.setattr(bootstrap.httpx, "Client", failing_client)
+
+    with pytest.raises(RuntimeError, match="не удалось создать HTTP client"):
+        with bootstrap.open_run_once(
+            configured_settings("postgresql+psycopg://unused")
+        ):
+            pass
+
+    assert events == ["client:construct", "engine:dispose"]
 
 
 def test_migrations_at_head_uses_project_configuration_outside_current_directory(
