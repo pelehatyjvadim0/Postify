@@ -59,23 +59,28 @@ class AnalyzedTopic:
     attempt_id: int
     analysis: str
     usefulness: int
-    post_text: str
-    media_query: str
+    post_text: str | None
+    media_query: str | None
+    selected: bool = True
 
     def __post_init__(self):
         if not 0 <= self.usefulness <= 100:
             raise ContentValidationError("Некорректная оценка")
-        if (
-            not self.analysis.strip()
-            or not self.post_text.strip()
-            or not any(
-                "а" <= c.casefold() <= "я" or c in "ёЁ"
-                for c in self.analysis + self.post_text
-            )
+        if not self.analysis.strip() or not any(
+            "а" <= c.casefold() <= "я" or c in "ёЁ" for c in self.analysis
         ):
             raise ContentValidationError("Нужен русский текст")
-        if not self.media_query.strip():
+        if self.selected and (
+            not isinstance(self.post_text, str)
+            or not self.post_text.strip()
+            or not isinstance(self.media_query, str)
+            or not self.media_query.strip()
+        ):
             raise ContentValidationError("Нужен запрос медиа")
+        if not self.selected and (
+            self.post_text is not None or self.media_query is not None
+        ):
+            raise ContentValidationError("Невыбранная тема не содержит пакет")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,10 +93,15 @@ class BatchAnalysis:
         ids = [t.attempt_id for t in self.topics]
         if (
             len(ids) != len(set(ids))
-            or not set(ids).issubset(self.requested_attempt_ids)
-            or len(ids) > self.package_limit
+            or set(ids) != set(self.requested_attempt_ids)
+            or len(ids) != len(self.requested_attempt_ids)
+            or len(self.selected_topics) > self.package_limit
         ):
             raise ContentValidationError("Некорректный пакет анализа")
+
+    @property
+    def selected_topics(self) -> tuple[AnalyzedTopic, ...]:
+        return tuple(topic for topic in self.topics if topic.selected)
 
 
 @dataclass(frozen=True, slots=True)

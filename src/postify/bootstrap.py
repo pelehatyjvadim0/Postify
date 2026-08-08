@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.resources import as_file, files
+from pathlib import Path
 from time import monotonic, sleep
 
 import httpx
@@ -163,7 +164,6 @@ def open_run_once(
 
 
 def _content_processor(settings: Settings, resources: _ImportResources):
-    from pathlib import Path
     from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
     from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
     from postify.adapters.media.local_media_provider import LocalMediaProvider
@@ -187,7 +187,7 @@ def _content_processor(settings: Settings, resources: _ImportResources):
             lambda argv, **kwargs: subprocess.run(argv, check=False, **kwargs),
             Path.cwd(),
             settings.content_codex_timeout_seconds,
-            Path(tempfile.gettempdir()) / "postify-codex",
+            _codex_work_dir(Path.cwd(), Path(settings.content_media_dir)),
         ),
         LocalMediaProvider(
             resources.client,
@@ -207,6 +207,19 @@ def _content_processor(settings: Settings, resources: _ImportResources):
         timezone=settings.postify_timezone,
         clock=lambda: datetime.now(UTC),
     )
+
+
+def _codex_work_dir(repository: Path, media_dir: Path) -> Path:
+    repository = repository.resolve()
+    media_dir = media_dir.resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    for candidate in (temp_root / "postify-codex", temp_root.parent / "postify-codex"):
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(repository) and not resolved.is_relative_to(
+            media_dir
+        ):
+            return resolved
+    raise RuntimeError("codex_work_unavailable")
 
 
 def database_is_ready(settings: Settings) -> bool:

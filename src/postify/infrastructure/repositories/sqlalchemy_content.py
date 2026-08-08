@@ -4,6 +4,7 @@ from datetime import timedelta
 from sqlalchemy import text
 from postify.domain.content.models import ContentPackage
 from postify.domain.content.quota import QuotaState, choose_tier
+from postify.application.ports.content_repository import PackageDraft
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,14 +16,6 @@ class ClaimedAttempt:
     source_url: str
     title: str
     snippet: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class PackageDraft:
-    attempt_id: int
-    package_id: int
-    article: object
-    media_query: str
 
 
 class SqlAlchemyContentRepository:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
+from dataclasses import dataclass
 from typing import Protocol
 
 from postify.domain.content.models import (
@@ -12,6 +13,14 @@ from postify.domain.content.models import (
     ExtractedArticle,
     StoredMedia,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PackageDraft:
+    attempt_id: int
+    package_id: int
+    article: ExtractedArticle
+    media_query: str
 
 
 class ContentRepository(Protocol):
@@ -33,7 +42,7 @@ class ContentRepository(Protocol):
         now: datetime,
         day: date,
         package_limit: int,
-    ) -> Sequence[object]: ...
+    ) -> Sequence[PackageDraft]: ...
     def complete_package(
         self, package_id: int, *, media: StoredMedia, status: str, now: datetime
     ) -> None: ...

@@ -40,7 +40,8 @@ class CodexContentAnalyzer:
     ) -> BatchAnalysis:
         materialized = tuple(articles)
         invocation = self._create_invocation_dir()
-        isolated = invocation != self.work
+        result: BatchAnalysis | None = None
+        failure: CodexAnalysisError | None = None
         try:
             schema = invocation / "schema.json"
             output = invocation / "output.json"
@@ -51,22 +52,25 @@ class CodexContentAnalyzer:
             done = self._run(invocation, schema, output, materialized, package_limit)
             if done.returncode:
                 raise CodexAnalysisError()
-            return self._parse_output(output, materialized, package_limit)
-        except CodexAnalysisError:
-            raise
+            result = self._parse_output(output, materialized, package_limit)
+        except CodexAnalysisError as error:
+            failure = error
         except Exception:
-            raise CodexAnalysisError() from None
-        finally:
-            if isolated:
-                shutil.rmtree(invocation, ignore_errors=True)
+            failure = CodexAnalysisError()
+        try:
+            shutil.rmtree(invocation)
+        except OSError:
+            if failure is None:
+                failure = CodexAnalysisError()
+        if failure is not None:
+            raise failure
+        if result is None:
+            raise CodexAnalysisError()
+        return result
 
     def _create_invocation_dir(self) -> Path:
         try:
             self.work.mkdir(parents=True, exist_ok=True)
-            # Старый прямой API разрешал один временный каталог для обоих
-            # аргументов; production bootstrap всегда передаёт разные пути.
-            if self.work.resolve() == self.cwd.resolve():
-                return self.work
             return Path(tempfile.mkdtemp(prefix="codex-", dir=self.work))
         except OSError:
             raise CodexAnalysisError() from None
@@ -127,8 +131,12 @@ class CodexContentAnalyzer:
                 "analysis": {"type": "string", "minLength": 1},
                 "usefulness": {"type": "integer", "minimum": 0, "maximum": 100},
                 "selected": {"type": "boolean"},
-                "post_text": {"type": "string", "minLength": 1},
-                "media_query": {"type": "string", "minLength": 1},
+                "post_text": {
+                    "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+                },
+                "media_query": {
+                    "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+                },
             },
         }
         return {
@@ -171,6 +179,7 @@ class CodexContentAnalyzer:
                     attempt_id=item["attempt_id"],
                     analysis=item["analysis"],
                     usefulness=item["usefulness"],
+                    selected=item["selected"],
                     post_text=item["post_text"],
                     media_query=item["media_query"],
                 )
@@ -180,7 +189,7 @@ class CodexContentAnalyzer:
                 topics, tuple(item.attempt_id for item in articles), package_limit
             )
             if any(
-                article.source_url in topic.post_text
+                topic.post_text is not None and article.source_url in topic.post_text
                 for article in articles
                 for topic in topics
             ):

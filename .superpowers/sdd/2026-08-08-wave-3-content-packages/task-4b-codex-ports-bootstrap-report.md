@@ -63,3 +63,26 @@ cleanup failure, typed `PackageDraft` и два bootstrap collision cases.
 санитизированный `CodexAnalysisError`; bootstrap либо выбирает root
 вне repository/media, либо санитизированно отказывает до runner;
 `PackageDraft` задан как application-port DTO с domain `ExtractedArticle`.
+
+## GREEN fix round 1
+
+- `uv run pytest tests/unit/adapters/ai/test_codex_content_analyzer.py tests/unit/application/content/test_ports.py -q` — `22 passed`.
+- `uv run pytest tests/unit/adapters/ai/test_codex_content_analyzer.py tests/unit/domain/content/test_models.py tests/unit/application/content/test_ports.py -q` — `41 passed`.
+- `uv run pytest tests/unit/application/content/test_process_content.py -q` — `8 passed`.
+- `uv run pytest tests/unit/adapters/ai tests/unit/adapters/http tests/unit/adapters/articles tests/unit/adapters/media tests/unit/domain/content -q` — `99 passed`.
+- `uv run pytest -q -m 'not integration'` — `314 passed, 41 deselected`.
+- `uv run python -m compileall -q src` — exit 0.
+- `uv run ruff check src` — `All checks passed!`.
+- `uv lock --check` — `Resolved 34 packages`.
+- `git diff --check` — exit 0.
+
+### Самопроверка fix round 1
+
+- Каждый вызов Codex создаёт unique child directory и удаляет его; ошибка cleanup не может вернуть успешный batch и нормализуется без детали filesystem.
+- `AnalyzedTopic` сохраняет selected/nonselected outcome; невыбранный outcome требует `null` package fields, batch требует все запрошенные IDs и ограничивает только выбранные topics.
+- Bootstrap выбирает candidate work root только вне repository и media, иначе отказывает до запуска runner.
+- `PackageDraft` перенесён в public application port с точным типом article; SQL-запросы и repository orchestration не менялись.
+
+### Concerns fix round 1
+
+Нет открытых concerns в scope fix round. Minor о falsy injected transport/policy намеренно не менялся, согласно findings.
