@@ -2,9 +2,7 @@
 
 ## Статус
 
-Fix round 2 реализован в разрешённой production-границе. Scoped GREEN пройден.
-Fix round 3 зафиксирован одним RED-test: fallback после
-`ConnectTimeout` ещё требует production GREEN.
+Fix round 3 реализован в разрешённой production-границе. Scoped GREEN пройден.
 
 ## Коммиты
 
@@ -12,7 +10,8 @@ Fix round 3 зафиксирован одним RED-test: fallback после
 - Текущий fix round: `Устранил повторное DNS-разрешение HTTP и усилил media safety`.
 - Fix round 2 RED: `9b99285 Зафиксировал RED гонки удаления и сетевых маршрутов`.
 - Fix round 2 GREEN: `Закрыл сетевые обходы и гонку удаления медиа`.
-- Fix round 3 RED: текущий tests/evidence commit.
+- Fix round 3 RED: `9cd24fc Зафиксировал RED переключения после таймаута`.
+- Fix round 3 GREEN: `Добавил переключение IP после таймаута соединения`.
 
 ## Файлы fix round 1
 
@@ -92,3 +91,16 @@ Self-review round 2: resolver вызывается один раз, весь о�
 - Общий helper сохранил прежний `ConnectError` node ID и одинаково
   проверяет result, один resolver call, порядок двух IP и отсутствие
   hostname на underlying boundary.
+
+## Fix round 3 GREEN
+
+- RED: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py::test_public_network_backend_tries_next_validated_ip_after_connect_timeout -q` — 1 failed.
+- Новый GREEN: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py::test_public_network_backend_tries_next_validated_ip_after_connect_timeout -q` — 1 passed.
+- Scoped: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q` — 64 passed.
+- Полный: `uv run pytest -m 'not integration' -q` — 292 passed, 17 failed, 41 deselected. Все 17 RED относятся к Task 4B/4C.
+- `uv run python -m compileall -q src` — успешно.
+- `uv run ruff check src` — `All checks passed!`.
+- `uv lock --check` — `Resolved 34 packages`.
+- `git diff --check` — успешно.
+
+Self-review round 3: retryable connect failures теперь включают `httpcore.ConnectError` и отдельный `httpcore.ConnectTimeout`; fallback сохраняет один DNS lookup и исходный порядок заранее проверенных public IP. Остальные transport и media контракты не изменялись.

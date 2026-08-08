@@ -88,7 +88,7 @@ class PublicNetworkBackend:
                     local_address=local_address,
                     socket_options=socket_options,
                 )
-            except httpcore.ConnectError:
+            except (httpcore.ConnectError, httpcore.ConnectTimeout):
                 if index == len(public_ips) - 1:
                     raise
         raise RuntimeError("unreachable")
