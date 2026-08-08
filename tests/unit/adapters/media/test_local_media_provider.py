@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import os
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -487,6 +488,56 @@ def test_delete_rejects_intermediate_symlink_even_when_target_stays_inside_root(
     assert caught.value.code == "media_failed"
     assert linked_directory.is_symlink()
     assert stored.read_bytes() == b"keep"
+
+
+def test_delete_keeps_open_parent_binding_when_intermediate_directory_is_swapped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка fix-round 2: path-based unlink следует подменённому symlink.
+    _, LocalMediaProvider, _ = _api()
+    media_root = tmp_path / "media"
+    checked_directory = media_root / "checked"
+    checked_directory.mkdir(parents=True)
+    stored = checked_directory / "stored.jpg"
+    stored.write_bytes(b"delete-this-file")
+    renamed_directory = media_root / "checked-before-race"
+    other_directory = tmp_path / "other"
+    other_directory.mkdir()
+    other_file = other_directory / stored.name
+    other_file.write_bytes(b"must-stay-unchanged")
+    original_unlink = os.unlink
+    race_triggered = False
+
+    def racing_unlink(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal race_triggered
+        if Path(os.fsdecode(path)).name == stored.name and not race_triggered:
+            checked_directory.rename(renamed_directory)
+            checked_directory.symlink_to(other_directory, target_is_directory=True)
+            race_triggered = True
+        if dir_fd is None:
+            original_unlink(path)
+        else:
+            original_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "unlink", racing_unlink)
+    with httpx.Client() as client:
+        LocalMediaProvider(
+            client,
+            media_root,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        ).delete(str(stored))
+
+    assert race_triggered
+    assert other_file.exists(), "delete перешёл в подменённый каталог"
+    assert other_file.read_bytes() == b"must-stay-unchanged"
+    assert not (renamed_directory / stored.name).exists()
 
 
 def test_cleanup_normalizes_filesystem_error_without_leaking_absolute_path(

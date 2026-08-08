@@ -3,11 +3,14 @@
 ## Статус
 
 Fix round 1 реализован в разрешённой production-границе. Scoped GREEN пройден.
+Fix round 2 зафиксирован только RED-tests/evidence: три findings ещё
+требуют production GREEN.
 
 ## Коммиты
 
 - `a51e845 Защитил HTTP загрузку статей и медиа`
 - Текущий fix round: `Устранил повторное DNS-разрешение HTTP и усилил media safety`.
+- Fix round 2 RED: текущий tests/evidence commit.
 
 ## Файлы fix round 1
 
@@ -30,6 +33,21 @@ Fix round 1 реализован в разрешённой production-грани
 - `uv run ruff check src` — успешно, `All checks passed!`.
 - `git diff --check` — успешно.
 
+## RED fix round 2
+
+- База: `14621ce`; production-файлы не изменялись.
+- Baseline: scoped-запуск до новых tests — `59 passed`.
+- Новые RED: `4 failed` — fallback на второй validated IP, запрет
+  `proxy`, запрет `uds`, fd-bound delete при TOCTOU.
+- Scoped после tests: `4 failed, 59 passed`.
+- Retained отдельно: `59 passed, 4 deselected`.
+- DNS/fallback test: fake resolver вызван один раз; fake underlying получает
+  два public IP в исходном порядке и ни разу не получает hostname.
+- Delete test выполняет реальный `os.unlink`: непосредственно перед
+  ним parent переименовывается и заменяется symlink. Тест проверяет
+  сохранность одноимённого файла в другом каталоге и удаление файла
+  в ранее открытом parent.
+
 ## Self-review
 
 - `url_policy` обязательна и отвергает `None` в обоих адаптерах; обход проверки до HTTP исключён.
@@ -44,4 +62,6 @@ Fix round 1 реализован в разрешённой production-грани
 ## Concerns
 
 - Два bootstrap RED остаются намеренно: обязательную policy и новый transport должен связать Task 4B; `bootstrap.py` запрещён текущим brief.
-- Остальные 15 full-gate RED принадлежат Task 4B/4C. В scoped Task 4A открытых замечаний нет.
+- Остальные 15 full-gate RED принадлежат Task 4B/4C.
+- Fix round 2 открыл 4 scoped RED node: fd-relative/no-follow delete,
+  constructor rejection `proxy`/`uds` и fallback по уже validated public IP.

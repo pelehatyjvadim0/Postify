@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpcore
 import pytest
 
 
@@ -55,6 +56,27 @@ class RecordingNetworkBackend:
             }
         )
         return self.stream
+
+
+class FailFirstNetworkBackend(RecordingNetworkBackend):
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> object:
+        stream = super().connect_tcp(
+            host,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+        if len(self.calls) == 1:
+            raise httpcore.ConnectError("first public address unavailable")
+        return stream
 
 
 @pytest.mark.parametrize(
@@ -217,3 +239,53 @@ def test_public_network_backend_never_connects_after_dns_changes_to_private_ip(
     assert "public.test" not in str(caught.value)
     assert resolver.hosts == ["public.test", "public.test"]
     assert [call["host"] for call in underlying.calls] == ["93.184.216.34"]
+
+
+def test_public_network_backend_tries_next_validated_ip_without_resolving_again(
+) -> None:
+    # Поломка fix-round 2: ошибка первого IP не даёт попробовать второй.
+    from postify.adapters.http.public_url_policy import PublicNetworkBackend
+
+    PublicHttpUrlPolicy, _ = _api()
+    resolver = RecordingResolver(("93.184.216.34", "1.1.1.1"))
+    underlying = FailFirstNetworkBackend()
+    backend = PublicNetworkBackend(
+        policy=PublicHttpUrlPolicy(resolver=resolver), backend=underlying
+    )
+
+    stream = backend.connect_tcp("public.test", 443)
+
+    assert stream is underlying.stream
+    assert resolver.hosts == ["public.test"]
+    assert [call["host"] for call in underlying.calls] == [
+        "93.184.216.34",
+        "1.1.1.1",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("proxy", "http://user:operator-secret@proxy.test:8080"),
+        ("uds", "/operator-secret/private.sock"),
+    ],
+    ids=["proxy", "uds"],
+)
+def test_public_http_transport_rejects_routes_that_bypass_public_tcp_policy(
+    option: str,
+    value: str,
+) -> None:
+    # Поломка fix-round 2: proxy/UDS обходят validated public TCP backend.
+    from postify.adapters.http.public_url_policy import PublicHttpTransport
+
+    PublicHttpUrlPolicy, _ = _api()
+    policy = PublicHttpUrlPolicy(resolver=RecordingResolver(("93.184.216.34",)))
+
+    with pytest.raises(ValueError) as caught:
+        PublicHttpTransport(
+            policy=policy,
+            backend=RecordingNetworkBackend(),
+            **{option: value},
+        )
+
+    assert "operator-secret" not in str(caught.value)
