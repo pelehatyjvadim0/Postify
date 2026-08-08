@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -22,11 +23,18 @@ class FakeWikimedia:
 
 
 class AllowingPolicy:
+    """Тестовый safe fake: разрешает только структурно безопасные HTTP(S) URL."""
+
     def __init__(self) -> None:
         self.urls: list[str] = []
 
     def validate(self, url: str) -> str:
         self.urls.append(url)
+        parsed = urlsplit(url)
+        assert parsed.scheme in {"http", "https"}
+        assert parsed.hostname
+        assert parsed.username is None and parsed.password is None
+        assert parsed.port is None or 1 <= parsed.port <= 65535
         return url
 
 
@@ -78,7 +86,9 @@ def test_media_uses_first_valid_article_candidate_without_wikimedia(tmp_path: Pa
 
     wiki = FakeWikimedia(("wikimedia", "https://wiki.test/fallback.webp"))
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        provider = LocalMediaProvider(client, tmp_path, 1000, wiki)
+        provider = LocalMediaProvider(
+            client, tmp_path, 1000, wiki, url_policy=AllowingPolicy()
+        )
         media = provider.acquire(
             _article(
                 ExtractedArticle,
@@ -116,7 +126,9 @@ def test_media_falls_back_once_to_wikimedia_after_all_article_candidates(tmp_pat
 
     wiki = FakeWikimedia(("wikimedia", "https://wiki.test/fallback.webp"))
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        media = LocalMediaProvider(client, tmp_path, 1000, wiki).acquire(
+        media = LocalMediaProvider(
+            client, tmp_path, 1000, wiki, url_policy=AllowingPolicy()
+        ).acquire(
             _article(ExtractedArticle, (("og", "https://cdn.test/og.jpg"),)),
             "database",
         )
@@ -147,7 +159,13 @@ def test_media_rejects_empty_oversized_or_disallowed_mime(
             )
         )
     ) as client:
-        provider = LocalMediaProvider(client, tmp_path, max_bytes, FakeWikimedia(None))
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            max_bytes,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
         with pytest.raises(MediaAcquireError):
             provider.acquire(
                 _article(ExtractedArticle, (("og", "https://cdn.test/image"),)),
@@ -171,7 +189,13 @@ def test_media_uses_uuid_mime_extension_containment_and_atomic_final_file(tmp_pa
             )
         )
     ) as client:
-        media = LocalMediaProvider(client, tmp_path, 100, FakeWikimedia(None)).acquire(
+        media = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        ).acquire(
             _article(ExtractedArticle, (("og", evil),)), "database"
         )
 
@@ -198,7 +222,13 @@ def test_cleanup_removes_only_expired_unprotected_files(tmp_path: Path) -> None:
     os.utime(protected, (old_timestamp, old_timestamp))
     os.utime(young, (new_timestamp, new_timestamp))
     with httpx.Client() as client:
-        provider = LocalMediaProvider(client, tmp_path, 100, FakeWikimedia(None))
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
         removed = provider.cleanup(
             older_than=NOW - timedelta(hours=48),
             protected_paths={str(protected)},
@@ -208,6 +238,29 @@ def test_cleanup_removes_only_expired_unprotected_files(tmp_path: Path) -> None:
     assert not expired.exists()
     assert protected.exists()
     assert young.exists()
+
+
+@pytest.mark.parametrize(
+    "policy_kwargs",
+    [{}, {"url_policy": None}],
+    ids=["omitted", "none"],
+)
+def test_media_provider_cannot_be_constructed_without_public_url_policy(
+    tmp_path: Path,
+    policy_kwargs: dict[str, object],
+) -> None:
+    # Поломка fix-round 1: optional/None policy оставляет media SSRF bypass.
+    _, LocalMediaProvider, _ = _api()
+
+    with httpx.Client(transport=httpx.MockTransport(lambda request: None)) as client:
+        with pytest.raises(TypeError):
+            LocalMediaProvider(
+                client,
+                tmp_path,
+                100,
+                FakeWikimedia(None),
+                **policy_kwargs,
+            )
 
 
 def test_media_rejects_unsafe_url_before_opening_http_stream(tmp_path: Path) -> None:
@@ -375,6 +428,7 @@ def test_delete_rejects_path_outside_media_root(tmp_path: Path) -> None:
             media_root,
             100,
             FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
         )
         with pytest.raises(MediaAcquireError):
             provider.delete(str(outside))
@@ -397,9 +451,121 @@ def test_delete_rejects_symlink_even_when_link_is_inside_media_root(tmp_path: Pa
             media_root,
             100,
             FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
         )
         with pytest.raises(MediaAcquireError):
             provider.delete(str(link))
 
     assert link.is_symlink()
     assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_delete_rejects_intermediate_symlink_even_when_target_stays_inside_root(
+    tmp_path: Path,
+) -> None:
+    # Поломка fix-round 1: resolve-only containment разрешает symlink в родителе.
+    _, LocalMediaProvider, MediaAcquireError = _api()
+    media_root = tmp_path / "media"
+    real_directory = media_root / "real"
+    real_directory.mkdir(parents=True)
+    stored = real_directory / "stored.jpg"
+    stored.write_bytes(b"keep")
+    linked_directory = media_root / "linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+
+    with httpx.Client() as client:
+        provider = LocalMediaProvider(
+            client,
+            media_root,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError) as caught:
+            provider.delete(str(linked_directory / "stored.jpg"))
+
+    assert caught.value.code == "media_failed"
+    assert linked_directory.is_symlink()
+    assert stored.read_bytes() == b"keep"
+
+
+def test_cleanup_normalizes_filesystem_error_without_leaking_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка fix-round 1: cleanup выпускает raw OSError с путём.
+    _, LocalMediaProvider, MediaAcquireError = _api()
+    expired = tmp_path / "operator-secret" / "expired.jpg"
+    expired.parent.mkdir()
+    expired.write_bytes(b"recoverable")
+    old_timestamp = (NOW - timedelta(hours=49)).timestamp()
+    import os
+
+    os.utime(expired, (old_timestamp, old_timestamp))
+    original_unlink = Path.unlink
+
+    def failing_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == expired:
+            raise OSError(f"filesystem failure at {expired}")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    with httpx.Client() as client:
+        provider = LocalMediaProvider(
+            client,
+            expired.parent,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError) as caught:
+            provider.cleanup(
+                older_than=NOW - timedelta(hours=48),
+                protected_paths=set(),
+            )
+
+    assert caught.value.code == "media_failed"
+    assert str(expired) not in str(caught.value)
+    assert "operator-secret" not in str(caught.value)
+    assert expired.read_bytes() == b"recoverable"
+
+
+def test_media_provider_owns_og_twitter_article_priority_for_unsorted_input(
+    tmp_path: Path,
+) -> None:
+    # Поломка fix-round 1: provider доверяет порядку входа и берёт article до og.
+    ExtractedArticle, LocalMediaProvider, _ = _api()
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            content=b"selected-og",
+            headers={"content-type": "image/jpeg"},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        media = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        ).acquire(
+            _article(
+                ExtractedArticle,
+                (
+                    ("article", "https://cdn.test/article.jpg"),
+                    ("twitter", "https://cdn.test/twitter.jpg"),
+                    ("og", "https://cdn.test/og.jpg"),
+                ),
+            ),
+            "database",
+        )
+
+    assert requests == ["https://cdn.test/og.jpg"]
+    assert media.source_type == "og"
+    assert media.source_url == "https://cdn.test/og.jpg"
+    assert Path(media.local_path).read_bytes() == b"selected-og"

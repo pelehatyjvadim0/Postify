@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import httpx
 import pytest
 
@@ -27,11 +29,18 @@ def _client(body: bytes, content_type: str = "text/html; charset=utf-8") -> http
 
 
 class AllowingPolicy:
+    """Тестовый safe fake: разрешает только структурно безопасные HTTP(S) URL."""
+
     def __init__(self) -> None:
         self.urls: list[str] = []
 
     def validate(self, url: str) -> str:
         self.urls.append(url)
+        parsed = urlsplit(url)
+        assert parsed.scheme in {"http", "https"}
+        assert parsed.hostname
+        assert parsed.username is None and parsed.password is None
+        assert parsed.port is None or 1 <= parsed.port <= 65535
         return url
 
 
@@ -64,6 +73,7 @@ def test_extract_prefers_article_text_and_discards_page_chrome() -> None:
             client=client,
             max_bytes=10_000,
             min_text_chars=40,
+            url_policy=AllowingPolicy(),
         ).extract("https://source.test/path/post")
 
     assert marker in result.text
@@ -87,6 +97,7 @@ def test_extract_uses_main_then_meaningful_paragraph_fallback() -> None:
                 client=client,
                 max_bytes=10_000,
                 min_text_chars=30,
+                url_policy=AllowingPolicy(),
             ).extract("https://source.test/post")
         markers.append(article.text.split("-")[0])
 
@@ -111,6 +122,7 @@ def test_extract_rejects_short_oversized_or_non_html_response(
             client=client,
             max_bytes=max_bytes,
             min_text_chars=30,
+            url_policy=AllowingPolicy(),
         )
         with pytest.raises(ArticleExtractionError):
             extractor.extract("https://source.test/post")
@@ -133,6 +145,7 @@ def test_extract_preserves_strict_image_order_and_absolutizes_urls() -> None:
             client=client,
             max_bytes=10_000,
             min_text_chars=30,
+            url_policy=AllowingPolicy(),
         ).extract("https://source.test/news/post")
 
     assert article.image_candidates == (
@@ -156,11 +169,33 @@ def test_extract_normalizes_transport_error_without_leaking_source_url() -> None
                 client=client,
                 max_bytes=1000,
                 min_text_chars=30,
-            ).extract(secret_url)
+                url_policy=AllowingPolicy(),
+            ).extract("https://public.test/article")
 
     assert caught.value.code == "article_unavailable"
     assert "secret" not in str(caught.value)
     assert "private.test" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "policy_kwargs",
+    [{}, {"url_policy": None}],
+    ids=["omitted", "none"],
+)
+def test_article_extractor_cannot_be_constructed_without_public_url_policy(
+    policy_kwargs: dict[str, object],
+) -> None:
+    # Поломка fix-round 1: optional/None policy оставляет SSRF bypass.
+    _, HttpArticleExtractor = _extractor_api()
+
+    with _client(b"<article>unused safe body</article>") as client:
+        with pytest.raises(TypeError):
+            HttpArticleExtractor(
+                client=client,
+                max_bytes=1000,
+                min_text_chars=20,
+                **policy_kwargs,
+            )
 
 
 def test_article_rejects_unsafe_url_before_opening_http_stream() -> None:

@@ -125,3 +125,53 @@ def test_bootstrap_injects_same_public_url_policy_into_article_and_media(
     assert not processor.a.work.resolve().is_relative_to(
         settings.content_media_dir.resolve()
     )
+
+
+def test_bootstrap_public_transport_and_adapters_share_one_dns_policy(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка fix-round 1: pinned backend существует, но production client его не использует.
+    from postify.adapters.http.public_url_policy import (
+        PublicHttpTransport,
+        PublicNetworkBackend,
+    )
+    import postify.bootstrap as bootstrap
+
+    class DisposableEngine:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    engine = DisposableEngine()
+    monkeypatch.setattr(bootstrap, "create_engine_from_settings", lambda settings: engine)
+    settings = SimpleNamespace(
+        hn_algolia_url="https://hn.algolia.com/api/v1/search",
+        hn_query="database",
+        hn_tags="story",
+        hn_hits_per_page=10,
+        content_article_max_bytes=1000,
+        content_codex_timeout_seconds=60,
+        content_media_dir=tmp_path / "media",
+        content_media_max_bytes=1000,
+        content_daily_analysis_limit=12,
+        content_daily_package_limit=3,
+        content_priority_freshness_days=14,
+        content_fresh_share_percent=90,
+        content_reserve_share_percent=10,
+        content_review_required=True,
+        postify_timezone="UTC",
+    )
+
+    with bootstrap._open_import_resources(settings) as resources:
+        processor = bootstrap._content_processor(settings, resources)
+        transport = resources.client._transport
+
+        assert isinstance(transport, PublicHttpTransport)
+        assert isinstance(transport.network_backend, PublicNetworkBackend)
+        assert transport.network_backend.policy is processor.e.url_policy
+        assert processor.e.url_policy is processor.m.url_policy
+
+    assert engine.disposed is True
