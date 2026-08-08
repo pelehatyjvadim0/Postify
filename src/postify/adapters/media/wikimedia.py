@@ -9,11 +9,13 @@ class WikimediaImageSearch:
         try:
             data = self.client.get(
                 "https://commons.wikimedia.org/w/api.php",
+                headers={"User-Agent": "Postify/0.1"},
                 params={
                     "action": "query",
                     "format": "json",
                     "generator": "search",
                     "gsrsearch": query,
+                    "gsrnamespace": "6",
                     "prop": "imageinfo",
                     "iiprop": "url",
                 },
