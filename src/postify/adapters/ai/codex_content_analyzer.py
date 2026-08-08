@@ -24,6 +24,7 @@ class CodexContentAnalyzer:
 
     def analyze(self, articles, package_limit):
         articles = tuple(articles)
+        self.work.mkdir(parents=True, exist_ok=True)
         output = self.work / f"codex-{next(tempfile._get_candidate_names())}.json"
         schema = self.work / "codex-schema.json"
         schema.write_text('{"type":"object"}')
