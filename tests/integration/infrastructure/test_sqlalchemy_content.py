@@ -477,3 +477,343 @@ def test_repository_returns_full_package_and_review_history_atomically(
         assert stored == ("approved", 4)
     finally:
         engine.dispose()
+
+
+def test_due_fresh_retry_consumes_persisted_weighted_credit_before_new_claim(
+    migrated_database_url: str,
+) -> None:
+    # Поломка re-review 3: due retry занимает слот, но не изменяет persisted credits.
+    ContentLimits, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    _seed_selected(engine, [NOW - timedelta(days=1)] * 2)
+    repository = Repository(sessionmaker(engine))
+
+    try:
+        first = repository.claim(
+            now=NOW,
+            day=NOW.date(),
+            limits=_limits(ContentLimits, analysis_limit=1),
+        )[0]
+        repository.schedule_article_retry(
+            first.id,
+            retry_at=NOW + timedelta(hours=6),
+            now=NOW,
+        )
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE content_quota_state SET fresh_credit=0,reserve_credit=0 "
+                    "WHERE id=1"
+                )
+            )
+
+        next_day = NOW + timedelta(days=1)
+        claimed = repository.claim(
+            now=next_day,
+            day=next_day.date(),
+            limits=_limits(ContentLimits, analysis_limit=2),
+        )
+        with engine.connect() as connection:
+            credits = connection.execute(
+                text(
+                    "SELECT fresh_credit,reserve_credit FROM content_quota_state "
+                    "WHERE id=1"
+                )
+            ).one()
+
+        assert [(item.attempt_no, item.tier) for item in claimed] == [
+            (2, "fresh"),
+            (1, "fresh"),
+        ]
+        assert credits == (-20, 20)
+    finally:
+        engine.dispose()
+
+
+def _seed_processing_package(engine) -> tuple[int, int]:
+    candidate_id = _seed_selected(engine, [NOW - timedelta(days=1)])[0]
+    with engine.begin() as connection:
+        attempt_id = connection.execute(
+            text(
+                "INSERT INTO content_attempts "
+                "(candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
+                "analysis,started_at) VALUES "
+                "(:candidate_id,1,'fresh','processing',:url,'Article',:body,:analysis,:now) "
+                "RETURNING id"
+            ),
+            {
+                "candidate_id": candidate_id,
+                "url": "https://source.test/atomic",
+                "body": "ARTICLE-BODY atomic context",
+                "analysis": "Атомарный анализ",
+                "now": NOW,
+            },
+        ).scalar_one()
+        package_id = connection.execute(
+            text(
+                "INSERT INTO content_packages "
+                "(attempt_id,source_url,context,analysis,post_text,review_required,status,"
+                "created_at,updated_at) VALUES "
+                "(:attempt_id,:url,:body,:analysis,:post,true,'processing',:now,:now) "
+                "RETURNING id"
+            ),
+            {
+                "attempt_id": attempt_id,
+                "url": "https://source.test/atomic",
+                "body": "ARTICLE-BODY atomic context",
+                "analysis": "Атомарный анализ",
+                "post": "Русский пост",
+                "now": NOW,
+            },
+        ).scalar_one()
+        for status in ("not_started", "processing"):
+            connection.execute(
+                text(
+                    "INSERT INTO content_package_status_history "
+                    "(package_id,status,reason,created_at) "
+                    "VALUES (:package_id,:status,'generated',:now)"
+                ),
+                {"package_id": package_id, "status": status, "now": NOW},
+            )
+    return attempt_id, package_id
+
+
+@pytest.mark.parametrize("operation", ["complete", "fail"])
+def test_package_terminal_history_failure_rolls_back_package_and_attempt(
+    migrated_database_url: str, operation: str
+) -> None:
+    # Поломка re-review 4: package/attempt commit происходит до terminal history INSERT.
+    _, Repository = _api()
+    from postify.domain.content.models import StoredMedia
+
+    engine = create_engine(migrated_database_url)
+    attempt_id, package_id = _seed_processing_package(engine)
+    repository = Repository(sessionmaker(engine))
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE FUNCTION fail_terminal_history_insert() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced terminal history failure'; "
+                "END $$"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TRIGGER fail_terminal_history BEFORE INSERT "
+                "ON content_package_status_history FOR EACH ROW "
+                "EXECUTE FUNCTION fail_terminal_history_insert()"
+            )
+        )
+
+    try:
+        with pytest.raises(DBAPIError):
+            if operation == "complete":
+                repository.complete_package(
+                    package_id,
+                    media=StoredMedia(
+                        "/media/atomic.jpg",
+                        "image/jpeg",
+                        "og",
+                        "https://cdn.test/atomic.jpg",
+                    ),
+                    status="awaiting_review",
+                    now=NOW + timedelta(minutes=1),
+                )
+            else:
+                repository.fail_package(
+                    package_id,
+                    code="media_failed",
+                    now=NOW + timedelta(minutes=1),
+                )
+
+        with engine.connect() as connection:
+            package = connection.execute(
+                text(
+                    "SELECT status,media_path,media_mime,media_source_type,media_source_url "
+                    "FROM content_packages WHERE id=:id"
+                ),
+                {"id": package_id},
+            ).one()
+            attempt = connection.execute(
+                text(
+                    "SELECT status,failure_code,finished_at FROM content_attempts WHERE id=:id"
+                ),
+                {"id": attempt_id},
+            ).one()
+            history_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM content_package_status_history "
+                    "WHERE package_id=:id"
+                ),
+                {"id": package_id},
+            ).scalar_one()
+        assert package == ("processing", None, None, None, None)
+        assert attempt == ("processing", None, None)
+        assert history_count == 2
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_package", "expected_attempt", "expected_code"),
+    [
+        ("complete", "awaiting_review", "packaged", None),
+        ("fail", "failed", "failed", "media_failed"),
+    ],
+)
+def test_package_terminal_operation_updates_attempt_and_history_together(
+    migrated_database_url: str,
+    operation: str,
+    expected_package: str,
+    expected_attempt: str,
+    expected_code: str | None,
+) -> None:
+    # Поломка re-review 4/8: terminal package оставляет attempt processing без outcome.
+    _, Repository = _api()
+    from postify.domain.content.models import StoredMedia
+
+    engine = create_engine(migrated_database_url)
+    attempt_id, package_id = _seed_processing_package(engine)
+    repository = Repository(sessionmaker(engine))
+    finished_at = NOW + timedelta(minutes=1)
+
+    try:
+        if operation == "complete":
+            repository.complete_package(
+                package_id,
+                media=StoredMedia(
+                    "/media/atomic.jpg",
+                    "image/jpeg",
+                    "og",
+                    "https://cdn.test/atomic.jpg",
+                ),
+                status=expected_package,
+                now=finished_at,
+            )
+        else:
+            repository.fail_package(
+                package_id,
+                code="media_failed",
+                now=finished_at,
+            )
+
+        with engine.connect() as connection:
+            package = connection.execute(
+                text(
+                    "SELECT status,media_path FROM content_packages WHERE id=:id"
+                ),
+                {"id": package_id},
+            ).one()
+            attempt = connection.execute(
+                text(
+                    "SELECT status,failure_code,finished_at FROM content_attempts WHERE id=:id"
+                ),
+                {"id": attempt_id},
+            ).one()
+            history = connection.execute(
+                text(
+                    "SELECT status FROM content_package_status_history "
+                    "WHERE package_id=:id ORDER BY id"
+                ),
+                {"id": package_id},
+            ).scalars().all()
+        assert package[0] == expected_package
+        assert package[1] == (
+            "/media/atomic.jpg" if operation == "complete" else None
+        )
+        assert attempt == (expected_attempt, expected_code, finished_at)
+        assert history == ["not_started", "processing", expected_package]
+    finally:
+        engine.dispose()
+
+
+def test_repository_finishes_every_analyzed_attempt_with_selected_outcome(
+    migrated_database_url: str,
+) -> None:
+    # Поломка re-review 8: nonselected/selected AI successes остаются processing.
+    ContentLimits, Repository = _api()
+    AnalyzedTopic, BatchAnalysis, _ = _analysis_api()
+    from postify.domain.content.models import StoredMedia
+
+    engine = create_engine(migrated_database_url)
+    _seed_selected(engine, [NOW - timedelta(days=1)] * 3)
+    repository = Repository(sessionmaker(engine))
+
+    try:
+        claimed = repository.claim(
+            now=NOW,
+            day=NOW.date(),
+            limits=_limits(ContentLimits),
+        )
+        articles: dict[int, object] = {}
+        topics = []
+        for index, attempt in enumerate(claimed):
+            article, _ = _article_and_topic(attempt.id)
+            articles[attempt.id] = article
+            repository.save_extracted(attempt.id, article)
+            selected = index < 2
+            topics.append(
+                AnalyzedTopic(
+                    attempt_id=attempt.id,
+                    analysis=f"Полный анализ {attempt.id}",
+                    usefulness=90 - index,
+                    selected=selected,
+                    post_text=f"Русский пост {attempt.id}" if selected else None,
+                    media_query=f"query {attempt.id}" if selected else None,
+                )
+            )
+        batch = BatchAnalysis(
+            topics=tuple(topics),
+            requested_attempt_ids=tuple(item.id for item in claimed),
+            package_limit=2,
+        )
+        drafts = repository.save_analysis_and_create_packages(
+            batch,
+            articles=articles,
+            review_required=True,
+            now=NOW,
+            day=NOW.date(),
+            package_limit=2,
+        )
+        repository.complete_package(
+            drafts[0].package_id,
+            media=StoredMedia(
+                "/media/selected.jpg",
+                "image/jpeg",
+                "og",
+                "https://cdn.test/selected.jpg",
+            ),
+            status="awaiting_review",
+            now=NOW + timedelta(minutes=1),
+        )
+        repository.fail_package(
+            drafts[1].package_id,
+            code="media_failed",
+            now=NOW + timedelta(minutes=1),
+        )
+
+        with engine.connect() as connection:
+            outcomes = connection.execute(
+                text(
+                    "SELECT id,status,analysis,failure_code,finished_at "
+                    "FROM content_attempts ORDER BY id"
+                )
+            ).all()
+            package_count = connection.execute(
+                text("SELECT count(*) FROM content_packages")
+            ).scalar_one()
+        assert [row.status for row in outcomes] == [
+            "packaged",
+            "failed",
+            "analyzed_not_selected",
+        ]
+        assert all(row.analysis for row in outcomes)
+        assert outcomes[0].failure_code is None
+        assert outcomes[1].failure_code == "media_failed"
+        assert outcomes[2].failure_code is None
+        assert all(row.finished_at == NOW + timedelta(minutes=1) for row in outcomes[:2])
+        assert outcomes[2].finished_at == NOW
+        assert package_count == 2
+        assert "processing" not in {row.status for row in outcomes}
+    finally:
+        engine.dispose()

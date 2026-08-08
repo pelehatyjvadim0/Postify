@@ -21,6 +21,29 @@ class FakeWikimedia:
         return self.result
 
 
+class AllowingPolicy:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    def validate(self, url: str) -> str:
+        self.urls.append(url)
+        return url
+
+
+class RecordingStream(httpx.SyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...], *, fail_after: int | None = None) -> None:
+        self.chunks = chunks
+        self.fail_after = fail_after
+        self.reads = 0
+
+    def __iter__(self):
+        for chunk in self.chunks:
+            self.reads += 1
+            if self.fail_after is not None and self.reads > self.fail_after:
+                raise AssertionError("body прочитан после доказанного превышения лимита")
+            yield chunk
+
+
 def _api():
     from postify.adapters.media.local_media_provider import LocalMediaProvider, MediaAcquireError
     from postify.domain.content.models import ExtractedArticle
@@ -185,3 +208,198 @@ def test_cleanup_removes_only_expired_unprotected_files(tmp_path: Path) -> None:
     assert not expired.exists()
     assert protected.exists()
     assert young.exists()
+
+
+def test_media_rejects_unsafe_url_before_opening_http_stream(tmp_path: Path) -> None:
+    # Поломка re-review 1: media adapter вызывает HTTP до общей URL policy.
+    ExtractedArticle, LocalMediaProvider, MediaAcquireError = _api()
+    from postify.adapters.http.public_url_policy import UnsafePublicUrlError
+
+    requests: list[httpx.Request] = []
+
+    class RejectingPolicy:
+        def validate(self, url: str) -> str:
+            raise UnsafePublicUrlError("unsafe_url")
+
+    def forbidden(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise AssertionError("небезопасный URL не должен достигать HTTP")
+
+    with httpx.Client(transport=httpx.MockTransport(forbidden)) as client:
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=RejectingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError) as caught:
+            provider.acquire(
+                _article(
+                    ExtractedArticle,
+                    (("og", "http://169.254.169.254/meta-data"),),
+                ),
+                "database",
+            )
+
+    assert requests == []
+    assert caught.value.code == "media_failed"
+    assert "169.254" not in str(caught.value)
+
+
+def test_media_does_not_follow_redirect_or_load_redirect_target(tmp_path: Path) -> None:
+    # Поломка re-review 1: redirect обходит проверку URL media candidate.
+    ExtractedArticle, LocalMediaProvider, MediaAcquireError = _api()
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if len(requests) == 1:
+            return httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1/private.png"},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            content=b"private-image",
+            headers={"content-type": "image/png"},
+            request=request,
+        )
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    ) as client:
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError):
+            provider.acquire(
+                _article(
+                    ExtractedArticle,
+                    (("og", "https://public.test/image.png"),),
+                ),
+                "database",
+            )
+
+    assert requests == ["https://public.test/image.png"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_media_content_length_over_limit_is_rejected_before_body_read(
+    tmp_path: Path,
+) -> None:
+    # Поломка re-review 2: oversized media Content-Length читается в память.
+    ExtractedArticle, LocalMediaProvider, MediaAcquireError = _api()
+    stream = RecordingStream((b"must-not-be-read",), fail_after=0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png", "content-length": "101"},
+            stream=stream,
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError) as caught:
+            provider.acquire(
+                _article(
+                    ExtractedArticle,
+                    (("og", "https://public.test/image.png"),),
+                ),
+                "database",
+            )
+
+    assert stream.reads == 0
+    assert caught.value.code == "media_failed"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_media_chunk_overflow_stops_without_reading_remaining_body(
+    tmp_path: Path,
+) -> None:
+    # Поломка re-review 2: media overflow дочитывает/materialize response.content.
+    ExtractedArticle, LocalMediaProvider, MediaAcquireError = _api()
+    stream = RecordingStream((b"a" * 60, b"b" * 60, b"secret-tail"), fail_after=2)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png"},
+            stream=stream,
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        provider = LocalMediaProvider(
+            client,
+            tmp_path,
+            100,
+            FakeWikimedia(None),
+            url_policy=AllowingPolicy(),
+        )
+        with pytest.raises(MediaAcquireError):
+            provider.acquire(
+                _article(
+                    ExtractedArticle,
+                    (("og", "https://public.test/image.png"),),
+                ),
+                "database",
+            )
+
+    assert stream.reads == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_delete_rejects_path_outside_media_root(tmp_path: Path) -> None:
+    # Поломка re-review 10: reject может удалить произвольный абсолютный путь.
+    _, LocalMediaProvider, MediaAcquireError = _api()
+    media_root = tmp_path / "media"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep", encoding="utf-8")
+    with httpx.Client() as client:
+        provider = LocalMediaProvider(
+            client,
+            media_root,
+            100,
+            FakeWikimedia(None),
+        )
+        with pytest.raises(MediaAcquireError):
+            provider.delete(str(outside))
+
+    assert outside.read_text(encoding="utf-8") == "keep"
+
+
+def test_delete_rejects_symlink_even_when_link_is_inside_media_root(tmp_path: Path) -> None:
+    # Поломка re-review 10: symlink внутри root удаляет/затрагивает внешний target.
+    _, LocalMediaProvider, MediaAcquireError = _api()
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep", encoding="utf-8")
+    link = media_root / "linked.jpg"
+    link.symlink_to(outside)
+    with httpx.Client() as client:
+        provider = LocalMediaProvider(
+            client,
+            media_root,
+            100,
+            FakeWikimedia(None),
+        )
+        with pytest.raises(MediaAcquireError):
+            provider.delete(str(link))
+
+    assert link.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "keep"

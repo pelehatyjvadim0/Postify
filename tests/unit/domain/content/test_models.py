@@ -176,3 +176,74 @@ def test_package_transition_matrix_is_closed(current: str, target: str, allowed:
     else:
         with pytest.raises(api["ContentValidationError"]):
             api["validate_transition"](current, target)
+
+
+def test_batch_requires_one_analysis_result_for_every_requested_attempt() -> None:
+    # Поломка re-review 8: успешно извлечённая статья исчезает из AI outcome.
+    api = _models_api()
+    only_one = api["AnalyzedTopic"](
+        attempt_id=1,
+        analysis="Полный анализ первой статьи",
+        usefulness=80,
+        post_text="Пост первой статьи",
+        media_query="database",
+        selected=True,
+    )
+
+    with pytest.raises(api["ContentValidationError"]):
+        api["BatchAnalysis"](
+            topics=(only_one,),
+            requested_attempt_ids=(1, 2),
+            package_limit=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("post_text", "media_query"),
+    [(None, "database"), ("Русский пост", None)],
+)
+def test_selected_analysis_requires_post_and_media_query(
+    post_text: str | None, media_query: str | None
+) -> None:
+    # Поломка re-review 8: selected outcome нельзя превратить в полный пакет.
+    api = _models_api()
+
+    with pytest.raises(api["ContentValidationError"]):
+        api["AnalyzedTopic"](
+            attempt_id=1,
+            analysis="Полный анализ",
+            usefulness=80,
+            selected=True,
+            post_text=post_text,
+            media_query=media_query,
+        )
+
+
+def test_nonselected_analysis_keeps_analysis_without_package_fields() -> None:
+    # Поломка re-review 8: nonselected article теряет анализ или требует фиктивный пост/media.
+    api = _models_api()
+    selected = api["AnalyzedTopic"](
+        attempt_id=1,
+        analysis="Выбранный анализ",
+        usefulness=90,
+        selected=True,
+        post_text="Русский пост",
+        media_query="database",
+    )
+    nonselected = api["AnalyzedTopic"](
+        attempt_id=2,
+        analysis="Сохранённый анализ невыбранной статьи",
+        usefulness=40,
+        selected=False,
+        post_text=None,
+        media_query=None,
+    )
+
+    batch = api["BatchAnalysis"](
+        topics=(selected, nonselected),
+        requested_attempt_ids=(1, 2),
+        package_limit=1,
+    )
+
+    assert batch.selected_topics == (selected,)
+    assert batch.topics[1].analysis == "Сохранённый анализ невыбранной статьи"

@@ -72,6 +72,7 @@ class FakeRepository:
             SimpleNamespace(attempt_id=topic.attempt_id, package_id=100 + topic.attempt_id,
                             article=articles[topic.attempt_id], media_query=topic.media_query)
             for topic in batch.topics
+            if getattr(topic, "selected", True)
         )
 
     def complete_package(self, package_id: int, *, media: object, status: str, now: datetime):
@@ -336,3 +337,57 @@ def test_media_failure_marks_package_failed_without_deleting_other_media() -> No
     assert not [event for event in media.events if event[0] == "delete"]
     assert "filesystem secret path" not in repr(repository.events)
     assert result.failed == 1
+
+
+def test_process_persists_full_analysis_batch_but_acquires_media_only_for_selected() -> None:
+    # Поломка re-review 8: action теряет nonselected outcome или создаёт для него пакет/media.
+    api = _api()
+    attempts = [_attempt(1), _attempt(2)]
+    articles = {attempt.id: _article(api, attempt.id) for attempt in attempts}
+    selected = api.AnalyzedTopic(
+        attempt_id=1,
+        analysis="Выбранный подробный анализ",
+        usefulness=90,
+        selected=True,
+        post_text="Русский пост",
+        media_query="database",
+    )
+    nonselected = api.AnalyzedTopic(
+        attempt_id=2,
+        analysis="Сохранённый анализ без пакета",
+        usefulness=40,
+        selected=False,
+        post_text=None,
+        media_query=None,
+    )
+    batch = api.BatchAnalysis(
+        topics=(selected, nonselected),
+        requested_attempt_ids=(1, 2),
+        package_limit=1,
+    )
+    repository = FakeRepository(attempts)
+    media = FakeMedia(
+        api.StoredMedia(
+            "/media/one.jpg", "image/jpeg", "og", "https://cdn.test/1.jpg"
+        )
+    )
+    processor = api.ProcessContent(
+        repository,
+        FakeExtractor({attempt.source_url: articles[attempt.id] for attempt in attempts}),
+        FakeAnalyzer(batch),
+        media,
+        limits=_limits(api),
+        review_required=True,
+        timezone="UTC",
+        clock=lambda: NOW,
+    )
+
+    result = processor.execute()
+
+    draft_event = next(event for event in repository.events if event[0] == "drafts")
+    assert draft_event[1].topics == (selected, nonselected)
+    assert [event[2] for event in media.events if event[0] == "acquire"] == [
+        "database"
+    ]
+    assert result.packages_created == 1
+    assert result.failed == 0
