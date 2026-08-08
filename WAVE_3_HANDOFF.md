@@ -6,6 +6,41 @@
 очистки диалога. Он не заменяет `docs/development-loop/README.md`: процесс из
 того файла обязателен.
 
+## Текущий checkpoint сессии
+
+Этот раздел новее исходного состояния ниже и имеет приоритет при продолжении.
+
+- Основной checkout `/home/user/Рабочий стол/Postify` чистый:
+  `main@b88ba02`, совпадает с `origin/main`.
+- Работа изолирована в worktree
+  `/home/user/Рабочий стол/Postify/.worktrees/wave-3-content-packages`, ветка
+  `wave-3-content-packages`, checkpoint `123a99d` («Усилил RED защиты HTTP и
+  медиа»). Git status на момент остановки чистый.
+- PostgreSQL для integration-тестов оставлен запущенным в контейнере
+  `postify-wave3-postgres`: `127.0.0.1:55432`, база `postify_test`, пользователь
+  `user`. Удалить контейнер только после полной приёмки Wave 3.
+- Реализация до `a51e845` проходила `275` non-integration tests; оставшиеся
+  `16` RED относились к ещё не сделанным Task 4B/4C. Независимый review вернул
+  Task 4A в fix-loop из-за optional URL policy, DNS rebinding, intermediate
+  symlink, raw cleanup errors, invalid ports и доверия порядку media candidates.
+- Sol зафиксировал усиленный RED в `123a99d`: `25` Task 4A/follow-up RED
+  (`24` adapter node и `1` bootstrap-wiring node Task 4B), `35` retained
+  HTTP/article/media GREEN. Полный non-integration: `41 failed, 263 passed,
+  41 deselected`; это `25` текущих и `16` прежних Task 4B/4C RED. Integration:
+  прежние `6 failed`, `35 passed`.
+- Следующее действие без дополнительного проектирования: передать Terra
+  реализацию по
+  `.superpowers/sdd/2026-08-08-wave-3-content-packages/task-4a-fix-round-1-brief.md`
+  на базе `123a99d`, затем выполнить свежую scoped re-review. Bootstrap wiring
+  не входит в 4A и остаётся для 4B.
+- После принятия 4A последовательно выполнить 4B (Codex isolation/schema,
+  application Protocols, bootstrap public transport/policy) и 4C (полные AI
+  outcomes, retry credits, атомарная terminalization), каждый с отдельным
+  исполнителем и независимым review.
+- Настоящий `codex exec` не запускался. Живой preflight разрешён только после
+  явного подтверждения оператора ближе к финальной приёмке. Push в GitHub не
+  выполнялся и без отдельного запроса запрещён.
+
 ## Репозиторий и подтверждённое исходное состояние S_n
 
 - Текущая ветка: `main`.
