@@ -63,3 +63,20 @@ non-integration: `2 failed, 325 passed, 42 deselected`.
 Оба RED воспроизведены по ожидаемой причине: adapter возвращает
 PDF как в mixed, так и в all-invalid fixture, а request просит
 только `iiprop=url`. Production не изменялся; сеть не вызывалась.
+
+## Round 2: GREEN report
+
+Единственный API request теперь просит `iiprop=url|mime`. Adapter обходит все
+pages и их `imageinfo`, возвращая первый непустой URL только при точном MIME
+`image/jpeg`, `image/png` или `image/webp`; missing, malformed и unsupported
+entries пропускаются. HTTP/JSON safe-`None` handling и число requests сохранены.
+
+- Focused Wikimedia: `4 passed`.
+- Retained media adapters: `24 passed`.
+- Full non-integration: `327 passed, 42 deselected`.
+- `compileall`, `ruff check src`, `uv lock --check`, `git diff --check`: GREEN.
+- Live query `PostgreSQL database` через `PublicHttpTransport`: returned URL
+  прошёл strict MIME whitelist; URL не выводился.
+- Integration с заданным `TEST_DATABASE_URL`: `7 passed, 327 deselected,
+  35 errors`; внешний PostgreSQL отклонил соединение, поскольку роль `postify`
+  отсутствует.
