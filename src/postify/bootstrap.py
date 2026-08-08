@@ -9,6 +9,7 @@ from time import monotonic, sleep
 
 import httpx
 import subprocess
+import tempfile
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -36,6 +37,7 @@ def open_content_review(settings: Settings):
     """Открывает review-зависимости; фабрика отделена для CLI и тестов."""
     from contextlib import contextmanager
     from postify.application.content.review_content import ReviewContent
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.infrastructure.repositories.sqlalchemy_content import (
         SqlAlchemyContentRepository,
@@ -53,6 +55,7 @@ def open_content_review(settings: Settings):
                     settings.content_media_dir,
                     settings.content_media_max_bytes,
                     None,
+                    url_policy=PublicHttpUrlPolicy(),
                 ),
                 clock=lambda: datetime.now(UTC),
             )
@@ -72,6 +75,7 @@ class _ImportResources:
     source: HnAlgoliaCandidateSource
     session_factory: sessionmaker[Session]
     client: httpx.Client
+    url_policy: object
 
 
 @contextmanager
@@ -81,7 +85,16 @@ def _open_import_resources(
     engine = create_engine_from_settings(settings)
     client: httpx.Client | None = None
     try:
-        client = httpx.Client(timeout=httpx.Timeout(10.0), transport=transport)
+        from postify.adapters.http.public_url_policy import (
+            PublicHttpTransport,
+            PublicHttpUrlPolicy,
+        )
+
+        policy = PublicHttpUrlPolicy()
+        client = httpx.Client(
+            timeout=httpx.Timeout(10.0),
+            transport=transport or PublicHttpTransport(policy=policy),
+        )
         yield _ImportResources(
             source=HnAlgoliaCandidateSource(
                 client=client,
@@ -92,6 +105,7 @@ def _open_import_resources(
             ),
             session_factory=sessionmaker(engine),
             client=client,
+            url_policy=policy,
         )
     finally:
         if client is not None:
@@ -154,28 +168,33 @@ def _content_processor(settings: Settings, resources: _ImportResources):
     from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.adapters.media.wikimedia import WikimediaImageSearch
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.application.content.process_content import ProcessContent
     from postify.domain.content.models import ContentLimits
     from postify.infrastructure.repositories.sqlalchemy_content import (
         SqlAlchemyContentRepository,
     )
 
+    policy = getattr(resources, "url_policy", None) or PublicHttpUrlPolicy()
     return ProcessContent(
         SqlAlchemyContentRepository(resources.session_factory),
         HttpArticleExtractor(
-            client=resources.client, max_bytes=settings.content_article_max_bytes
+            client=resources.client,
+            max_bytes=settings.content_article_max_bytes,
+            url_policy=policy,
         ),
         CodexContentAnalyzer(
             lambda argv, **kwargs: subprocess.run(argv, check=False, **kwargs),
             Path.cwd(),
             settings.content_codex_timeout_seconds,
-            settings.content_media_dir,
+            Path(tempfile.gettempdir()) / "postify-codex",
         ),
         LocalMediaProvider(
             resources.client,
             settings.content_media_dir,
             settings.content_media_max_bytes,
             WikimediaImageSearch(client=resources.client),
+            url_policy=policy,
         ),
         limits=ContentLimits(
             settings.content_daily_analysis_limit,

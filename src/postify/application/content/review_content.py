@@ -1,5 +1,18 @@
+from collections.abc import Callable
+from datetime import datetime
+
+from postify.application.ports.content_repository import ContentRepository
+from postify.application.ports.media_provider import MediaProvider
+
+
 class ReviewContent:
-    def __init__(self, repository, media, *, clock):
+    def __init__(
+        self,
+        repository: ContentRepository,
+        media: MediaProvider,
+        *,
+        clock: Callable[[], datetime],
+    ):
         self.r = repository
         self.m = media
         self.clock = clock

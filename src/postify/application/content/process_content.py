@@ -1,8 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+from collections.abc import Callable
 from zoneinfo import ZoneInfo
-from postify.domain.content.models import AnalysisInput
+from postify.domain.content.models import AnalysisInput, ContentLimits
+from postify.application.ports.article_extractor import ArticleExtractor
+from postify.application.ports.content_analyzer import ContentAnalyzer
+from postify.application.ports.content_repository import ContentRepository
+from postify.application.ports.media_provider import MediaProvider
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,15 +24,15 @@ ContentProcessResult = ProcessContentResult
 class ProcessContent:
     def __init__(
         self,
-        repository,
-        extractor,
-        analyzer,
-        media,
+        repository: ContentRepository,
+        extractor: ArticleExtractor,
+        analyzer: ContentAnalyzer,
+        media: MediaProvider,
         *,
-        limits,
-        review_required,
-        timezone,
-        clock,
+        limits: ContentLimits,
+        review_required: bool,
+        timezone: str,
+        clock: Callable[[], datetime],
     ):
         self.r = repository
         self.e = extractor

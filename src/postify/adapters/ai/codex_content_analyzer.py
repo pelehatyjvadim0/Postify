@@ -1,8 +1,15 @@
 from __future__ import annotations
+
 import json
+import shutil
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from subprocess import CompletedProcess
+from typing import Any
+
 from postify.domain.content.models import (
+    AnalysisInput,
     AnalyzedTopic,
     BatchAnalysis,
     ContentValidationError,
@@ -10,40 +17,69 @@ from postify.domain.content.models import (
 
 
 class CodexAnalysisError(RuntimeError):
-    def __init__(self, code="codex_failed", message=""):
+    def __init__(self, code: str = "codex_failed", message: str = "") -> None:
         super().__init__(code)
         self.code = code
 
 
 class CodexContentAnalyzer:
-    def __init__(self, runner, repository_cwd, timeout_seconds, work_dir):
+    def __init__(
+        self,
+        runner: Callable[..., CompletedProcess[str]],
+        repository_cwd: Path,
+        timeout_seconds: float,
+        work_dir: Path,
+    ) -> None:
         self.runner = runner
         self.cwd = Path(repository_cwd)
         self.timeout = timeout_seconds
         self.work = Path(work_dir)
 
-    def analyze(self, articles, package_limit):
-        articles = tuple(articles)
-        self.work.mkdir(parents=True, exist_ok=True)
-        output = self.work / f"codex-{next(tempfile._get_candidate_names())}.json"
-        schema = self.work / "codex-schema.json"
-        schema.write_text('{"type":"object"}')
-        prompt = json.dumps(
-            {
-                "articles": [
-                    a.__dict__
-                    if hasattr(a, "__dict__")
-                    else {
-                        "attempt_id": a.attempt_id,
-                        "source_url": a.source_url,
-                        "title": a.title,
-                        "text": a.text,
-                    }
-                    for a in articles
-                ]
-            },
-            ensure_ascii=False,
-        )
+    def analyze(
+        self, articles: Sequence[AnalysisInput], package_limit: int
+    ) -> BatchAnalysis:
+        materialized = tuple(articles)
+        invocation = self._create_invocation_dir()
+        isolated = invocation != self.work
+        try:
+            schema = invocation / "schema.json"
+            output = invocation / "output.json"
+            schema.write_text(
+                json.dumps(self._schema(len(materialized)), ensure_ascii=False),
+                encoding="utf-8",
+            )
+            done = self._run(invocation, schema, output, materialized, package_limit)
+            if done.returncode:
+                raise CodexAnalysisError()
+            return self._parse_output(output, materialized, package_limit)
+        except CodexAnalysisError:
+            raise
+        except Exception:
+            raise CodexAnalysisError() from None
+        finally:
+            if isolated:
+                shutil.rmtree(invocation, ignore_errors=True)
+
+    def _create_invocation_dir(self) -> Path:
+        try:
+            self.work.mkdir(parents=True, exist_ok=True)
+            # Старый прямой API разрешал один временный каталог для обоих
+            # аргументов; production bootstrap всегда передаёт разные пути.
+            if self.work.resolve() == self.cwd.resolve():
+                return self.work
+            return Path(tempfile.mkdtemp(prefix="codex-", dir=self.work))
+        except OSError:
+            raise CodexAnalysisError() from None
+
+    def _run(
+        self,
+        invocation: Path,
+        schema: Path,
+        output: Path,
+        articles: tuple[AnalysisInput, ...],
+        package_limit: int,
+    ) -> CompletedProcess[str]:
+        prompt = self._prompt(articles, package_limit)
         argv = [
             "codex",
             "exec",
@@ -52,15 +88,17 @@ class CodexContentAnalyzer:
             "read-only",
             "--ignore-user-config",
             "--ignore-rules",
+            "--skip-git-repo-check",
             "--cd",
-            str(self.cwd),
+            str(invocation),
             "--output-schema",
             str(schema),
             "--output-last-message",
             str(output),
+            "-",
         ]
         try:
-            done = self.runner(
+            return self.runner(
                 argv,
                 input=prompt,
                 text=True,
@@ -68,18 +106,85 @@ class CodexContentAnalyzer:
                 shell=False,
                 timeout=self.timeout,
             )
-        except Exception as e:
-            raise CodexAnalysisError() from e
-        if done.returncode:
-            raise CodexAnalysisError()
+        except Exception:
+            raise CodexAnalysisError() from None
+
+    @staticmethod
+    def _schema(article_count: int) -> dict[str, object]:
+        topic = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "attempt_id",
+                "analysis",
+                "usefulness",
+                "selected",
+                "post_text",
+                "media_query",
+            ],
+            "properties": {
+                "attempt_id": {"type": "integer", "minimum": 1},
+                "analysis": {"type": "string", "minLength": 1},
+                "usefulness": {"type": "integer", "minimum": 0, "maximum": 100},
+                "selected": {"type": "boolean"},
+                "post_text": {"type": "string", "minLength": 1},
+                "media_query": {"type": "string", "minLength": 1},
+            },
+        }
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["topics"],
+            "properties": {
+                "topics": {
+                    "type": "array",
+                    "minItems": article_count,
+                    "maxItems": article_count,
+                    "items": topic,
+                }
+            },
+        }
+
+    @staticmethod
+    def _prompt(articles: tuple[AnalysisInput, ...], package_limit: int) -> str:
+        material = "\n\n".join(
+            f"Попытка {article.attempt_id}. Заголовок: {article.title}\nПолный текст статьи:\n{article.text}"
+            for article in articles
+        )
+        return (
+            "Проанализируй каждую статью и верни ровно один outcome на каждую попытку. "
+            f"Выбери не более {package_limit}. Пиши анализ и выбранные посты на русском. "
+            "Не добавляй source URL или URL источника в посты.\n\n" + material
+        )
+
+    @staticmethod
+    def _parse_output(
+        output: Path, articles: tuple[AnalysisInput, ...], package_limit: int
+    ) -> BatchAnalysis:
         try:
-            payload = json.loads(output.read_text())
-            topics = tuple(AnalyzedTopic(**x) for x in payload["topics"])
-            batch = BatchAnalysis(
-                topics, tuple(a.attempt_id for a in articles), package_limit
+            payload: Any = json.loads(output.read_text(encoding="utf-8"))
+            raw_topics = payload["topics"]
+            if not isinstance(raw_topics, list):
+                raise ValueError
+            topics = tuple(
+                AnalyzedTopic(
+                    attempt_id=item["attempt_id"],
+                    analysis=item["analysis"],
+                    usefulness=item["usefulness"],
+                    post_text=item["post_text"],
+                    media_query=item["media_query"],
+                )
+                for item in raw_topics
             )
-            if any(a.source_url in t.post_text for a in articles for t in topics):
-                raise ContentValidationError()
+            batch = BatchAnalysis(
+                topics, tuple(item.attempt_id for item in articles), package_limit
+            )
+            if any(
+                article.source_url in topic.post_text
+                for article in articles
+                for topic in topics
+            ):
+                raise ContentValidationError
             return batch
-        except (OSError, ValueError, KeyError, TypeError, ContentValidationError) as e:
-            raise CodexAnalysisError("codex_invalid_output") from e
+        except (OSError, ValueError, KeyError, TypeError, ContentValidationError):
+            raise CodexAnalysisError("codex_invalid_output") from None
