@@ -131,3 +131,54 @@ def test_candidate_decisions_migration_downgrades_to_wave_one_and_upgrades_again
         assert "candidate_decisions" in inspect(engine).get_table_names()
     finally:
         engine.dispose()
+
+
+def test_content_migration_creates_complete_schema_and_downgrades_to_wave_two(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка (gate 11/12): нет таблицы/поля или downgrade трогает Wave 2.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    expected_columns = {
+        "content_quota_state": {"id", "fresh_credit", "reserve_credit", "updated_at"},
+        "content_daily_usage": {"day", "analyses_started", "packages_created"},
+        "content_attempts": {
+            "id", "candidate_id", "attempt_no", "tier", "status", "source_url",
+            "article_title", "article_text", "analysis", "failure_code", "retry_at",
+            "started_at", "finished_at",
+        },
+        "content_packages": {
+            "id", "attempt_id", "source_url", "context", "analysis", "post_text",
+            "media_path", "media_mime", "media_source_type", "media_source_url",
+            "review_required", "status", "media_deleted_at", "created_at", "updated_at",
+        },
+        "content_package_status_history": {
+            "id", "package_id", "status", "reason", "created_at",
+        },
+    }
+    try:
+        inspector = inspect(engine)
+        for table, columns in expected_columns.items():
+            assert {item["name"] for item in inspector.get_columns(table)} == columns
+
+        unique_names = {
+            constraint["name"]
+            for table in expected_columns
+            for constraint in inspector.get_unique_constraints(table)
+        }
+        assert "uq_content_attempts_candidate_id_attempt_no" in unique_names
+        assert "uq_content_packages_attempt_id" in unique_names
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "20260802_02")
+    engine = create_engine(isolated_database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "candidates" in tables
+        assert "candidate_decisions" in tables
+        assert not set(expected_columns) & tables
+    finally:
+        engine.dispose()
+
+    command.upgrade(alembic_config, "head")

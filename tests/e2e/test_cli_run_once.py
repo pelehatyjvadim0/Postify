@@ -365,3 +365,178 @@ def test_stop_stops_postgresql_after_run_once_finishes(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "PostgreSQL и таймер Postify остановлены" in result.output
     assert events == ["timer:disable-stop", "run-once:wait:7.0:0.1", "postgresql:stop"]
+
+
+@dataclass
+class FakeContentReview:
+    package: SimpleNamespace
+
+    def list_packages(self):
+        return (self.package,)
+
+    def show(self, package_id: int):
+        assert package_id == self.package.id
+        return self.package
+
+    def approve(self, package_id: int):
+        assert package_id == self.package.id
+        self.package.status = "approved"
+        return self.package
+
+    def reject(self, package_id: int):
+        assert package_id == self.package.id
+        self.package.status = "rejected"
+        return self.package
+
+
+def _content_package() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=7,
+        source_url="https://source.test/article-7",
+        context="ARTICLE-BODY-MARKER полный извлечённый контекст",
+        analysis="Практический анализ темы",
+        post_text="Готовый русский текст поста",
+        media_path="/var/lib/postify/media/7.jpg",
+        media_source_type="og",
+        media_source_url="https://cdn.test/7.jpg",
+        status="awaiting_review",
+        history=(
+            SimpleNamespace(status="not_started", reason="claimed"),
+            SimpleNamespace(status="processing", reason="analysis_started"),
+            SimpleNamespace(status="awaiting_review", reason="media_stored"),
+        ),
+    )
+
+
+def test_run_once_prints_content_counters_from_real_typer_command(monkeypatch) -> None:
+    # Поломка: run-once создаёт пакеты, но CLI показывает только Wave 2.
+    from postify import cli
+
+    result_value = SimpleNamespace(
+        import_result=ImportResult(3, 2, 1),
+        selection_result=FakeSelectionResult(4, 3, 1, 0),
+        content_result=SimpleNamespace(
+            claimed=12,
+            retry_scheduled=1,
+            failed=2,
+            packages_created=3,
+        ),
+    )
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_run_once",
+        lambda configured_settings: run_once_context(FakeRunOnce(result=result_value)),
+    )
+
+    result = runner.invoke(cli.app, ["run-once"])
+
+    assert result.exit_code == 0
+    assert "обработано: 12" in result.output
+    assert "retry: 1" in result.output
+    assert "ошибок: 2" in result.output
+    assert "пакетов: 3" in result.output
+
+
+def test_content_list_prints_id_status_and_source_without_full_body(monkeypatch) -> None:
+    # Поломка: content list не даёт оператору ID/status/source или печатае весь body.
+    from postify import cli
+
+    package = _content_package()
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_content_review",
+        lambda configured_settings: run_once_context(FakeContentReview(package)),
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["content", "list"])
+
+    assert result.exit_code == 0
+    assert "7" in result.output
+    assert "awaiting_review" in result.output
+    assert "https://source.test/article-7" in result.output
+    assert "ARTICLE-BODY-MARKER" not in result.output
+
+
+def test_content_show_prints_complete_auditable_package(monkeypatch) -> None:
+    # Поломка (gate 7): show скрывает URL/context/analysis/media source/history.
+    from postify import cli
+
+    package = _content_package()
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_content_review",
+        lambda configured_settings: run_once_context(FakeContentReview(package)),
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["content", "show", "7"])
+
+    assert result.exit_code == 0
+    for visible in (
+        "https://source.test/article-7",
+        "ARTICLE-BODY-MARKER полный извлечённый контекст",
+        "Практический анализ темы",
+        "Готовый русский текст поста",
+        "/var/lib/postify/media/7.jpg",
+        "og",
+        "https://cdn.test/7.jpg",
+        "not_started",
+        "processing",
+        "awaiting_review",
+    ):
+        assert visible in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_status"),
+    [("approve", "approved"), ("reject", "rejected")],
+)
+def test_content_review_commands_report_final_status(
+    monkeypatch, command: str, expected_status: str
+) -> None:
+    # Поломка (gate 6): CLI вызывает неверный review-action или сообщает успех без итогового статуса.
+    from postify import cli
+
+    package = _content_package()
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_content_review",
+        lambda configured_settings: run_once_context(FakeContentReview(package)),
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["content", command, "7"])
+
+    assert result.exit_code == 0
+    assert expected_status in result.output
+    assert package.status == expected_status
+
+
+def test_content_cli_normalizes_error_without_secret_or_traceback(monkeypatch) -> None:
+    # Поломка (gate 10): CLI раскрывает SQL/URL/token через review-ошибку.
+    from postify import cli
+
+    class FailingReview(FakeContentReview):
+        def show(self, package_id: int):
+            raise OSError("TOKEN-SECRET at https://private.test/article")
+
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "open_content_review",
+        lambda configured_settings: run_once_context(FailingReview(_content_package())),
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["content", "show", "7"])
+
+    assert result.exit_code != 0
+    assert "Не удалось показать контентный пакет" in result.output
+    assert "Traceback" not in result.output
+    assert "TOKEN-SECRET" not in result.output
+    assert "private.test" not in result.output

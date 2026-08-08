@@ -43,6 +43,16 @@ def configured_settings(database_url: str) -> Settings:
         selection_technical_release_terms="релиз",
         selection_practical_terms="пример",
         selection_freshness_days=30,
+        content_daily_analysis_limit=12,
+        content_daily_package_limit=3,
+        content_priority_freshness_days=14,
+        content_fresh_share_percent=90,
+        content_reserve_share_percent=10,
+        content_review_required=True,
+        content_media_dir="/var/lib/postify/media",
+        content_article_max_bytes=2_000_000,
+        content_media_max_bytes=10_000_000,
+        content_codex_timeout_seconds=600,
     )
 
 
@@ -456,7 +466,12 @@ def test_installed_wheel_checks_migrations_at_head_outside_checkout(
             "selection_topic_terms='tools', selection_topic_exclusion_terms='recipes', "
             "selection_advertising_terms='ads', selection_hiring_terms='jobs', "
             "selection_technical_release_terms='release', selection_practical_terms='guide', "
-            "selection_freshness_days=30); "
+            "selection_freshness_days=30, content_daily_analysis_limit=12, "
+            "content_daily_package_limit=3, content_priority_freshness_days=14, "
+            "content_fresh_share_percent=90, content_reserve_share_percent=10, "
+            "content_review_required=True, content_media_dir='/var/lib/postify/media', "
+            "content_article_max_bytes=2000000, content_media_max_bytes=10000000, "
+            "content_codex_timeout_seconds=600); "
             "raise SystemExit(0 if migrations_at_head(settings) else 1)",
         ],
         cwd="/tmp",

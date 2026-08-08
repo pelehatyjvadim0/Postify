@@ -29,6 +29,16 @@ REQUIRED_ENVIRONMENT = {
     "SELECTION_TECHNICAL_RELEASE_TERMS": "релиз,версия",
     "SELECTION_PRACTICAL_TERMS": "руководство,пример",
     "SELECTION_FRESHNESS_DAYS": "30",
+    "CONTENT_DAILY_ANALYSIS_LIMIT": "12",
+    "CONTENT_DAILY_PACKAGE_LIMIT": "3",
+    "CONTENT_PRIORITY_FRESHNESS_DAYS": "14",
+    "CONTENT_FRESH_SHARE_PERCENT": "90",
+    "CONTENT_RESERVE_SHARE_PERCENT": "10",
+    "CONTENT_REVIEW_REQUIRED": "true",
+    "CONTENT_MEDIA_DIR": "/var/lib/postify/media",
+    "CONTENT_ARTICLE_MAX_BYTES": "2000000",
+    "CONTENT_MEDIA_MAX_BYTES": "10000000",
+    "CONTENT_CODEX_TIMEOUT_SECONDS": "600",
 }
 
 
@@ -44,6 +54,19 @@ SELECTION_REQUIRED_NAMES = [
     "SELECTION_TECHNICAL_RELEASE_TERMS",
     "SELECTION_PRACTICAL_TERMS",
     "SELECTION_FRESHNESS_DAYS",
+]
+
+CONTENT_REQUIRED_NAMES = [
+    "CONTENT_DAILY_ANALYSIS_LIMIT",
+    "CONTENT_DAILY_PACKAGE_LIMIT",
+    "CONTENT_PRIORITY_FRESHNESS_DAYS",
+    "CONTENT_FRESH_SHARE_PERCENT",
+    "CONTENT_RESERVE_SHARE_PERCENT",
+    "CONTENT_REVIEW_REQUIRED",
+    "CONTENT_MEDIA_DIR",
+    "CONTENT_ARTICLE_MAX_BYTES",
+    "CONTENT_MEDIA_MAX_BYTES",
+    "CONTENT_CODEX_TIMEOUT_SECONDS",
 ]
 
 
@@ -93,6 +116,16 @@ def test_environment_has_priority_over_passed_env_file(
                 "SELECTION_TECHNICAL_RELEASE_TERMS=релиз",
                 "SELECTION_PRACTICAL_TERMS=пример",
                 "SELECTION_FRESHNESS_DAYS=14",
+                "CONTENT_DAILY_ANALYSIS_LIMIT=12",
+                "CONTENT_DAILY_PACKAGE_LIMIT=3",
+                "CONTENT_PRIORITY_FRESHNESS_DAYS=14",
+                "CONTENT_FRESH_SHARE_PERCENT=90",
+                "CONTENT_RESERVE_SHARE_PERCENT=10",
+                "CONTENT_REVIEW_REQUIRED=true",
+                "CONTENT_MEDIA_DIR=/var/lib/postify/media",
+                "CONTENT_ARTICLE_MAX_BYTES=2000000",
+                "CONTENT_MEDIA_MAX_BYTES=10000000",
+                "CONTENT_CODEX_TIMEOUT_SECONDS=600",
             ]
         )
     )
@@ -227,3 +260,92 @@ def test_selection_profile_requires_positive_freshness_days(freshness_days: str)
 
     with pytest.raises(ValidationError):
         Settings(**values)
+
+
+def test_settings_exposes_complete_content_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Поломка: content-action получает default/хардкод вместо профиля фермы.
+    set_required_environment(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.content_daily_analysis_limit == 12
+    assert settings.content_daily_package_limit == 3
+    assert settings.content_priority_freshness_days == 14
+    assert settings.content_fresh_share_percent == 90
+    assert settings.content_reserve_share_percent == 10
+    assert settings.content_review_required is True
+    assert settings.content_media_dir == Path("/var/lib/postify/media")
+    assert settings.content_article_max_bytes == 2_000_000
+    assert settings.content_media_max_bytes == 10_000_000
+    assert settings.content_codex_timeout_seconds == 600
+
+
+@pytest.mark.parametrize("missing_name", CONTENT_REQUIRED_NAMES)
+def test_settings_requires_each_content_value(
+    monkeypatch: pytest.MonkeyPatch, missing_name: str
+) -> None:
+    # Поломка: пропуск настройки незаметно включает чужой профиль.
+    set_required_environment(monkeypatch)
+    monkeypatch.delenv(missing_name)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CONTENT_DAILY_ANALYSIS_LIMIT", "0"),
+        ("CONTENT_DAILY_PACKAGE_LIMIT", "0"),
+        ("CONTENT_PRIORITY_FRESHNESS_DAYS", "0"),
+        ("CONTENT_ARTICLE_MAX_BYTES", "0"),
+        ("CONTENT_MEDIA_MAX_BYTES", "0"),
+        ("CONTENT_CODEX_TIMEOUT_SECONDS", "0"),
+        ("CONTENT_FRESH_SHARE_PERCENT", "-1"),
+        ("CONTENT_RESERVE_SHARE_PERCENT", "101"),
+    ],
+)
+def test_settings_rejects_invalid_content_scalar(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    # Поломка: нулевой/внедиапазонный лимит проходит к application-слою.
+    set_required_environment(monkeypatch, **{name: value})
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_settings_rejects_package_limit_above_analysis_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка: пакетов можно зарезервировать больше, чем начато анализов.
+    set_required_environment(
+        monkeypatch,
+        CONTENT_DAILY_ANALYSIS_LIMIT="2",
+        CONTENT_DAILY_PACKAGE_LIMIT="3",
+    )
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_settings_requires_content_shares_to_sum_to_one_hundred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка: credits дрейфуют, если доли не образуют 100%.
+    set_required_environment(
+        monkeypatch,
+        CONTENT_FRESH_SHARE_PERCENT="80",
+        CONTENT_RESERVE_SHARE_PERCENT="10",
+    )
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_settings_requires_absolute_content_media_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Поломка: относительный media root пишет файлы в зависящее от cwd место.
+    set_required_environment(monkeypatch, CONTENT_MEDIA_DIR="var/lib/postify/media")
+
+    with pytest.raises(ValidationError):
+        Settings()
