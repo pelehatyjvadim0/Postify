@@ -578,6 +578,70 @@ def _seed_processing_package(engine) -> tuple[int, int]:
     return attempt_id, package_id
 
 
+def test_complete_package_rejects_nonterminal_target_without_mutating_state(
+    migrated_database_url: str,
+) -> None:
+    # Поломка fix round 1: processing -> processing завершает attempt и пишет history.
+    _, Repository = _api()
+    from postify.domain.content.models import (
+        ContentValidationError,
+        InvalidContentTransition,
+        StoredMedia,
+    )
+
+    engine = create_engine(migrated_database_url)
+    attempt_id, package_id = _seed_processing_package(engine)
+    repository = Repository(sessionmaker(engine))
+
+    def snapshot():
+        with engine.connect() as connection:
+            package = connection.execute(
+                text(
+                    "SELECT status,media_path,media_mime,media_source_type,media_source_url "
+                    "FROM content_packages WHERE id=:id"
+                ),
+                {"id": package_id},
+            ).one()
+            attempt = connection.execute(
+                text(
+                    "SELECT status,failure_code,finished_at FROM content_attempts "
+                    "WHERE id=:id"
+                ),
+                {"id": attempt_id},
+            ).one()
+            history_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM content_package_status_history "
+                    "WHERE package_id=:id"
+                ),
+                {"id": package_id},
+            ).scalar_one()
+        return package, attempt, history_count
+
+    try:
+        before = snapshot()
+        error: ContentValidationError | None = None
+        try:
+            repository.complete_package(
+                package_id,
+                media=StoredMedia(
+                    "/media/must-not-stick.jpg",
+                    "image/jpeg",
+                    "og",
+                    "https://cdn.test/must-not-stick.jpg",
+                ),
+                status="processing",
+                now=NOW + timedelta(minutes=1),
+            )
+        except ContentValidationError as caught:
+            error = caught
+
+        assert snapshot() == before
+        assert isinstance(error, InvalidContentTransition)
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize("operation", ["complete", "fail"])
 def test_package_terminal_history_failure_rolls_back_package_and_attempt(
     migrated_database_url: str, operation: str

@@ -33,3 +33,28 @@
 ## Замечания
 
 Свежий независимый review выявил guard конкурентного terminal transition; guard добавлен, а полный gate повторно пройден.
+
+## Fix round 1: RED недопустимого target status
+
+База: `fe541ec`. Production-код не изменялся. Добавлен один PostgreSQL
+regression-node:
+`tests/integration/infrastructure/test_sqlalchemy_content.py::test_complete_package_rejects_nonterminal_target_without_mutating_state`.
+
+Тест фиксирует контракт: `complete_package(status="processing")` из
+текущего `processing` обязан выбросить `InvalidContentTransition`
+(существующий subtype `ContentValidationError`) до любых записей. Снимок до/после
+охватывает status и все media-поля package, status/failure_code/finished_at
+attempt и число history rows.
+
+| Проверка | Результат |
+| --- | --- |
+| Baseline integration | `41 passed, 323 deselected` |
+| Новый node | `1 failed` |
+| Retained integration | `41 passed, 324 deselected` |
+| Полный integration | `1 failed, 41 passed, 323 deselected` |
+| Полный non-integration | `323 passed, 42 deselected` |
+
+RED воспроизведён по ожидаемой причине: метод не выбрасывает domain error,
+сохраняет media, переводит attempt в `packaged`, выставляет `finished_at`
+и добавляет history row. Concurrency stress остаётся deferred minor и в этот
+round не включён.
