@@ -59,6 +59,10 @@ class RecordingNetworkBackend:
 
 
 class FailFirstNetworkBackend(RecordingNetworkBackend):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
     def connect_tcp(
         self,
         host: str,
@@ -75,8 +79,28 @@ class FailFirstNetworkBackend(RecordingNetworkBackend):
             socket_options=socket_options,
         )
         if len(self.calls) == 1:
-            raise httpcore.ConnectError("first public address unavailable")
+            raise self.error
         return stream
+
+
+def _assert_tries_next_validated_ip_after(error: Exception) -> None:
+    from postify.adapters.http.public_url_policy import PublicNetworkBackend
+
+    PublicHttpUrlPolicy, _ = _api()
+    resolver = RecordingResolver(("93.184.216.34", "1.1.1.1"))
+    underlying = FailFirstNetworkBackend(error)
+    backend = PublicNetworkBackend(
+        policy=PublicHttpUrlPolicy(resolver=resolver), backend=underlying
+    )
+
+    stream = backend.connect_tcp("public.test", 443)
+
+    assert stream is underlying.stream
+    assert resolver.hosts == ["public.test"]
+    assert [call["host"] for call in underlying.calls] == [
+        "93.184.216.34",
+        "1.1.1.1",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -244,23 +268,17 @@ def test_public_network_backend_never_connects_after_dns_changes_to_private_ip(
 def test_public_network_backend_tries_next_validated_ip_without_resolving_again(
 ) -> None:
     # Поломка fix-round 2: ошибка первого IP не даёт попробовать второй.
-    from postify.adapters.http.public_url_policy import PublicNetworkBackend
-
-    PublicHttpUrlPolicy, _ = _api()
-    resolver = RecordingResolver(("93.184.216.34", "1.1.1.1"))
-    underlying = FailFirstNetworkBackend()
-    backend = PublicNetworkBackend(
-        policy=PublicHttpUrlPolicy(resolver=resolver), backend=underlying
+    _assert_tries_next_validated_ip_after(
+        httpcore.ConnectError("first public address unavailable")
     )
 
-    stream = backend.connect_tcp("public.test", 443)
 
-    assert stream is underlying.stream
-    assert resolver.hosts == ["public.test"]
-    assert [call["host"] for call in underlying.calls] == [
-        "93.184.216.34",
-        "1.1.1.1",
-    ]
+def test_public_network_backend_tries_next_validated_ip_after_connect_timeout(
+) -> None:
+    # Поломка fix-round 3: timeout первого IP обрывает public fallback.
+    _assert_tries_next_validated_ip_after(
+        httpcore.ConnectTimeout("first public address timed out")
+    )
 
 
 @pytest.mark.parametrize(

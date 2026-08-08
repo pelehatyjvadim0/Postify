@@ -3,6 +3,8 @@
 ## Статус
 
 Fix round 2 реализован в разрешённой production-границе. Scoped GREEN пройден.
+Fix round 3 зафиксирован одним RED-test: fallback после
+`ConnectTimeout` ещё требует production GREEN.
 
 ## Коммиты
 
@@ -10,6 +12,7 @@ Fix round 2 реализован в разрешённой production-грани
 - Текущий fix round: `Устранил повторное DNS-разрешение HTTP и усилил media safety`.
 - Fix round 2 RED: `9b99285 Зафиксировал RED гонки удаления и сетевых маршрутов`.
 - Fix round 2 GREEN: `Закрыл сетевые обходы и гонку удаления медиа`.
+- Fix round 3 RED: текущий tests/evidence commit.
 
 ## Файлы fix round 1
 
@@ -77,3 +80,15 @@ Fix round 2 реализован в разрешённой production-грани
 - `git diff --check` — успешно.
 
 Self-review round 2: resolver вызывается один раз, весь ответ валидируется до первого socket, `ConnectError` переключает только на следующий уже проверенный IP. Transport отвергает non-`None` proxy/UDS стабильной ошибкой без значения. Delete удерживает fd parent во время `os.unlink`, не следует подменённому symlink и закрывает все открытые descriptors.
+
+## RED fix round 3
+
+- База: `84a5420`; production не изменялся.
+- Baseline: `63 passed`.
+- Новый node: `test_public_network_backend_tries_next_validated_ip_after_connect_timeout`.
+- Scoped: `1 failed, 63 passed`; retained: `63 passed, 1 deselected`.
+- Причина RED: `httpcore.ConnectTimeout` первого public IP выходит
+  наружу до попытки второго уже validated IP.
+- Общий helper сохранил прежний `ConnectError` node ID и одинаково
+  проверяет result, один resolver call, порядок двух IP и отсутствие
+  hostname на underlying boundary.
