@@ -42,7 +42,7 @@ class PublicHttpUrlPolicy:
             raise UnsafePublicUrlError() from None
         return url
 
-    def resolve_public(self, host: str) -> str:
+    def resolve_public(self, host: str) -> tuple[str, ...]:
         try:
             literal = _literal_address(host)
             addresses = (host,) if literal is not None else self.resolver(host)
@@ -58,11 +58,11 @@ def _literal_address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
         return None
 
 
-def _require_public(addresses: tuple[str, ...]) -> str:
+def _require_public(addresses: tuple[str, ...]) -> tuple[str, ...]:
     parsed = tuple(ipaddress.ip_address(address) for address in addresses)
     if not parsed or any(not address.is_global or address.is_multicast for address in parsed):
         raise ValueError
-    return str(parsed[0])
+    return tuple(str(address) for address in parsed)
 
 
 class PublicNetworkBackend:
@@ -78,14 +78,20 @@ class PublicNetworkBackend:
         local_address: str | None = None,
         socket_options: object = None,
     ) -> object:
-        public_ip = self.policy.resolve_public(host)
-        return self.backend.connect_tcp(
-            public_ip,
-            port,
-            timeout=timeout,
-            local_address=local_address,
-            socket_options=socket_options,
-        )
+        public_ips = self.policy.resolve_public(host)
+        for index, public_ip in enumerate(public_ips):
+            try:
+                return self.backend.connect_tcp(
+                    public_ip,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except httpcore.ConnectError:
+                if index == len(public_ips) - 1:
+                    raise
+        raise RuntimeError("unreachable")
 
     def connect_unix_socket(
         self,
@@ -109,6 +115,8 @@ class PublicHttpTransport(httpx.HTTPTransport):
         backend: Any | None = None,
         **options: Any,
     ) -> None:
+        if options.get("proxy") is not None or options.get("uds") is not None:
+            raise ValueError("unsupported_network_route")
         super().__init__(**options)
         self.network_backend = PublicNetworkBackend(
             policy=policy,

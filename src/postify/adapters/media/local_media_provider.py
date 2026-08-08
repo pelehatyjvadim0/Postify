@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import os
 from pathlib import Path
+import stat
 from uuid import uuid4
 
 import httpx
@@ -90,17 +91,35 @@ class LocalMediaProvider:
 
     def delete(self, local_path: str) -> None:
         path = Path(os.path.abspath(local_path))
+        descriptors: list[int] = []
         try:
             if not path.is_relative_to(self.root):
                 raise ValueError
-            current = self.root
-            for component in path.relative_to(self.root).parts:
-                current /= component
-                if current.is_symlink():
-                    raise ValueError
-            path.unlink(missing_ok=True)
+            components = path.relative_to(self.root).parts
+            if not components:
+                raise ValueError
+            descriptor = os.open(
+                self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+            descriptors.append(descriptor)
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            for component in components[:-1]:
+                descriptor = os.open(component, directory_flags, dir_fd=descriptor)
+                descriptors.append(descriptor)
+            target = os.stat(components[-1], dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISLNK(target.st_mode):
+                raise ValueError
+            os.unlink(components[-1], dir_fd=descriptor)
+        except FileNotFoundError:
+            return
         except (OSError, ValueError):
             raise MediaAcquireError() from None
+        finally:
+            for descriptor in reversed(descriptors):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
 
     def cleanup(self, *, older_than: datetime, protected_paths: set[str]) -> int:
         try:

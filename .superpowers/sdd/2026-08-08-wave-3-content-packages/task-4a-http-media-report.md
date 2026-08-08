@@ -2,15 +2,14 @@
 
 ## Статус
 
-Fix round 1 реализован в разрешённой production-границе. Scoped GREEN пройден.
-Fix round 2 зафиксирован только RED-tests/evidence: три findings ещё
-требуют production GREEN.
+Fix round 2 реализован в разрешённой production-границе. Scoped GREEN пройден.
 
 ## Коммиты
 
 - `a51e845 Защитил HTTP загрузку статей и медиа`
 - Текущий fix round: `Устранил повторное DNS-разрешение HTTP и усилил media safety`.
-- Fix round 2 RED: текущий tests/evidence commit.
+- Fix round 2 RED: `9b99285 Зафиксировал RED гонки удаления и сетевых маршрутов`.
+- Fix round 2 GREEN: `Закрыл сетевые обходы и гонку удаления медиа`.
 
 ## Файлы fix round 1
 
@@ -55,7 +54,7 @@ Fix round 2 зафиксирован только RED-tests/evidence: три fin
 - DNS перенесён на фактический `connect_tcp`: один resolver call на соединение, mixed/private/invalid ответы не доходят до socket, underlying backend получает проверенный IP.
 - `PublicHttpTransport` действительно устанавливает `PublicNetworkBackend` в httpcore pool. URL и origin hostname не переписываются, поэтому Host и TLS SNI остаются исходными.
 - Прямой production import `httpcore` отражён в `pyproject.toml` и `uv.lock`; локальная версия — `1.0.9`, `httpx` — `0.28.1`.
-- `delete()` проверяет lexical containment и каждый существующий компонент на symlink до unlink; target не удаляется.
+- `delete()` открывает root и intermediate directories через fd с `O_NOFOLLOW`, а удаляет basename относительно открытого parent fd; подмена path не ведёт к другому target.
 - `cleanup()` нормализует filesystem failures в `media_failed` без path и оставляет неудалённый файл для retry.
 - Media candidates стабильно сортируются самим provider по `og → twitter → article`.
 
@@ -63,5 +62,18 @@ Fix round 2 зафиксирован только RED-tests/evidence: три fin
 
 - Два bootstrap RED остаются намеренно: обязательную policy и новый transport должен связать Task 4B; `bootstrap.py` запрещён текущим brief.
 - Остальные 15 full-gate RED принадлежат Task 4B/4C.
-- Fix round 2 открыл 4 scoped RED node: fd-relative/no-follow delete,
-  constructor rejection `proxy`/`uds` и fallback по уже validated public IP.
+
+## Fix round 2 GREEN
+
+- Новый RED: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/media/test_local_media_provider.py -q -k 'tries_next_validated_ip or rejects_routes_that_bypass or keeps_open_parent_binding'` — 4 failed, 44 deselected.
+- HTTP GREEN: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py -q -k 'tries_next_validated_ip or rejects_routes_that_bypass'` — 3 passed, 25 deselected.
+- Delete retained GREEN: `uv run pytest tests/unit/adapters/media/test_local_media_provider.py -q -k delete` — 4 passed, 16 deselected.
+- Четыре новых GREEN: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/media/test_local_media_provider.py -q -k 'tries_next_validated_ip or rejects_routes_that_bypass or keeps_open_parent_binding'` — 4 passed, 44 deselected.
+- Scoped: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q` — 63 passed.
+- Полный: `uv run pytest -m 'not integration' -q` — 291 passed, 17 failed, 41 deselected. Все 17 RED относятся к Task 4B/4C.
+- `uv run python -m compileall -q src` — успешно.
+- `uv run ruff check src` — `All checks passed!`.
+- `uv lock --check` — `Resolved 34 packages`.
+- `git diff --check` — успешно.
+
+Self-review round 2: resolver вызывается один раз, весь ответ валидируется до первого socket, `ConnectError` переключает только на следующий уже проверенный IP. Transport отвергает non-`None` proxy/UDS стабильной ошибкой без значения. Delete удерживает fd parent во время `os.unlink`, не следует подменённому symlink и закрывает все открытые descriptors.
