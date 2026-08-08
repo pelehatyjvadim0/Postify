@@ -61,7 +61,7 @@ def run_once() -> None:
     except ValidationError:
         _fail(RuntimeError("Некорректная конфигурация отбора"))
         return
-    except (SQLAlchemyError, OSError, ValueError):
+    except (SQLAlchemyError, OSError, RuntimeError, ValueError):
         _fail(RuntimeError("Не удалось выполнить отбор кандидатов"))
         return
 
