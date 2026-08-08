@@ -2,7 +2,8 @@
 
 ## Статус
 
-`DONE_WITH_CONCERNS`.
+Production-срез завершён с concerns. Fix round 1 зафиксирован
+только RED-tests/evidence; пять findings требуют production GREEN.
 
 ## Изменённые файлы
 
@@ -36,5 +37,29 @@
 
 ## Concerns
 
-- Legacy focused test создаёт analyzer с совпадающими `repository_cwd` и `work_dir` и требует `--cd` именно в этот путь. Для его совместимости сохранен этот прямой режим; production bootstrap всегда передаёт отдельный системный temporary work directory. В строгом публичном API совпадающие пути лучше запретить отдельным follow-up после обновления legacy test contract.
-- Поле `selected` обязано schema, однако текущая domain-модель Task 4C ещё не принимает его; local output construction оставляет его за границей Task 4B, чтобы не менять domain и сохранить 17 focused GREEN.
+- Оба прежних concern теперь входят в fix round 1: прямой
+  legacy work mode запрещён, `selected` должен дойти до domain.
+- ProcessContent и DB outcome orchestration остаются Task 4C.
+
+## RED fix round 1
+
+- База: `a1343e1`; production не изменялся.
+- Baseline Task 4B: `17 passed`.
+- Task 4B после regression-tests: `8 failed, 14 passed`.
+- Retained Task 4B: `14 passed, 8 deselected`.
+- Full non-integration: `13 failed, 301 passed, 41 deselected`: ровно
+  8 Task 4B fix round 1 и 5 ранее известных Task 4C.
+- Ruff для изменённых tests и `git diff --check` — успешно.
+
+Новые/усиленные RED: hardened invocation, nullable schema,
+concurrent invocation при совпадающих roots, selected/nonselected parser,
+cleanup failure, typed `PackageDraft` и два bootstrap collision cases.
+Существующий domain RED усилен проверкой полного `batch.topics` и
+`requested_attempt_ids`, без нового дублирующего node.
+
+Контракты fix round: invocation всегда unique child даже при
+`repository_cwd == work_dir`; `selected=false` сохраняет analysis/usefulness
+и имеет `null` post/media; cleanup failure возвращает только
+санитизированный `CodexAnalysisError`; bootstrap либо выбирает root
+вне repository/media, либо санитизированно отказывает до runner;
+`PackageDraft` задан как application-port DTO с domain `ExtractedArticle`.

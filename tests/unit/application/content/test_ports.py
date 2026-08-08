@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from inspect import Signature, signature
-from typing import get_type_hints
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import httpx
 
@@ -95,6 +96,29 @@ def test_review_content_constructor_is_annotated_only_with_content_ports() -> No
     assert hints["media"] is MediaProvider
 
 
+def test_content_repository_returns_fully_typed_package_drafts() -> None:
+    # Поломка fix-round 1: public port возвращает Sequence[object].
+    from postify.application.ports.content_repository import (
+        ContentRepository,
+        PackageDraft,
+    )
+    from postify.domain.content.models import ExtractedArticle
+
+    method_hints = get_type_hints(
+        ContentRepository.save_analysis_and_create_packages
+    )
+    draft_hints = get_type_hints(PackageDraft)
+
+    assert method_hints["return"] == Sequence[PackageDraft]
+    assert draft_hints == {
+        "attempt_id": int,
+        "package_id": int,
+        "article": ExtractedArticle,
+        "media_query": str,
+    }
+    assert object not in draft_hints.values()
+
+
 def test_bootstrap_injects_same_public_url_policy_into_article_and_media(
     tmp_path,
 ) -> None:
@@ -175,3 +199,62 @@ def test_bootstrap_public_transport_and_adapters_share_one_dns_policy(
         assert processor.e.url_policy is processor.m.url_policy
 
     assert engine.disposed is True
+
+
+@pytest.mark.parametrize(
+    "collision",
+    ["repository", "media"],
+)
+def test_bootstrap_keeps_codex_work_outside_repository_and_media_on_temp_collision(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    collision: str,
+) -> None:
+    # Поломка fix-round 1: temp-root вкладывает Codex work в repository/media.
+    import postify.bootstrap as bootstrap
+
+    repository = tmp_path / "operator-secret-repository"
+    media = tmp_path / "operator-secret-media"
+    repository.mkdir()
+    media.mkdir()
+    monkeypatch.chdir(repository)
+    temp_root = repository if collision == "repository" else media
+    monkeypatch.setattr(bootstrap.tempfile, "gettempdir", lambda: str(temp_root))
+    runner_calls: list[object] = []
+
+    def forbidden_runner(*args: object, **kwargs: object) -> None:
+        runner_calls.append((args, kwargs))
+        raise AssertionError("runner нельзя вызывать до проверки work root")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", forbidden_runner)
+    settings = SimpleNamespace(
+        content_article_max_bytes=1000,
+        content_codex_timeout_seconds=60,
+        content_media_dir=media,
+        content_media_max_bytes=1000,
+        content_daily_analysis_limit=12,
+        content_daily_package_limit=3,
+        content_priority_freshness_days=14,
+        content_fresh_share_percent=90,
+        content_reserve_share_percent=10,
+        content_review_required=True,
+        postify_timezone="UTC",
+    )
+    resources = SimpleNamespace(session_factory=lambda: None)
+
+    try:
+        with httpx.Client(
+            transport=httpx.MockTransport(lambda request: None)
+        ) as client:
+            resources.client = client
+            processor = bootstrap._content_processor(settings, resources)
+    except (RuntimeError, ValueError) as error:
+        assert runner_calls == []
+        assert str(repository) not in str(error)
+        assert str(media) not in str(error)
+        return
+
+    work = processor.a.work.resolve()
+    assert runner_calls == []
+    assert not work.is_relative_to(repository.resolve())
+    assert not work.is_relative_to(media.resolve())

@@ -38,6 +38,7 @@ def _valid_output(attempt_ids: tuple[int, ...] = (17,)) -> dict[str, object]:
                 "attempt_id": attempt_id,
                 "analysis": f"Практический анализ {attempt_id}",
                 "usefulness": 91,
+                "selected": True,
                 "post_text": f"Русский текст без ссылки {attempt_id}",
                 "media_query": "PostgreSQL architecture",
             }
@@ -50,10 +51,12 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     # Поломка (gate 4): marker article body не передаётся в stdin Codex.
     AnalysisInput, _, CodexContentAnalyzer = _api()
     calls: list[tuple[list[str], dict[str, object]]] = []
+    invocation_dirs: list[Path] = []
 
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((argv, kwargs))
         output_path = Path(argv[argv.index("--output-last-message") + 1])
+        invocation_dirs.append(output_path.parent)
         output_path.write_text(json.dumps(_valid_output()), encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout="ignored", stderr="ignored")
 
@@ -71,7 +74,12 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     assert argv[argv.index("--sandbox") + 1] == "read-only"
     assert "--ignore-user-config" in argv
     assert "--ignore-rules" in argv
-    assert argv[argv.index("--cd") + 1] == str(tmp_path)
+    invocation = invocation_dirs[0]
+    assert invocation.parent == tmp_path
+    assert invocation != tmp_path
+    assert Path(argv[argv.index("--cd") + 1]) == invocation
+    assert Path(argv[argv.index("--output-schema") + 1]).parent == invocation
+    assert Path(argv[argv.index("--output-last-message") + 1]).parent == invocation
     assert "--output-schema" in argv
     assert "--output-last-message" in argv
     assert "--model" not in argv
@@ -79,6 +87,7 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     assert kwargs["timeout"] == 600
     assert MARKER in str(kwargs["input"])
     assert result.topics[0].attempt_id == 17
+    assert not invocation.exists()
 
 
 @pytest.mark.parametrize(
@@ -151,6 +160,41 @@ def test_codex_runner_exception_does_not_leak_secret_and_cleans_invocation_dir(
     assert MARKER not in str(caught.value)
     assert len(invocation_dirs) == 1
     assert not invocation_dirs[0].exists()
+
+
+def test_codex_cleanup_failure_is_sanitized_and_cannot_return_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка fix-round 1: cleanup молча оставляет raw prompt/output.
+    AnalysisInput, CodexAnalysisError, CodexContentAnalyzer = _api()
+    import postify.adapters.ai.codex_content_analyzer as codex_module
+
+    secret = "CLEANUP-TOKEN-DO-NOT-LEAK"
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(_valid_output()), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    def failing_cleanup(path: Path, *, ignore_errors: bool = False) -> None:
+        raise OSError(f"cleanup failed at {path} with {secret}")
+
+    monkeypatch.setattr(codex_module.shutil, "rmtree", failing_cleanup)
+    analyzer = CodexContentAnalyzer(
+        runner,
+        tmp_path / "repository",
+        600,
+        tmp_path / "work",
+    )
+
+    with pytest.raises(CodexAnalysisError) as caught:
+        analyzer.analyze([_input(AnalysisInput)], package_limit=1)
+
+    assert caught.value.code == "codex_failed"
+    assert secret not in str(caught.value)
+    assert str(tmp_path) not in str(caught.value)
 
 
 def test_codex_success_uses_isolated_nonrepository_directory_and_cleans_it(
@@ -237,6 +281,11 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
         "media_query",
     }
     assert topic_schema["properties"]["selected"] == {"type": "boolean"}
+    nullable_text = {
+        "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+    }
+    assert topic_schema["properties"]["post_text"] == nullable_text
+    assert topic_schema["properties"]["media_query"] == nullable_text
     prompt = str(captured["prompt"])
     assert "на русском" in prompt.casefold()
     assert "кажд" in prompt.casefold() and "стать" in prompt.casefold()
@@ -246,6 +295,60 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
     assert "SECOND-ARTICLE-BODY-MARKER" in prompt
     assert "--skip-git-repo-check" in captured["argv"]
     assert captured["argv"][-1] == "-"
+
+
+def test_codex_preserves_selected_and_nonselected_outcomes_from_complete_batch(
+    tmp_path: Path,
+) -> None:
+    # Поломка fix-round 1: parser теряет selected или nonselected outcome.
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    second = AnalysisInput(
+        attempt_id=18,
+        source_url="https://source.test/second",
+        title="Second title",
+        text="Полный текст второй статьи.",
+    )
+    payload = {
+        "topics": [
+            {
+                "attempt_id": 17,
+                "analysis": "Выбранный подробный анализ",
+                "usefulness": 91,
+                "selected": True,
+                "post_text": "Русский пост для публикации",
+                "media_query": "PostgreSQL architecture",
+            },
+            {
+                "attempt_id": 18,
+                "analysis": "Сохранённый анализ невыбранной статьи",
+                "usefulness": 42,
+                "selected": False,
+                "post_text": None,
+                "media_query": None,
+            },
+        ]
+    }
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = CodexContentAnalyzer(
+        runner,
+        tmp_path / "repository",
+        600,
+        tmp_path / "work",
+    ).analyze([_input(AnalysisInput), second], package_limit=1)
+
+    assert result.requested_attempt_ids == (17, 18)
+    assert tuple(topic.attempt_id for topic in result.topics) == (17, 18)
+    assert result.topics[0].selected is True
+    assert result.topics[1].selected is False
+    assert result.topics[1].post_text is None
+    assert result.topics[1].media_query is None
+    assert result.selected_topics == (result.topics[0],)
 
 
 def test_codex_concurrent_runs_use_distinct_directories_and_cleanup_both(
@@ -265,12 +368,8 @@ def test_codex_concurrent_runs_use_distinct_directories_and_cleanup_both(
         )
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    analyzer = CodexContentAnalyzer(
-        runner,
-        tmp_path / "repository",
-        600,
-        tmp_path / "work",
-    )
+    shared_root = tmp_path / "repository-and-work"
+    analyzer = CodexContentAnalyzer(runner, shared_root, 600, shared_root)
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(
             executor.map(
@@ -281,4 +380,5 @@ def test_codex_concurrent_runs_use_distinct_directories_and_cleanup_both(
 
     assert [result.topics[0].attempt_id for result in results] == [17, 17]
     assert len(set(invocation_dirs)) == 2
+    assert all(path.parent == shared_root for path in invocation_dirs)
     assert all(not path.exists() for path in invocation_dirs)

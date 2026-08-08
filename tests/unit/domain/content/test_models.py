@@ -245,5 +245,7 @@ def test_nonselected_analysis_keeps_analysis_without_package_fields() -> None:
         package_limit=1,
     )
 
+    assert batch.topics == (selected, nonselected)
+    assert batch.requested_attempt_ids == (1, 2)
     assert batch.selected_topics == (selected,)
     assert batch.topics[1].analysis == "Сохранённый анализ невыбранной статьи"
