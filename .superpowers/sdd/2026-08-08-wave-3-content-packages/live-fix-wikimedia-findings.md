@@ -40,3 +40,26 @@ Baseline: `324 passed, 42 deselected`; RED: `1 failed`; retained:
 - Full non-integration: `325 passed, 42 deselected`.
 - Integration: `42 passed, 325 deselected`.
 - `compileall`, `ruff check src` и `git diff --check`: GREEN.
+
+## Round 2: RED фильтра MIME
+
+Свежий scoped review выявил Important: namespace `6` возвращает
+не только raster images, но и PDF/SVG. Wikimedia adapter брал
+первый URL, хотя `LocalMediaProvider` принимает только
+`image/jpeg`, `image/png` и `image/webp`.
+
+На базе `22ca149` добавлены два MockTransport node:
+
+- `test_wikimedia_search_skips_unsupported_files_and_requests_mime` — в одном
+  response PDF/SVG предшествуют PNG/JPEG/WebP; ожидается первый
+  поддерживаемый PNG, один request и `iiprop` с `url` и `mime`;
+- `test_wikimedia_search_returns_none_when_no_valid_supported_file_exists` —
+  unsupported, missing и malformed entries вместе дают safe `None`.
+
+Baseline non-integration: `325 passed, 42 deselected`. Focused Wikimedia:
+`2 failed, 2 passed`; retained: `325 passed, 44 deselected`; полный
+non-integration: `2 failed, 325 passed, 42 deselected`.
+
+Оба RED воспроизведены по ожидаемой причине: adapter возвращает
+PDF как в mixed, так и в all-invalid fixture, а request просит
+только `iiprop=url`. Production не изменялся; сеть не вызывалась.
