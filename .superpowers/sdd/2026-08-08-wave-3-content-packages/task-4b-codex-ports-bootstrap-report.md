@@ -89,6 +89,27 @@ cleanup failure, typed `PackageDraft` и два bootstrap collision cases.
 
 Нет открытых concerns в scope fix round. Minor о falsy injected transport/policy намеренно не менялся, согласно findings.
 
+## GREEN fix round 2
+
+- `uv run pytest tests/unit/adapters/ai/test_codex_content_analyzer.py tests/unit/application/content/test_ports.py -q` — `29 passed`.
+- `uv run pytest tests/unit/adapters/ai/test_codex_content_analyzer.py tests/unit/application/content/test_ports.py tests/unit/domain/content/test_models.py -q` — `50 passed`.
+- `uv run pytest tests/unit/adapters/ai tests/unit/adapters/http tests/unit/adapters/articles tests/unit/adapters/media tests/unit/domain/content -q` — `106 passed`.
+- `uv run pytest -q -m 'not integration'` — `323 passed, 41 deselected`.
+- `uv run python -m compileall -q src` — exit 0.
+- `uv run ruff check src` — `All checks passed!`.
+- `uv lock --check` — `Resolved 34 packages`.
+- `git diff --check` — exit 0.
+
+### Самопроверка fix round 2
+
+- Analyzer проверяет repository/work overlap в обоих направлениях до создания work directory, schema/output и вызова runner.
+- Schema through `if`/`then`/`else` связывает selected outcome с непустыми post/media, а nonselected — только с `null`; domain также отклоняет integer вместо bool, adapter нормализует его как invalid output.
+- Bootstrap принимает work root только при полной дизъюнктности с repository и media, включая направление protected path внутри candidate.
+
+### Concerns fix round 2
+
+Нет открытых concerns в scope fix round. Minor о falsy injected transport/policy не менялся.
+
 ## RED fix round 2
 
 - База: `85800f2`; production не изменялся.

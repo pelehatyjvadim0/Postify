@@ -215,11 +215,15 @@ def _codex_work_dir(repository: Path, media_dir: Path) -> Path:
     temp_root = Path(tempfile.gettempdir()).resolve()
     for candidate in (temp_root / "postify-codex", temp_root.parent / "postify-codex"):
         resolved = candidate.resolve()
-        if not resolved.is_relative_to(repository) and not resolved.is_relative_to(
-            media_dir
+        if _paths_are_disjoint(resolved, repository) and _paths_are_disjoint(
+            resolved, media_dir
         ):
             return resolved
     raise RuntimeError("codex_work_unavailable")
+
+
+def _paths_are_disjoint(first: Path, second: Path) -> bool:
+    return not first.is_relative_to(second) and not second.is_relative_to(first)
 
 
 def database_is_ready(settings: Settings) -> bool:

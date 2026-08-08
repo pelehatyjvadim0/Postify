@@ -70,6 +70,8 @@ class CodexContentAnalyzer:
 
     def _create_invocation_dir(self) -> Path:
         try:
+            if _paths_overlap(self.cwd.resolve(), self.work.resolve()):
+                raise OSError
             self.work.mkdir(parents=True, exist_ok=True)
             return Path(tempfile.mkdtemp(prefix="codex-", dir=self.work))
         except OSError:
@@ -138,6 +140,23 @@ class CodexContentAnalyzer:
                     "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
                 },
             },
+            "allOf": [
+                {
+                    "if": {"properties": {"selected": {"const": True}}},
+                    "then": {
+                        "properties": {
+                            "post_text": {"type": "string", "minLength": 1},
+                            "media_query": {"type": "string", "minLength": 1},
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "post_text": {"type": "null"},
+                            "media_query": {"type": "null"},
+                        }
+                    },
+                }
+            ],
         }
         return {
             "type": "object",
@@ -197,3 +216,7 @@ class CodexContentAnalyzer:
             return batch
         except (OSError, ValueError, KeyError, TypeError, ContentValidationError):
             raise CodexAnalysisError("codex_invalid_output") from None
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return first.is_relative_to(second) or second.is_relative_to(first)

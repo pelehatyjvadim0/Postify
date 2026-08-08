@@ -64,6 +64,8 @@ class AnalyzedTopic:
     selected: bool = True
 
     def __post_init__(self):
+        if type(self.selected) is not bool:
+            raise ContentValidationError("Некорректный выбор темы")
         if not 0 <= self.usefulness <= 100:
             raise ContentValidationError("Некорректная оценка")
         if not self.analysis.strip() or not any(
