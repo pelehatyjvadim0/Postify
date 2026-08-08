@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from sqlalchemy import text
 from postify.domain.content.models import ContentPackage
-from postify.domain.content.quota import QuotaState, choose_tier
+from postify.domain.content.quota import QuotaState, choose_tier, consume_tier_credit
 from postify.application.ports.content_repository import PackageDraft
 
 
@@ -75,6 +75,12 @@ class SqlAlchemyContentRepository:
                             },
                         ).scalar()
                         else "reserve"
+                    )
+                    state = consume_tier_credit(
+                        state,
+                        tier=tier,
+                        fresh_share=limits.fresh_share,
+                        reserve_share=limits.reserve_share,
                     )
                     s.execute(
                         text(
@@ -206,13 +212,37 @@ class SqlAlchemyContentRepository:
                     ),
                     {"d": day},
                 ).scalar_one()
-                out = []
-                for topic in batch.topics[: max(0, package_limit - used)]:
-                    a = articles[topic.attempt_id]
+                for topic in batch.topics:
                     s.execute(
-                        text("UPDATE content_attempts SET analysis=:a WHERE id=:id"),
-                        {"a": topic.analysis, "id": topic.attempt_id},
+                        text(
+                            "UPDATE content_attempts SET analysis=:a,"
+                            "status=CASE WHEN :selected THEN status ELSE 'analyzed_not_selected' END,"
+                            "failure_code=CASE WHEN :selected THEN failure_code ELSE NULL END,"
+                            "finished_at=CASE WHEN :selected THEN finished_at ELSE :n END WHERE id=:id"
+                        ),
+                        {
+                            "a": topic.analysis,
+                            "selected": topic.selected,
+                            "n": now,
+                            "id": topic.attempt_id,
+                        },
                     )
+
+                available = max(0, package_limit - used)
+                selected_topics = batch.selected_topics
+                packaged_topics = selected_topics[:available]
+                for topic in selected_topics[available:]:
+                    s.execute(
+                        text(
+                            "UPDATE content_attempts SET status='analyzed_not_selected',"
+                            "failure_code=NULL,finished_at=:n WHERE id=:id"
+                        ),
+                        {"n": now, "id": topic.attempt_id},
+                    )
+
+                out = []
+                for topic in packaged_topics:
+                    a = articles[topic.attempt_id]
                     pid = s.execute(
                         text(
                             "INSERT INTO content_packages(attempt_id,source_url,context,analysis,post_text,review_required,status,created_at,updated_at) VALUES (:i,:u,:c,:a,:p,:r,'processing',:n,:n) RETURNING id"
@@ -250,25 +280,83 @@ class SqlAlchemyContentRepository:
                 raise
 
     def complete_package(self, id, *, media, status, now):
-        self._execute(
-            "UPDATE content_packages SET media_path=:p,media_mime=:m,media_source_type=:t,media_source_url=:u,status=:s,updated_at=:n WHERE id=:id",
-            id=id,
-            p=media.local_path,
-            m=media.mime,
-            t=media.source_type,
-            u=media.source_url,
-            s=status,
-            n=now,
-        )
-        self._history(id, status, now)
+        with self.sf() as s:
+            try:
+                package = s.execute(
+                    text(
+                        "SELECT attempt_id,status FROM content_packages WHERE id=:id FOR UPDATE"
+                    ),
+                    {"id": id},
+                ).one()
+                if package.status != "processing":
+                    from postify.domain.content.models import InvalidContentTransition
+
+                    raise InvalidContentTransition("invalid")
+                attempt_id = package.attempt_id
+                s.execute(
+                    text(
+                        "UPDATE content_packages SET media_path=:p,media_mime=:m,"
+                        "media_source_type=:t,media_source_url=:u,status=:s,updated_at=:n "
+                        "WHERE id=:id"
+                    ),
+                    {"id": id, "p": media.local_path, "m": media.mime,
+                     "t": media.source_type, "u": media.source_url, "s": status, "n": now},
+                )
+                s.execute(
+                    text(
+                        "UPDATE content_attempts SET status='packaged',failure_code=NULL,"
+                        "finished_at=:n WHERE id=:id"
+                    ),
+                    {"id": attempt_id, "n": now},
+                )
+                s.execute(
+                    text(
+                        "INSERT INTO content_package_status_history(package_id,status,reason,created_at) "
+                        "VALUES (:id,:s,'status_change',:n)"
+                    ),
+                    {"id": id, "s": status, "n": now},
+                )
+                s.commit()
+            except:
+                s.rollback()
+                raise
 
     def fail_package(self, id, *, code, now):
-        self._execute(
-            "UPDATE content_packages SET status='failed',updated_at=:n WHERE id=:id",
-            id=id,
-            n=now,
-        )
-        self._history(id, "failed", now)
+        with self.sf() as s:
+            try:
+                package = s.execute(
+                    text(
+                        "SELECT attempt_id,status FROM content_packages WHERE id=:id FOR UPDATE"
+                    ),
+                    {"id": id},
+                ).one()
+                if package.status != "processing":
+                    from postify.domain.content.models import InvalidContentTransition
+
+                    raise InvalidContentTransition("invalid")
+                attempt_id = package.attempt_id
+                s.execute(
+                    text("UPDATE content_packages SET status='failed',updated_at=:n WHERE id=:id"),
+                    {"id": id, "n": now},
+                )
+                s.execute(
+                    text(
+                        "UPDATE content_attempts SET status='failed',failure_code=:c,"
+                        "finished_at=:n WHERE id=:id"
+                    ),
+                    {"id": attempt_id, "c": str(code), "n": now},
+                )
+                s.execute(
+                    text(
+                        "INSERT INTO content_package_status_history(package_id,status,reason,created_at) "
+                        "VALUES (:id,'failed','status_change',:n)"
+                    ),
+                    {"id": id, "n": now},
+                )
+                s.commit()
+            except:
+                s.rollback()
+                raise
 
     def active_media_paths(self):
         with self.sf() as s:

@@ -60,3 +60,14 @@ def choose_tier(
     if reserve_available:
         return "reserve", QuotaState(fresh, reserve - 100)
     return None, QuotaState(fresh, reserve)
+
+
+def consume_tier_credit(
+    state: QuotaState, *, tier: str, fresh_share: int, reserve_share: int
+) -> QuotaState:
+    """Начисляет доли и списывает credit для уже выбранного tier."""
+    fresh = state.fresh_credit + fresh_share
+    reserve = state.reserve_credit + reserve_share
+    if tier == "fresh":
+        return QuotaState(fresh - 100, reserve)
+    return QuotaState(fresh, reserve - 100)
