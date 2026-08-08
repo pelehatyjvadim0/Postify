@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, PostgresDsn, field_validator, model_validator
@@ -30,11 +31,26 @@ class Settings(BaseSettings):
     selection_technical_release_terms: Annotated[tuple[str, ...], NoDecode]
     selection_practical_terms: Annotated[tuple[str, ...], NoDecode]
     selection_freshness_days: int = Field(gt=0)
+    content_daily_analysis_limit: int = Field(gt=0)
+    content_daily_package_limit: int = Field(gt=0)
+    content_priority_freshness_days: int = Field(gt=0)
+    content_fresh_share_percent: int = Field(ge=0, le=100)
+    content_reserve_share_percent: int = Field(ge=0, le=100)
+    content_review_required: bool
+    content_media_dir: Path
+    content_article_max_bytes: int = Field(gt=0)
+    content_media_max_bytes: int = Field(gt=0)
+    content_codex_timeout_seconds: int = Field(gt=0)
 
     @field_validator(
-        "selection_rules", "selection_topic_terms", "selection_topic_exclusion_terms",
-        "selection_advertising_terms", "selection_hiring_terms",
-        "selection_technical_release_terms", "selection_practical_terms", mode="before"
+        "selection_rules",
+        "selection_topic_terms",
+        "selection_topic_exclusion_terms",
+        "selection_advertising_terms",
+        "selection_hiring_terms",
+        "selection_technical_release_terms",
+        "selection_practical_terms",
+        mode="before",
     )
     @classmethod
     def normalise_csv(cls, value: object) -> tuple[str, ...]:
@@ -50,18 +66,27 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_selection_profile(self) -> "Settings":
         allowed = {"advertising", "out_of_scope", "hiring", "technical_without_use"}
-        if not self.selection_rules or any(rule not in allowed for rule in self.selection_rules):
+        if not self.selection_rules or any(
+            rule not in allowed for rule in self.selection_rules
+        ):
             raise ValueError("Неизвестное или пустое правило отбора")
         required = {
             "advertising": (self.selection_advertising_terms,),
             "out_of_scope": (self.selection_topic_exclusion_terms,),
             "hiring": (self.selection_hiring_terms,),
             "technical_without_use": (
-                self.selection_technical_release_terms, self.selection_practical_terms
+                self.selection_technical_release_terms,
+                self.selection_practical_terms,
             ),
         }
         if any(not terms for rule in self.selection_rules for terms in required[rule]):
             raise ValueError("Включённому правилу нужны маркеры")
+        if self.content_daily_package_limit > self.content_daily_analysis_limit:
+            raise ValueError("Лимит пакетов не может превышать лимит анализа")
+        if self.content_fresh_share_percent + self.content_reserve_share_percent != 100:
+            raise ValueError("Доли контентной очереди должны составлять 100%")
+        if not self.content_media_dir.is_absolute():
+            raise ValueError("Каталог медиа должен быть абсолютным")
         return self
 
     @field_validator("postgresql_systemd_unit")

@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
+
+
+class ContentValidationError(ValueError):
+    pass
+
+
+class InvalidContentTransition(ContentValidationError):
+    pass
+
+
+class PackageStatus(StrEnum):
+    NOT_STARTED = "not_started"
+    PROCESSING = "processing"
+    AWAITING_REVIEW = "awaiting_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+def validate_transition(current: str, target: str) -> None:
+    allowed = {
+        ("not_started", "processing"),
+        ("processing", "awaiting_review"),
+        ("processing", "approved"),
+        ("awaiting_review", "approved"),
+        ("awaiting_review", "rejected"),
+    }
+    if (str(current), str(target)) not in allowed:
+        raise InvalidContentTransition("Недопустимый переход пакета")
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedArticle:
+    source_url: str
+    title: str
+    text: str
+    image_candidates: tuple[tuple[str, str], ...]
+
+    def __post_init__(self):
+        if not self.text.strip():
+            raise ContentValidationError("Нужен текст статьи")
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisInput:
+    attempt_id: int
+    source_url: str
+    title: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyzedTopic:
+    attempt_id: int
+    analysis: str
+    usefulness: int
+    post_text: str
+    media_query: str
+
+    def __post_init__(self):
+        if not 0 <= self.usefulness <= 100:
+            raise ContentValidationError("Некорректная оценка")
+        if (
+            not self.analysis.strip()
+            or not self.post_text.strip()
+            or not any(
+                "а" <= c.casefold() <= "я" or c in "ёЁ"
+                for c in self.analysis + self.post_text
+            )
+        ):
+            raise ContentValidationError("Нужен русский текст")
+        if not self.media_query.strip():
+            raise ContentValidationError("Нужен запрос медиа")
+
+
+@dataclass(frozen=True, slots=True)
+class BatchAnalysis:
+    topics: tuple[AnalyzedTopic, ...]
+    requested_attempt_ids: tuple[int, ...]
+    package_limit: int
+
+    def __post_init__(self):
+        ids = [t.attempt_id for t in self.topics]
+        if (
+            len(ids) != len(set(ids))
+            or not set(ids).issubset(self.requested_attempt_ids)
+            or len(ids) > self.package_limit
+        ):
+            raise ContentValidationError("Некорректный пакет анализа")
+
+
+@dataclass(frozen=True, slots=True)
+class ContentAttempt:
+    id: int
+    candidate_id: int
+    attempt_no: int
+    tier: str
+    status: str
+    source_url: str
+    started_at: datetime
+
+    def __post_init__(self):
+        if self.attempt_no not in (1, 2):
+            raise ContentValidationError("Допустимы только две попытки")
+
+
+@dataclass(frozen=True, slots=True)
+class ContentLimits:
+    analysis_limit: int
+    package_limit: int
+    freshness_days: int
+    fresh_share: int
+    reserve_share: int
+
+
+@dataclass(frozen=True, slots=True)
+class StoredMedia:
+    local_path: str
+    mime: str
+    source_type: str
+    source_url: str
+
+
+@dataclass(slots=True)
+class ContentPackage:
+    id: int
+    attempt_id: int
+    source_url: str
+    context: str
+    analysis: str
+    post_text: str
+    media_path: str
+    media_source_type: str
+    media_source_url: str
+    review_required: bool
+    status: str | PackageStatus
+    history: list[object] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.source_url in self.post_text:
+            raise ContentValidationError("URL источника нельзя добавлять в пост")

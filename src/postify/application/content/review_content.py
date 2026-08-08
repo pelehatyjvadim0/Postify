@@ -1,0 +1,19 @@
+class ReviewContent:
+    def __init__(self, repository, media, *, clock):
+        self.r = repository
+        self.m = media
+        self.clock = clock
+
+    def list(self):
+        return self.r.list_packages()
+
+    def show(self, id):
+        return self.r.get_package(id)
+
+    def approve(self, id):
+        return self.r.approve(id, now=self.clock())
+
+    def reject(self, id):
+        p = self.r.reject(id, now=self.clock())
+        self.m.delete(p.media_path)
+        return p

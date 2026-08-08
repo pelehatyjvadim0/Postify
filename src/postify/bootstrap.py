@@ -8,6 +8,7 @@ from importlib.resources import as_file, files
 from time import monotonic, sleep
 
 import httpx
+import subprocess
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -23,8 +24,43 @@ from postify.config import Settings
 from postify.domain.candidates.selection import SelectionProfile
 from postify.domain.candidates.statuses import RejectionRule
 from postify.infrastructure.database.engine import create_engine_from_settings
-from postify.infrastructure.repositories.sqlalchemy_candidates import SqlAlchemyCandidateRepository
-from postify.infrastructure.repositories.sqlalchemy_decisions import SqlAlchemyDecisionRepository
+from postify.infrastructure.repositories.sqlalchemy_candidates import (
+    SqlAlchemyCandidateRepository,
+)
+from postify.infrastructure.repositories.sqlalchemy_decisions import (
+    SqlAlchemyDecisionRepository,
+)
+
+
+def open_content_review(settings: Settings):
+    """Открывает review-зависимости; фабрика отделена для CLI и тестов."""
+    from contextlib import contextmanager
+    from postify.application.content.review_content import ReviewContent
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    @contextmanager
+    def opened():
+        engine = create_engine_from_settings(settings)
+        client = httpx.Client()
+        try:
+            yield ReviewContent(
+                SqlAlchemyContentRepository(sessionmaker(engine)),
+                LocalMediaProvider(
+                    client,
+                    settings.content_media_dir,
+                    settings.content_media_max_bytes,
+                    None,
+                ),
+                clock=lambda: datetime.now(UTC),
+            )
+        finally:
+            client.close()
+            engine.dispose()
+
+    return opened()
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -35,6 +71,7 @@ class DatabaseUnavailableError(RuntimeError):
 class _ImportResources:
     source: HnAlgoliaCandidateSource
     session_factory: sessionmaker[Session]
+    client: httpx.Client
 
 
 @contextmanager
@@ -54,6 +91,7 @@ def _open_import_resources(
                 hits=settings.hn_hits_per_page,
             ),
             session_factory=sessionmaker(engine),
+            client=client,
         )
     finally:
         if client is not None:
@@ -100,10 +138,56 @@ def open_run_once(
                 SqlAlchemyCandidateRepository(resources.session_factory),
             ),
             SelectCandidates(
-                SqlAlchemyDecisionRepository(resources.session_factory), profile,
+                SqlAlchemyDecisionRepository(resources.session_factory),
+                profile,
                 lambda: datetime.now(UTC),
             ),
+            _content_processor(settings, resources)
+            if callable(resources.session_factory)
+            else None,
         )
+
+
+def _content_processor(settings: Settings, resources: _ImportResources):
+    from pathlib import Path
+    from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
+    from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.media.wikimedia import WikimediaImageSearch
+    from postify.application.content.process_content import ProcessContent
+    from postify.domain.content.models import ContentLimits
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    return ProcessContent(
+        SqlAlchemyContentRepository(resources.session_factory),
+        HttpArticleExtractor(
+            client=resources.client, max_bytes=settings.content_article_max_bytes
+        ),
+        CodexContentAnalyzer(
+            lambda argv, **kwargs: subprocess.run(argv, check=False, **kwargs),
+            Path.cwd(),
+            settings.content_codex_timeout_seconds,
+            settings.content_media_dir,
+        ),
+        LocalMediaProvider(
+            resources.client,
+            settings.content_media_dir,
+            settings.content_media_max_bytes,
+            WikimediaImageSearch(client=resources.client),
+        ),
+        limits=ContentLimits(
+            settings.content_daily_analysis_limit,
+            settings.content_daily_package_limit,
+            settings.content_priority_freshness_days,
+            settings.content_fresh_share_percent,
+            settings.content_reserve_share_percent,
+        ),
+        review_required=settings.content_review_required,
+        timezone=settings.postify_timezone,
+        clock=lambda: datetime.now(UTC),
+    )
 
 
 def database_is_ready(settings: Settings) -> bool:
@@ -122,7 +206,9 @@ def wait_for_database(settings: Settings) -> None:
     deadline = monotonic() + settings.database_readiness_timeout_seconds
     while not database_is_ready(settings):
         if monotonic() >= deadline:
-            raise DatabaseUnavailableError("БД недоступна до истечения времени ожидания")
+            raise DatabaseUnavailableError(
+                "БД недоступна до истечения времени ожидания"
+            )
         sleep(0.1)
 
 
@@ -135,7 +221,9 @@ def migrations_at_head(settings: Settings) -> bool:
         engine = create_engine_from_settings(settings)
         try:
             with engine.connect() as connection:
-                current_heads = set(MigrationContext.configure(connection).get_current_heads())
+                current_heads = set(
+                    MigrationContext.configure(connection).get_current_heads()
+                )
             return current_heads == expected_heads
         finally:
             engine.dispose()

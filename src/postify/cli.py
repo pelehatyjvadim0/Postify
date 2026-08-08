@@ -14,6 +14,7 @@ from postify.bootstrap import (
     candidate_count,
     database_is_ready,
     migrations_at_head,
+    open_content_review,
     open_run_once,
     wait_for_database,
 )
@@ -26,6 +27,8 @@ from postify.infrastructure.systemd import (
 
 
 app = typer.Typer(no_args_is_help=True)
+content_app = typer.Typer(no_args_is_help=True)
+app.add_typer(content_app, name="content")
 
 
 def create_systemd_controller(settings: Settings) -> SystemdController:
@@ -34,7 +37,9 @@ def create_systemd_controller(settings: Settings) -> SystemdController:
         postgresql_unit=settings.postgresql_systemd_unit,
         clock=monotonic,
         sleeper=sleep,
-        runner=lambda argv: subprocess.run(argv, check=False, capture_output=True, text=True),
+        runner=lambda argv: subprocess.run(
+            argv, check=False, capture_output=True, text=True
+        ),
     )
 
 
@@ -68,6 +73,72 @@ def run_once() -> None:
         f"rejected: {result.selection_result.rejected}; "
         f"конфликты: {result.selection_result.conflicts}"
     )
+    if getattr(result, "content_result", None) is not None:
+        typer.echo(
+            f"обработано: {result.content_result.claimed}; retry: {result.content_result.retry_scheduled}; ошибок: {result.content_result.failed}; пакетов: {result.content_result.packages_created}"
+        )
+
+
+def _content_error(action: str) -> None:
+    _fail(RuntimeError(f"Не удалось {action} контентный пакет"))
+
+
+@content_app.command("list")
+def content_list() -> None:
+    try:
+        with open_content_review(Settings()) as review:
+            for package in review.list_packages():
+                typer.echo(f"{package.id}; {package.status}; {package.source_url}")
+    except (ValidationError, OSError, SQLAlchemyError, ValueError):
+        _content_error("показать")
+
+
+@content_app.command("show")
+def content_show(package_id: int) -> None:
+    try:
+        with open_content_review(Settings()) as review:
+            p = review.show(package_id)
+            typer.echo(
+                "\n".join(
+                    (
+                        str(p.source_url),
+                        str(p.context),
+                        str(p.analysis),
+                        str(p.post_text),
+                        str(p.media_path),
+                        str(p.media_source_type),
+                        str(p.media_source_url),
+                        *(
+                            str(
+                                getattr(
+                                    h, "status", h[0] if isinstance(h, tuple) else h
+                                )
+                            )
+                            for h in p.history
+                        ),
+                    )
+                )
+            )
+    except (ValidationError, OSError, SQLAlchemyError, ValueError):
+        _content_error("показать")
+
+
+@content_app.command("approve")
+def content_approve(package_id: int) -> None:
+    try:
+        with open_content_review(Settings()) as review:
+            typer.echo(review.approve(package_id).status)
+    except (ValidationError, OSError, SQLAlchemyError, ValueError):
+        _content_error("одобрить")
+
+
+@content_app.command("reject")
+def content_reject(package_id: int) -> None:
+    try:
+        with open_content_review(Settings()) as review:
+            typer.echo(review.reject(package_id).status)
+    except (ValidationError, OSError, SQLAlchemyError, ValueError):
+        _content_error("отклонить")
 
 
 @app.command()
@@ -89,7 +160,12 @@ def start() -> None:
     except ValidationError:
         _fail(RuntimeError("Некорректная конфигурация"))
         return
-    except (DatabaseUnavailableError, SystemdCommandError, SQLAlchemyError, RuntimeError) as error:
+    except (
+        DatabaseUnavailableError,
+        SystemdCommandError,
+        SQLAlchemyError,
+        RuntimeError,
+    ) as error:
         _fail(error)
         return
 
@@ -115,7 +191,9 @@ def status() -> None:
         _fail(error)
         return
 
-    typer.echo(f"PostgreSQL unit: {settings.postgresql_systemd_unit}; state: {postgresql_state}")
+    typer.echo(
+        f"PostgreSQL unit: {settings.postgresql_systemd_unit}; state: {postgresql_state}"
+    )
     typer.echo("БД: доступна; кандидатов: " + str(count) if ready else "БД: недоступна")
     typer.echo(
         "Таймер: "
