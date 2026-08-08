@@ -77,6 +77,7 @@ entries пропускаются. HTTP/JSON safe-`None` handling и число r
 - `compileall`, `ruff check src`, `uv lock --check`, `git diff --check`: GREEN.
 - Live query `PostgreSQL database` через `PublicHttpTransport`: returned URL
   прошёл strict MIME whitelist; URL не выводился.
-- Integration с заданным `TEST_DATABASE_URL`: `7 passed, 327 deselected,
-  35 errors`; внешний PostgreSQL отклонил соединение, поскольку роль `postify`
-  отсутствует.
+- Integration: `TEST_DATABASE_URL=postgresql+psycopg://user@127.0.0.1:55432/postify_test .venv/bin/pytest -q -m integration`
+  — `42 passed, 327 deselected in 6.87s`.
+- Fresh re-review `418ec2a..ab3df25`: Approved, Critical/Important/Minor нет;
+  MIME Important закрыт.

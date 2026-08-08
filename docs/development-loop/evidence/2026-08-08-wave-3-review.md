@@ -156,3 +156,16 @@ Baseline non-integration: `323 passed, 42 deselected`; focused:
 CLI не печатает стабильное operator message и оставляет raw
 `RuntimeError` на CliRunner boundary. Production в RED-коммите не менялся;
 после GREEN допускается ровно один scoped re-review.
+
+## Wikimedia live fix: завершение
+
+Fresh re-review `418ec2a..ab3df25` одобрил MIME fix без
+Critical/Important/Minor: единственный Commons request сохраняется и выбирает
+только URL с strict MIME whitelist `image/jpeg`, `image/png` или `image/webp`.
+Live query через production transport подтвердил допустимый URL без его вывода.
+
+Контроллер подтвердил полный GREEN: non-integration `327 passed, 42 deselected`;
+`TEST_DATABASE_URL=postgresql+psycopg://user@127.0.0.1:55432/postify_test .venv/bin/pytest -q -m integration`
+— `42 passed, 327 deselected in 6.87s`; также GREEN `compileall`, `ruff`,
+`uv lock --check` и `git diff --check`. Official operator Codex preflight всё
+ещё требует явного подтверждения.
