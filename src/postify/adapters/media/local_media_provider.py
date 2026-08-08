@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,8 +27,10 @@ class LocalMediaProvider:
         max_bytes: int,
         wikimedia,
         *,
-        url_policy: PublicHttpUrlPolicy | None = None,
+        url_policy: PublicHttpUrlPolicy,
     ) -> None:
+        if url_policy is None:
+            raise TypeError("url_policy is required")
         self.client = client
         self.root = media_dir.resolve()
         self.max = max_bytes
@@ -35,7 +38,12 @@ class LocalMediaProvider:
         self.url_policy = url_policy
 
     def acquire(self, article, query: str) -> StoredMedia:
-        for source_type, url in article.image_candidates:
+        priority = {"og": 0, "twitter": 1, "article": 2}
+        candidates = sorted(
+            article.image_candidates,
+            key=lambda candidate: priority.get(candidate[0], len(priority)),
+        )
+        for source_type, url in candidates:
             media = self._download(source_type, url)
             if media:
                 return media
@@ -49,7 +57,7 @@ class LocalMediaProvider:
     def _download(self, source_type: str, url: str) -> StoredMedia | None:
         temp: Path | None = None
         try:
-            validated_url = self.url_policy.validate(url) if self.url_policy else url
+            validated_url = self.url_policy.validate(url)
             with self.client.stream("GET", validated_url, follow_redirects=False) as response:
                 response.raise_for_status()
                 mime = response.headers.get("content-type", "").split(";", 1)[0].lower()
@@ -81,26 +89,35 @@ class LocalMediaProvider:
                     pass
 
     def delete(self, local_path: str) -> None:
-        path = Path(local_path)
+        path = Path(os.path.abspath(local_path))
         try:
-            if path.is_symlink() or not path.resolve().is_relative_to(self.root):
+            if not path.is_relative_to(self.root):
                 raise ValueError
+            current = self.root
+            for component in path.relative_to(self.root).parts:
+                current /= component
+                if current.is_symlink():
+                    raise ValueError
             path.unlink(missing_ok=True)
-        except (OSError, ValueError) as error:
-            raise MediaAcquireError() from error
+        except (OSError, ValueError):
+            raise MediaAcquireError() from None
 
     def cleanup(self, *, older_than: datetime, protected_paths: set[str]) -> int:
-        if not self.root.exists():
-            return 0
-        removed = 0
-        for path in self.root.iterdir():
-            if path.is_symlink():
-                continue
-            if (
-                path.is_file()
-                and str(path) not in protected_paths
-                and datetime.fromtimestamp(path.stat().st_mtime, older_than.tzinfo) < older_than
-            ):
-                path.unlink()
-                removed += 1
-        return removed
+        try:
+            if not self.root.exists():
+                return 0
+            removed = 0
+            for path in self.root.iterdir():
+                if path.is_symlink():
+                    continue
+                if (
+                    path.is_file()
+                    and str(path) not in protected_paths
+                    and datetime.fromtimestamp(path.stat().st_mtime, older_than.tzinfo)
+                    < older_than
+                ):
+                    path.unlink()
+                    removed += 1
+            return removed
+        except OSError:
+            raise MediaAcquireError() from None

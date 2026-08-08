@@ -77,8 +77,10 @@ class HttpArticleExtractor:
         client: httpx.Client,
         max_bytes: int,
         min_text_chars: int = 200,
-        url_policy: PublicHttpUrlPolicy | None = None,
+        url_policy: PublicHttpUrlPolicy,
     ) -> None:
+        if url_policy is None:
+            raise TypeError("url_policy is required")
         self.client = client
         self.max_bytes = max_bytes
         self.min = min_text_chars
@@ -86,7 +88,7 @@ class HttpArticleExtractor:
 
     def extract(self, url: str) -> ExtractedArticle:
         try:
-            validated_url = self.url_policy.validate(url) if self.url_policy else url
+            validated_url = self.url_policy.validate(url)
             with self.client.stream("GET", validated_url, follow_redirects=False) as response:
                 response.raise_for_status()
                 if "text/html" not in response.headers.get("content-type", "").lower():

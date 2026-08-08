@@ -2,71 +2,46 @@
 
 ## Статус
 
-Реализация завершена в границах задачи. Focused GREEN пройден.
+Fix round 1 реализован в разрешённой production-границе. Scoped GREEN пройден.
 
-## Коммит
+## Коммиты
 
-`Защитил HTTP загрузку статей и медиа`
+- `a51e845 Защитил HTTP загрузку статей и медиа`
+- Текущий fix round: `Устранил повторное DNS-разрешение HTTP и усилил media safety`.
 
-## Файлы
+## Файлы fix round 1
 
-- `src/postify/adapters/http/__init__.py`
 - `src/postify/adapters/http/public_url_policy.py`
 - `src/postify/adapters/articles/http_article_extractor.py`
 - `src/postify/adapters/media/local_media_provider.py`
+- `pyproject.toml`
+- `uv.lock`
 
-## Проверки
+## TDD и проверки
 
-- Focused: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q` — 47 passed.
-- Полный: `uv run pytest -m 'not integration' -q` — 275 passed, 16 failed, 41 deselected. Сбои находятся вне границ Task 4A: незавершённые AI, application ports и domain content; один integration-узел ожидает изменение `bootstrap.py`, запрещённое brief.
+- Исходный узкий RED: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q -k 'cannot_be_constructed or invalid_port or public_network_backend or intermediate_symlink or cleanup_normalizes or owns_og_twitter'` — 12 failed, 47 deselected.
+- Mandatory policy GREEN: `uv run pytest tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q -k cannot_be_constructed` — 4 passed, 30 deselected.
+- URL/backend GREEN: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py -q -k 'invalid_port or forbidden_dns_answer or accepts_only or public_network_backend'` — 17 passed, 8 deselected.
+- Filesystem/priority GREEN: `uv run pytest tests/unit/adapters/media/test_local_media_provider.py -q -k 'intermediate_symlink or cleanup_normalizes or owns_og_twitter'` — 3 passed, 16 deselected.
+- Scoped: `uv run pytest tests/unit/adapters/http/test_public_url_policy.py tests/unit/adapters/articles/test_http_article_extractor.py tests/unit/adapters/media/test_local_media_provider.py -q` — 59 passed.
+- Transport binding без сети: локальная проверка подтвердила `PublicHttpTransport._pool._network_backend is transport.network_backend`, общую policy и корректное закрытие transport.
+- Полный: `uv run pytest -m 'not integration' -q` — 287 passed, 17 failed, 41 deselected. Все 17 RED относятся к Task 4B/4C: 4 Codex, 8 ports/bootstrap, 1 process content, 4 domain content.
 - `uv run python -m compileall -q src` — успешно.
-- `uv run ruff check src` — успешно.
+- `uv run ruff check src` — успешно, `All checks passed!`.
 - `git diff --check` — успешно.
 
 ## Self-review
 
-- URL policy отвергает небезопасные схемы, userinfo, пустой или некорректный DNS и любой непубличный адрес без раскрытия URL.
-- Article и media при внедрённой policy проверяют URL до открытия stream, отключают redirects и читают тело только chunks с ранней проверкой Content-Length.
-- Media записывает допустимые файлы через временный файл и atomic replace; delete и cleanup не затрагивают symlink или путь вне root.
-- HTML отдаёт один приоритетный источник текста и группирует изображения по `og`, `twitter`, `article` независимо от порядка DOM.
+- `url_policy` обязательна и отвергает `None` в обоих адаптерах; обход проверки до HTTP исключён.
+- `validate()` форсирует `parsed.port` и диапазон до DNS; ошибки имеют только стабильный `unsafe_url` без URL/host и скрытой причины.
+- DNS перенесён на фактический `connect_tcp`: один resolver call на соединение, mixed/private/invalid ответы не доходят до socket, underlying backend получает проверенный IP.
+- `PublicHttpTransport` действительно устанавливает `PublicNetworkBackend` в httpcore pool. URL и origin hostname не переписываются, поэтому Host и TLS SNI остаются исходными.
+- Прямой production import `httpcore` отражён в `pyproject.toml` и `uv.lock`; локальная версия — `1.0.9`, `httpx` — `0.28.1`.
+- `delete()` проверяет lexical containment и каждый существующий компонент на symlink до unlink; target не удаляется.
+- `cleanup()` нормализует filesystem failures в `media_failed` без path и оставляет неудалённый файл для retry.
+- Media candidates стабильно сортируются самим provider по `og → twitter → article`.
 
 ## Concerns
 
-- Внедрение одной policy в bootstrap принадлежит следующему разрешённому срезу: текущий brief прямо запрещает менять `bootstrap.py`. Конструкторы обоих адаптеров уже принимают одинаковую injectable policy.
-
-## Fix round 1 после review `a51e845`
-
-Статус: `RED_READY`. Production не менялся.
-
-- `13` новых node ID и `12` усиленных DNS node ID дают ровно
-  `25 failed, 42 deselected` в узком Task 4A запуске.
-- Сохранённые article/media/public URL nodes отдельно:
-  `35 passed, 24 deselected`.
-- Focused Task 4A + bootstrap/ports: `32 failed, 35 passed`; из них
-  `7` — уже известные RED public ports/прежнего bootstrap wiring.
-- Полный non-integration: `41 failed, 263 passed, 41 deselected`:
-  `25` Task 4A RED + `16` известных Task 4B/4C RED.
-- PostgreSQL retained gate: `6 failed, 35 passed, 304 deselected`; шесть
-  RED без изменений относятся к Task 4C.
-- Сеть не вызывалась: HTTP остался на fake resolver,
-  `httpx.MockTransport` и fake underlying network backend.
-
-Контракты fix round:
-
-- `url_policy` — обязательная non-`None` dependency обоих адаптеров;
-  все позитивные tests теперь передают явный structurally-safe fake.
-- Отдельного `UserInputError` в проекте нет. Malformed/zero/overflow
-  port нормализуется существующим `UnsafePublicUrlError`
-  (`code=unsafe_url`) до resolver/HTTP, без URL/host в тексте.
-- DNS решается один раз в `PublicNetworkBackend`; underlying
-  `connect_tcp` получает тот же public IP, а hostname остаётся выше
-  backend для HTTP Host/TLS SNI. URL rewriting на IP не допускается.
-- `PublicHttpTransport` wiring в `_open_import_resources` зафиксирован
-  отдельным RED в `test_ports.py`, поскольку изменение
-  `bootstrap.py` лежит в Task 4B.
-- `delete` отвергает symlink в любом промежуточном компоненте,
-  даже если resolved target остаётся в media root.
-- Cleanup filesystem failure возвращает recoverable `MediaAcquireError`
-  с `code=media_failed` без absolute path; файл остаётся для retry.
-- `LocalMediaProvider` сам сортирует недоверенный вход
-  `og → twitter → article`; порядок parser не является его предусловием.
+- Два bootstrap RED остаются намеренно: обязательную policy и новый transport должен связать Task 4B; `bootstrap.py` запрещён текущим brief.
+- Остальные 15 full-gate RED принадлежат Task 4B/4C. В scoped Task 4A открытых замечаний нет.
