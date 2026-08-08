@@ -258,3 +258,43 @@ def test_bootstrap_keeps_codex_work_outside_repository_and_media_on_temp_collisi
     assert runner_calls == []
     assert not work.is_relative_to(repository.resolve())
     assert not work.is_relative_to(media.resolve())
+    assert not repository.resolve().is_relative_to(work)
+    assert not media.resolve().is_relative_to(work)
+
+
+@pytest.mark.parametrize("protected", ["repository", "media"])
+def test_bootstrap_rejects_codex_work_candidate_that_contains_protected_path(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    protected: str,
+) -> None:
+    # Поломка fix-round 2: candidate-ancestor проходит one-way check.
+    import postify.bootstrap as bootstrap
+
+    temp_root = tmp_path / "temp-root"
+    unsafe_candidate = temp_root / "postify-codex"
+    repository = (
+        unsafe_candidate / "repository"
+        if protected == "repository"
+        else tmp_path / "repository"
+    )
+    media = (
+        unsafe_candidate / "media" if protected == "media" else tmp_path / "media"
+    )
+    repository.mkdir(parents=True)
+    media.mkdir(parents=True)
+    monkeypatch.setattr(bootstrap.tempfile, "gettempdir", lambda: str(temp_root))
+
+    try:
+        work = bootstrap._codex_work_dir(repository, media).resolve()
+    except (RuntimeError, ValueError) as error:
+        assert str(repository) not in str(error)
+        assert str(media) not in str(error)
+        return
+
+    repository = repository.resolve()
+    media = media.resolve()
+    assert not work.is_relative_to(repository)
+    assert not work.is_relative_to(media)
+    assert not repository.is_relative_to(work)
+    assert not media.is_relative_to(work)

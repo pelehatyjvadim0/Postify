@@ -47,6 +47,48 @@ def _valid_output(attempt_ids: tuple[int, ...] = (17,)) -> dict[str, object]:
     }
 
 
+def _schema_accepts(schema: dict[str, object], value: object) -> bool:
+    if "const" in schema and value != schema["const"]:
+        return False
+    expected_type = schema.get("type")
+    type_checks = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "null": lambda item: item is None,
+    }
+    if isinstance(expected_type, str) and not type_checks[expected_type](value):
+        return False
+    if isinstance(value, str) and len(value) < int(schema.get("minLength", 0)):
+        return False
+    if "required" in schema and isinstance(value, dict):
+        if not set(schema["required"]).issubset(value):
+            return False
+    if "properties" in schema and isinstance(value, dict):
+        for name, child_schema in schema["properties"].items():
+            if name in value and not _schema_accepts(child_schema, value[name]):
+                return False
+    if "anyOf" in schema and not any(
+        _schema_accepts(child, value) for child in schema["anyOf"]
+    ):
+        return False
+    if "oneOf" in schema and sum(
+        _schema_accepts(child, value) for child in schema["oneOf"]
+    ) != 1:
+        return False
+    if "allOf" in schema and not all(
+        _schema_accepts(child, value) for child in schema["allOf"]
+    ):
+        return False
+    if "if" in schema:
+        branch = "then" if _schema_accepts(schema["if"], value) else "else"
+        if branch in schema and not _schema_accepts(schema[branch], value):
+            return False
+    return True
+
+
 def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path) -> None:
     # Поломка (gate 4): marker article body не передаётся в stdin Codex.
     AnalysisInput, _, CodexContentAnalyzer = _api()
@@ -60,11 +102,13 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
         output_path.write_text(json.dumps(_valid_output()), encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout="ignored", stderr="ignored")
 
+    repository = tmp_path / "repository"
+    work = tmp_path / "work"
     analyzer = CodexContentAnalyzer(
         runner=runner,
-        repository_cwd=tmp_path,
+        repository_cwd=repository,
         timeout_seconds=600,
-        work_dir=tmp_path,
+        work_dir=work,
     )
     result = analyzer.analyze([_input(AnalysisInput)], package_limit=3)
 
@@ -75,8 +119,7 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     assert "--ignore-user-config" in argv
     assert "--ignore-rules" in argv
     invocation = invocation_dirs[0]
-    assert invocation.parent == tmp_path
-    assert invocation != tmp_path
+    assert invocation.parent == work
     assert Path(argv[argv.index("--cd") + 1]) == invocation
     assert Path(argv[argv.index("--output-schema") + 1]).parent == invocation
     assert Path(argv[argv.index("--output-last-message") + 1]).parent == invocation
@@ -88,6 +131,45 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     assert MARKER in str(kwargs["input"])
     assert result.topics[0].attempt_id == 17
     assert not invocation.exists()
+
+
+@pytest.mark.parametrize(
+    "relationship",
+    ["equal", "work-inside-repository", "repository-inside-work"],
+)
+def test_codex_rejects_overlapping_repository_and_work_before_artifacts_or_runner(
+    tmp_path: Path,
+    relationship: str,
+) -> None:
+    # Поломка fix-round 2: invocation создаётся внутри repository overlap.
+    AnalysisInput, CodexAnalysisError, CodexContentAnalyzer = _api()
+    root = tmp_path / "operator-secret-overlap"
+    if relationship == "equal":
+        repository = work = root
+    elif relationship == "work-inside-repository":
+        repository, work = root, root / "work"
+    else:
+        work, repository = root, root / "repository"
+    repository.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
+    runner_calls: list[list[str]] = []
+
+    def forbidden_runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        runner_calls.append(argv)
+        raise AssertionError("runner не должен вызываться при overlap")
+
+    analyzer = CodexContentAnalyzer(forbidden_runner, repository, 600, work)
+
+    with pytest.raises(CodexAnalysisError) as caught:
+        analyzer.analyze([_input(AnalysisInput)], package_limit=1)
+
+    assert caught.value.code == "codex_failed"
+    assert "operator-secret" not in str(caught.value)
+    assert runner_calls == []
+    assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before
 
 
 @pytest.mark.parametrize(
@@ -113,6 +195,38 @@ def test_codex_rejects_invalid_json_unknown_id_and_source_url(
     analyzer = CodexContentAnalyzer(runner, tmp_path, 600, tmp_path)
     with pytest.raises(CodexAnalysisError):
         analyzer.analyze([_input(AnalysisInput)], package_limit=3)
+
+
+@pytest.mark.parametrize("selected", [0, 1])
+def test_codex_rejects_integer_selected_as_invalid_output(
+    tmp_path: Path,
+    selected: int,
+) -> None:
+    # Поломка fix-round 2: JSON integer проходит как bool.
+    AnalysisInput, CodexAnalysisError, CodexContentAnalyzer = _api()
+    payload = _valid_output()
+    topic = payload["topics"][0]
+    topic["selected"] = selected
+    topic["post_text"] = "Русский пост" if selected else None
+    topic["media_query"] = "database" if selected else None
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(
+        runner,
+        tmp_path / "repository",
+        600,
+        tmp_path / "work",
+    )
+
+    with pytest.raises(CodexAnalysisError) as caught:
+        analyzer.analyze([_input(AnalysisInput)], package_limit=1)
+
+    assert caught.value.code == "codex_invalid_output"
 
 
 def test_codex_failure_exposes_stable_code_without_stdout_stderr_or_prompt(
@@ -286,6 +400,27 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
     }
     assert topic_schema["properties"]["post_text"] == nullable_text
     assert topic_schema["properties"]["media_query"] == nullable_text
+    common = {
+        "attempt_id": 17,
+        "analysis": "Полный анализ",
+        "usefulness": 90,
+    }
+    assert _schema_accepts(
+        topic_schema,
+        {**common, "selected": True, "post_text": "Пост", "media_query": "db"},
+    )
+    assert _schema_accepts(
+        topic_schema,
+        {**common, "selected": False, "post_text": None, "media_query": None},
+    )
+    assert not _schema_accepts(
+        topic_schema,
+        {**common, "selected": True, "post_text": None, "media_query": None},
+    )
+    assert not _schema_accepts(
+        topic_schema,
+        {**common, "selected": False, "post_text": "Пост", "media_query": "db"},
+    )
     prompt = str(captured["prompt"])
     assert "на русском" in prompt.casefold()
     assert "кажд" in prompt.casefold() and "стать" in prompt.casefold()
@@ -368,8 +503,8 @@ def test_codex_concurrent_runs_use_distinct_directories_and_cleanup_both(
         )
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    shared_root = tmp_path / "repository-and-work"
-    analyzer = CodexContentAnalyzer(runner, shared_root, 600, shared_root)
+    work = tmp_path / "work"
+    analyzer = CodexContentAnalyzer(runner, tmp_path / "repository", 600, work)
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(
             executor.map(
@@ -380,5 +515,5 @@ def test_codex_concurrent_runs_use_distinct_directories_and_cleanup_both(
 
     assert [result.topics[0].attempt_id for result in results] == [17, 17]
     assert len(set(invocation_dirs)) == 2
-    assert all(path.parent == shared_root for path in invocation_dirs)
+    assert all(path.parent == work for path in invocation_dirs)
     assert all(not path.exists() for path in invocation_dirs)

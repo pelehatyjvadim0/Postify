@@ -219,6 +219,22 @@ def test_selected_analysis_requires_post_and_media_query(
         )
 
 
+@pytest.mark.parametrize("selected", [0, 1])
+def test_analyzed_topic_rejects_integer_selected(selected: int) -> None:
+    # Поломка fix-round 2: int принимается как bool.
+    api = _models_api()
+
+    with pytest.raises(api["ContentValidationError"]):
+        api["AnalyzedTopic"](
+            attempt_id=1,
+            analysis="Полный русский анализ",
+            usefulness=80,
+            selected=selected,
+            post_text="Русский пост" if selected else None,
+            media_query="database" if selected else None,
+        )
+
+
 def test_nonselected_analysis_keeps_analysis_without_package_fields() -> None:
     # Поломка re-review 8: nonselected article теряет анализ или требует фиктивный пост/media.
     api = _models_api()

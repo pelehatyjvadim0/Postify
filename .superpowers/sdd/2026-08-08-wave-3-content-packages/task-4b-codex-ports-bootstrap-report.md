@@ -4,6 +4,8 @@
 
 Production-срез завершён с concerns. Fix round 1 зафиксирован
 только RED-tests/evidence; пять findings требуют production GREEN.
+Fix round 2 зафиксирован только RED-tests/evidence: остались
+overlap, selector-schema и strict boolean findings.
 
 ## Изменённые файлы
 
@@ -86,3 +88,32 @@ cleanup failure, typed `PackageDraft` и два bootstrap collision cases.
 ### Concerns fix round 1
 
 Нет открытых concerns в scope fix round. Minor о falsy injected transport/policy намеренно не менялся, согласно findings.
+
+## RED fix round 2
+
+- База: `85800f2`; production не изменялся.
+- Baseline: Task 4B/domain `41 passed`; full non-integration `314 passed,
+  41 deselected`.
+- Task 4B/domain после regression-tests: `10 failed, 40 passed`.
+- Retained: `40 passed, 10 deselected`.
+- Full non-integration: `10 failed, 313 passed, 41 deselected`; все 10 RED
+  относятся к fix round 2.
+- Ruff для изменённых tests и `git diff --check` — успешно.
+
+Группы RED: 3 analyzer overlap (`equal`, work descendant, work ancestor),
+1 strict selector-schema, 2 bootstrap candidate-ancestor, 2 domain integer
+`selected` и 2 adapter integer `selected`.
+
+Контракты fix round 2:
+
+- analyzer санитизированно отказывает до runner и создания
+  artifacts при любом overlap repository/work;
+- topic сохраняет общие `properties`/`required`, а selector relation
+  проверяется по допустимым/запрещённым payload, не по точной
+  форме `oneOf`;
+- bootstrap candidate должен быть disjoint в обоих направлениях
+  с repository и media, иначе выбирается другой candidate или safe failure;
+- domain принимает только настоящий `bool`; raw `0`/`1` из adapter
+  нормализуются в `CodexAnalysisError(code="codex_invalid_output")`.
+
+Ни сеть, ни настоящий Codex не вызывались.
