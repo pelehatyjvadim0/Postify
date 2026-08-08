@@ -181,6 +181,50 @@ def test_run_once_does_not_hide_selection_contract_error_or_leak_candidate(monke
     assert "Закрытый материал" not in result.output
 
 
+def test_run_once_normalizes_runtime_error_from_execution_and_cleanup(monkeypatch) -> None:
+    # Поломка final fix: pipeline RuntimeError выходит из CLI без operator message.
+    from postify import cli
+
+    leaked_text = (
+        "pipeline failed at https://sentinel.invalid/private "
+        "in /srv/postify/SENTINEL-PATH with SENTINEL-SECRET"
+    )
+    successful_result = FakeRunOnceResult(
+        import_result=ImportResult(3, 2, 1),
+        selection_result=FakeSelectionResult(4, 3, 1, 0),
+    )
+
+    @contextmanager
+    def failing_context(phase: str):
+        if phase == "execute":
+            yield FakeRunOnce(error=RuntimeError(leaked_text))
+            return
+        yield FakeRunOnce(result=successful_result)
+        raise RuntimeError(leaked_text)
+
+    monkeypatch.setattr(cli, "Settings", settings)
+    results = []
+    for phase in ("execute", "cleanup"):
+        monkeypatch.setattr(
+            cli,
+            "open_run_once",
+            lambda configured_settings, phase=phase: failing_context(phase),
+        )
+
+        results.append(runner.invoke(cli.app, ["run-once"]))
+
+    for result in results:
+        assert result.exit_code != 0
+        assert result.output == "Не удалось выполнить отбор кандидатов\n"
+        assert not isinstance(result.exception, RuntimeError)
+        assert "Traceback" not in result.output
+        assert "sentinel.invalid" not in result.output
+        assert "SENTINEL-PATH" not in result.output
+        assert "SENTINEL-SECRET" not in result.output
+        assert leaked_text not in result.output
+        assert "Получено:" not in result.output
+
+
 @pytest.mark.parametrize("command", ["run-once", "start", "status", "stop"])
 def test_command_reports_invalid_profile_without_exposing_data_or_calling_boundaries(
     monkeypatch,

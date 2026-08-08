@@ -141,3 +141,18 @@ credits, retry, concurrency, review, CLI, media, rollback и wheel имеют
 Wave 3 нельзя закрывать, переходить к live proof, merge или удалению ветки.
 После исправлений нужны новые RED nodes для всех findings, повторная
 независимая проверка мутаций и полный GREEN.
+
+## Final fix-wave review: CLI error boundary
+
+Whole-branch review `b88ba02..caf37fd` подтвердил закрытие 12/12
+mutation gates и оставил один Important: `run-once` не нормализует
+`RuntimeError` из content pipeline и cleanup. На базе `caf37fd` добавлен
+один RED node через реальную Typer-команду и fake `open_run_once`
+boundary. Он отдельно давит на execute и cleanup внутри одного node.
+
+Baseline non-integration: `323 passed, 42 deselected`; focused:
+`1 failed`; retained: `323 passed, 43 deselected`; полный non-integration:
+`1 failed, 323 passed, 42 deselected`. RED возник по ожидаемой причине:
+CLI не печатает стабильное operator message и оставляет raw
+`RuntimeError` на CliRunner boundary. Production в RED-коммите не менялся;
+после GREEN допускается ровно один scoped re-review.
