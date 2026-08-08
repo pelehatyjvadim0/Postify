@@ -58,3 +58,24 @@ RED воспроизведён по ожидаемой причине: мето�
 сохраняет media, переводит attempt в `packaged`, выставляет `finished_at`
 и добавляет history row. Concurrency stress остаётся deferred minor и в этот
 round не включён.
+
+## Fix round 1: GREEN
+
+`complete_package()` после блокировки текущего package проверяет доменный
+переход `processing → requested status` через `validate_transition()` до любых
+`UPDATE`. Недопустимый `processing → processing` выбрасывает точный
+`InvalidContentTransition`, а rollback сохраняет package, media, attempt и
+history без изменений.
+
+| Проверка | Результат |
+| --- | --- |
+| Новый PostgreSQL node | `1 passed` |
+| Полный integration | `42 passed, 323 deselected` |
+| Полный non-integration | `323 passed, 42 deselected` |
+| `python -m compileall -q src` | успешно |
+| `ruff check src` | успешно |
+| `uv lock --check` | успешно |
+| `git diff --check` | успешно |
+
+Открытых Critical/Important нет. Отдельный concurrent complete/fail stress test
+остаётся deferred minor согласно findings и не входит в production fix round.

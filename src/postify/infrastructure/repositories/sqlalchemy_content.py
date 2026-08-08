@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from sqlalchemy import text
-from postify.domain.content.models import ContentPackage
+from postify.domain.content.models import ContentPackage, validate_transition
 from postify.domain.content.quota import QuotaState, choose_tier, consume_tier_credit
 from postify.application.ports.content_repository import PackageDraft
 
@@ -292,6 +292,7 @@ class SqlAlchemyContentRepository:
                     from postify.domain.content.models import InvalidContentTransition
 
                     raise InvalidContentTransition("invalid")
+                validate_transition(package.status, status)
                 attempt_id = package.attempt_id
                 s.execute(
                     text(
