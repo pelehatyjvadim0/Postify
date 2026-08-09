@@ -7,6 +7,10 @@
 - `tests/unit/adapters/telegram/test_bot_api.py`
 - `tests/integration/infrastructure/test_sqlalchemy_delivery.py`
 - `tests/integration/test_migrations.py`
+- `tests/unit/config/test_settings.py`
+- `tests/e2e/test_cli_publish_once.py`
+- `tests/e2e/test_systemd_installer.py`
+- `tests/unit/infrastructure/test_delivery_wheel.py`
 - `docs/development-loop/evidence/2026-08-09-wave-4-red.md`
 
 Production-файлы не менялись.
@@ -24,7 +28,11 @@ Production-файлы не менялись.
 - Application RED: `11 failed`; причина — отсутствует `postify.application.delivery`.
 - Telegram adapter RED: `10 failed`; причина — отсутствует `postify.adapters.telegram`.
 - `compileall` для новых/изменённых тестов: успех.
-- `TEST_DATABASE_URL`: missing. Integration RED не запускался и остаётся pending; DSN не выводился, `DATABASE_URL` для будущего запуска должен быть unset.
+- PostgreSQL/migrations: controller подтвердил на безопасной smoke DB `15 failed, 5 passed`; причины — только missing delivery module/schema. DSN не записан.
+- Config RED: `12 failed, 62 passed`; существующие 62 сценария GREEN.
+- CLI RED: `9 failed`; причина — нет `publish-once`.
+- Systemd RED: `5 failed, 13 passed`; существующие installer-сценарии GREEN, нет publish pair/четырёх copy.
+- Wheel RED: `1 failed`; чистый wheel собран, delivery modules/head отсутствуют.
 
 ## Self-review
 
@@ -36,5 +44,4 @@ Production-файлы не менялись.
 
 ## Concerns
 
-- По срочному приоритету оркестратора первый атомарный commit ограничен domain/application/adapter/repository/migration. Config/CLI/systemd/wheel ещё не вошли и должны быть добавлены следующим RED-проходом.
-- Integration semantics спроектированы и компилируются, но их фактический RED не подтверждён без безопасной test DB.
+- Live Telegram preflight не входит в RED-задачу.

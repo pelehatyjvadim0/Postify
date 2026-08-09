@@ -30,17 +30,15 @@ def write_fake_binaries(tmp_path: Path) -> tuple[Path, Path]:
         ),
         "install": (
             'printf "install %s\\n" "$*" >> "$COMMAND_LOG"\n'
-            'if [ "${FAIL_SECOND_INSTALL:-}" = "1" ] || [ "${INTERRUPT_AFTER_FIRST_INSTALL:-}" = "1" ]; then\n'
-            '  count=$(cat "$INSTALL_COUNT_FILE" 2>/dev/null || printf 0)\n'
-            '  count=$((count + 1))\n'
-            '  printf "%s" "$count" > "$INSTALL_COUNT_FILE"\n'
-            '  if [ "${FAIL_SECOND_INSTALL:-}" = "1" ] && [ "$count" = "2" ]; then exit 19; fi\n'
-            'fi\n'
+            'count=$(cat "$INSTALL_COUNT_FILE" 2>/dev/null || printf 0)\n'
+            'count=$((count + 1))\n'
+            'printf "%s" "$count" > "$INSTALL_COUNT_FILE"\n'
+            'if [ "${FAIL_INSTALL_AT:-0}" = "$count" ]; then exit 19; fi\n'
             'src=$4\n'
             'destination=$5\n'
             'mkdir -p "$(dirname "$destination")"\n'
             'cp "$src" "$destination"\n'
-            'if [ "${INTERRUPT_AFTER_FIRST_INSTALL:-}" = "1" ] && [ "$count" = "1" ]; then\n'
+            'if [ "${INTERRUPT_INSTALL_AT:-0}" = "$count" ]; then\n'
             '  kill -TERM "$PPID"\n'
             'fi\n'
         ),
@@ -58,8 +56,10 @@ def run_installer(
     project_dir: str | None = None,
     fail_verify: bool = False,
     fail_second_install: bool = False,
+    fail_install_at: int | None = None,
     fail_daemon_reload: bool = False,
     interrupt_after_first_install: bool = False,
+    interrupt_install_at: int | None = None,
     with_existing_units: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     binary_dir, log_file = write_fake_binaries(tmp_path)
@@ -70,8 +70,13 @@ def run_installer(
     destination = tmp_path / "systemd"
     if with_existing_units:
         destination.mkdir()
-        (destination / "postify-run-once.service").write_text("old service\n")
-        (destination / "postify-run-once.timer").write_text("old timer\n")
+        for name in (
+            "postify-run-once.service",
+            "postify-run-once.timer",
+            "postify-publish-once.service",
+            "postify-publish-once.timer",
+        ):
+            (destination / name).write_text(f"old {name}\n")
     command = [
         "sh",
         str(INSTALLER),
@@ -101,11 +106,15 @@ def run_installer(
     if fail_verify:
         environment["FAIL_VERIFY"] = "1"
     if fail_second_install:
-        environment["FAIL_SECOND_INSTALL"] = "1"
+        environment["FAIL_INSTALL_AT"] = "2"
+    if fail_install_at is not None:
+        environment["FAIL_INSTALL_AT"] = str(fail_install_at)
     if fail_daemon_reload:
         environment["FAIL_DAEMON_RELOAD"] = "1"
     if interrupt_after_first_install:
-        environment["INTERRUPT_AFTER_FIRST_INSTALL"] = "1"
+        environment["INTERRUPT_INSTALL_AT"] = "1"
+    if interrupt_install_at is not None:
+        environment["INTERRUPT_INSTALL_AT"] = str(interrupt_install_at)
     result = subprocess.run(command, capture_output=True, text=True, env=environment, check=False)
     return result, destination, log_file
 
@@ -194,8 +203,8 @@ def test_installer_restores_existing_units_when_second_copy_fails(tmp_path: Path
     )
 
     assert result.returncode != 0
-    assert (destination / "postify-run-once.service").read_text() == "old service\n"
-    assert (destination / "postify-run-once.timer").read_text() == "old timer\n"
+    assert (destination / "postify-run-once.service").read_text() == "old postify-run-once.service\n"
+    assert (destination / "postify-run-once.timer").read_text() == "old postify-run-once.timer\n"
 
 
 @pytest.mark.parametrize("failure", ["signal", "daemon-reload"])
@@ -211,7 +220,57 @@ def test_installer_restores_existing_units_when_finalization_fails(
     )
 
     assert result.returncode != 0
-    assert (destination / "postify-run-once.service").read_text() == "old service\n"
-    assert (destination / "postify-run-once.timer").read_text() == "old timer\n"
+    assert (destination / "postify-run-once.service").read_text() == "old postify-run-once.service\n"
+    assert (destination / "postify-run-once.timer").read_text() == "old postify-run-once.timer\n"
     if failure == "daemon-reload":
         assert log_file.read_text().splitlines().count("systemctl daemon-reload") == 2
+
+
+def test_installer_creates_separate_publish_units_and_verifies_all_before_copy(
+    tmp_path: Path,
+) -> None:
+    # Поломка: publish делит run-once unit, не имеет трёх slots или copy идёт до verify.
+    result, destination, log_file = run_installer(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    service = (destination / "postify-publish-once.service").read_text()
+    timer = (destination / "postify-publish-once.timer").read_text()
+    assert "Type=oneshot" in service
+    assert "ExecStart=/usr/bin/python3 -m postify.cli publish-once" in service
+    assert "SyslogIdentifier=postify-publish" in service
+    assert timer.count("OnCalendar=") == 3
+    assert "OnCalendar=Mon..Fri 09:00" in timer
+    assert "OnCalendar=Mon..Fri 13:00" in timer
+    assert "OnCalendar=Mon..Fri 18:00" in timer
+    assert "Unit=postify-publish-once.service" in timer
+    lines = log_file.read_text().splitlines()
+    verify_index = next(index for index, line in enumerate(lines) if line.startswith("systemd-analyze verify "))
+    first_copy = next(index for index, line in enumerate(lines) if line.startswith("install "))
+    assert verify_index < first_copy
+    assert all(name in lines[verify_index] for name in (
+        "postify-run-once.service", "postify-run-once.timer",
+        "postify-publish-once.service", "postify-publish-once.timer",
+    ))
+
+
+@pytest.mark.parametrize("install_index", [1, 2, 3, 4])
+@pytest.mark.parametrize("failure", ["copy", "signal"])
+def test_installer_rolls_back_all_four_units_after_each_partial_failure(
+    tmp_path: Path, install_index: int, failure: str
+) -> None:
+    # Поломка: любой copy/signal оставляет смешанную версию четырёх unit.
+    result, destination, _ = run_installer(
+        tmp_path,
+        fail_install_at=install_index if failure == "copy" else None,
+        interrupt_install_at=install_index if failure == "signal" else None,
+        with_existing_units=True,
+    )
+
+    assert result.returncode != 0
+    for name in (
+        "postify-run-once.service",
+        "postify-run-once.timer",
+        "postify-publish-once.service",
+        "postify-publish-once.timer",
+    ):
+        assert (destination / name).read_text() == f"old {name}\n"

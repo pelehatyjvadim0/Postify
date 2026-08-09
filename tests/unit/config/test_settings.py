@@ -39,6 +39,12 @@ REQUIRED_ENVIRONMENT = {
     "CONTENT_ARTICLE_MAX_BYTES": "2000000",
     "CONTENT_MEDIA_MAX_BYTES": "10000000",
     "CONTENT_CODEX_TIMEOUT_SECONDS": "600",
+    "TELEGRAM_BOT_TOKEN": "123456:test-token",
+    "TELEGRAM_CHAT_ID": "-100123456789",
+    "TELEGRAM_TIMEOUT_SECONDS": "10",
+    "TELEGRAM_ON_CALENDAR_MORNING": "*-*-* 09:00:00",
+    "TELEGRAM_ON_CALENDAR_DAY": "*-*-* 13:00:00",
+    "TELEGRAM_ON_CALENDAR_EVENING": "*-*-* 18:00:00",
 }
 
 
@@ -67,6 +73,15 @@ CONTENT_REQUIRED_NAMES = [
     "CONTENT_ARTICLE_MAX_BYTES",
     "CONTENT_MEDIA_MAX_BYTES",
     "CONTENT_CODEX_TIMEOUT_SECONDS",
+]
+
+TELEGRAM_REQUIRED_NAMES = [
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_TIMEOUT_SECONDS",
+    "TELEGRAM_ON_CALENDAR_MORNING",
+    "TELEGRAM_ON_CALENDAR_DAY",
+    "TELEGRAM_ON_CALENDAR_EVENING",
 ]
 
 
@@ -346,6 +361,66 @@ def test_settings_requires_content_shares_to_sum_to_one_hundred(
 def test_settings_requires_absolute_content_media_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     # Поломка: относительный media root пишет файлы в зависящее от cwd место.
     set_required_environment(monkeypatch, CONTENT_MEDIA_DIR="var/lib/postify/media")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_settings_exposes_all_six_telegram_values_without_plain_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Поломка: delivery получает hardcode/default или token как обычную строку.
+    from pydantic import SecretStr
+
+    set_required_environment(monkeypatch)
+    settings = Settings()
+
+    assert isinstance(settings.telegram_bot_token, SecretStr)
+    assert settings.telegram_bot_token.get_secret_value() == "123456:test-token"
+    assert settings.telegram_chat_id == "-100123456789"
+    assert settings.telegram_timeout_seconds == 10
+    assert settings.telegram_on_calendar_morning == "*-*-* 09:00:00"
+    assert settings.telegram_on_calendar_day == "*-*-* 13:00:00"
+    assert settings.telegram_on_calendar_evening == "*-*-* 18:00:00"
+    assert "test-token" not in repr(settings)
+
+
+@pytest.mark.parametrize("missing_name", TELEGRAM_REQUIRED_NAMES)
+def test_settings_requires_each_telegram_value(
+    monkeypatch: pytest.MonkeyPatch, missing_name: str
+) -> None:
+    # Поломка: неполная Telegram-конфигурация доходит до БД/сети.
+    set_required_environment(monkeypatch)
+    monkeypatch.delenv(missing_name)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1"])
+def test_settings_requires_positive_telegram_timeout(
+    monkeypatch: pytest.MonkeyPatch, timeout: str
+) -> None:
+    # Поломка: нулевой/отрицательный timeout проходит к HTTP client.
+    set_required_environment(monkeypatch, TELEGRAM_TIMEOUT_SECONDS=timeout)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize(
+    "calendar_name",
+    [
+        "TELEGRAM_ON_CALENDAR_MORNING",
+        "TELEGRAM_ON_CALENDAR_DAY",
+        "TELEGRAM_ON_CALENDAR_EVENING",
+    ],
+)
+def test_settings_rejects_blank_telegram_calendar(
+    monkeypatch: pytest.MonkeyPatch, calendar_name: str
+) -> None:
+    # Поломка: whitespace-only слот выглядит настроенным.
+    set_required_environment(monkeypatch, **{calendar_name: "   "})
 
     with pytest.raises(ValidationError):
         Settings()
