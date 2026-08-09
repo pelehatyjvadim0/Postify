@@ -232,3 +232,19 @@ def test_run_once_uses_its_own_operation_and_failure_codes() -> None:
 
     assert events[0] == ("start", "run_once", STARTED)
     assert events[-1] == ("fail", 41, "run_once_failed", FINISHED)
+
+
+def test_invalid_callable_success_outcome_does_not_reach_journal() -> None:
+    # Поломка: callable сохраняет arbitrary outcome вместо fixed vocabulary.
+    events: list[tuple[object, ...]] = []
+
+    recorded = _recorded(
+        FakeAction(events, result=object()),
+        FakeJournal(events),
+        success_outcome=lambda _: "private payload",
+    )
+
+    with pytest.raises(ValueError, match="outcome"):
+        recorded.execute()
+
+    assert events == [("start", "publish_once", STARTED), ("action",)]

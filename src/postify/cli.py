@@ -308,6 +308,7 @@ def _render_status(report) -> tuple[str, ...]:
     lines.append("Проблемы")
     lines += [
         f"  {item.severity.upper()} {item.code}: count={item.count}"
+        + (f"; ids={','.join(str(value) for value in item.ids)}" if item.ids else "")
         for item in report.signals
     ] or ["  Проблем нет"]
     return tuple(lines)
@@ -356,7 +357,7 @@ def status() -> None:
             report = action.execute(runtime)
         lines = list(_render_status(report))
         # _render_status receives only report in tests; retain probed facts for real CLI.
-        lines[1:1] = list(_render_runtime(runtime, migrations="head")[1:])
+        lines[:2] = _render_runtime(runtime, migrations="head")
     except (SQLAlchemyError, OSError, RuntimeError, CommandError) as error:
         code = (
             str(error)

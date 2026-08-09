@@ -16,6 +16,29 @@ class OperationStatus(StrEnum):
     FAILED = "failed"
 
 
+OPERATION_OUTCOMES = {
+    OperationKind.RUN_ONCE: frozenset({"completed"}),
+    OperationKind.PUBLISH_ONCE: frozenset(
+        {
+            "empty",
+            "published",
+            "cleanup_completed",
+            "cleanup_pending",
+            "retryable",
+            "failed",
+            "uncertain",
+        }
+    ),
+}
+
+
+def validate_operation_outcome(operation: OperationKind | str, outcome: str) -> str:
+    kind = OperationKind(operation)
+    if outcome not in OPERATION_OUTCOMES[kind]:
+        raise ValueError("Недопустимый outcome операции")
+    return outcome
+
+
 def _positive(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} должен быть положительным")
@@ -91,11 +114,21 @@ class OperationRunSummary:
         if status is OperationStatus.RUNNING:
             valid = terminal == (None, None, None)
         elif status is OperationStatus.SUCCEEDED:
-            valid = bool(self.outcome and self.outcome.strip()) and self.failure_code is None and self.finished_at is not None
+            valid = (
+                bool(self.outcome and self.outcome.strip())
+                and self.failure_code is None
+                and self.finished_at is not None
+            )
         else:
-            valid = self.outcome is None and bool(self.failure_code and self.failure_code.strip()) and self.finished_at is not None
+            valid = (
+                self.outcome is None
+                and bool(self.failure_code and self.failure_code.strip())
+                and self.finished_at is not None
+            )
         if not valid:
             raise ValueError("Некорректные terminal поля operation run")
+        if status is OperationStatus.SUCCEEDED:
+            validate_operation_outcome(operation, self.outcome)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,9 +151,21 @@ class RawOperationalSnapshot:
     latest_operation_runs: tuple[OperationRunSummary, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("candidate_total", "daily_analyses_started", "daily_packages_created", "published_today"):
+        for name in (
+            "candidate_total",
+            "daily_analyses_started",
+            "daily_packages_created",
+            "published_today",
+        ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 0:
                 raise ValueError(f"{name} не может быть отрицательным")
-        for name in ("candidate_undecided_ids", "delivery_ready_ids", "pending_cleanup_ids", "selected_without_attempt_ids"):
-            if any(type(value) is not int or value <= 0 for value in getattr(self, name)):
+        for name in (
+            "candidate_undecided_ids",
+            "delivery_ready_ids",
+            "pending_cleanup_ids",
+            "selected_without_attempt_ids",
+        ):
+            if any(
+                type(value) is not int or value <= 0 for value in getattr(self, name)
+            ):
                 raise ValueError(f"{name} содержит неположительный ID")

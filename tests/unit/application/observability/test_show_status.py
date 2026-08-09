@@ -22,7 +22,13 @@ def _api():
         RawOperationalSnapshot,
     )
 
-    return GroupedState, OperationRunSummary, RawOperationalSnapshot, RuntimeSnapshot, ShowOperationalStatus
+    return (
+        GroupedState,
+        OperationRunSummary,
+        RawOperationalSnapshot,
+        RuntimeSnapshot,
+        ShowOperationalStatus,
+    )
 
 
 class SnapshotRepository:
@@ -257,7 +263,9 @@ def test_persisted_operational_problem_emits_safe_signal(
     expected_ids: tuple[int, ...],
 ) -> None:
     # Поломка: persisted failure/backlog не виден или сигнал не указывает entity ID.
-    value = expected_ids if state_code is None else (_group(state_code, ids=expected_ids),)
+    value = (
+        expected_ids if state_code is None else (_group(state_code, ids=expected_ids),)
+    )
     result, _ = report(raw_snapshot(**{category: value}))
 
     signal = _signal(result, signal_code)
@@ -318,3 +326,44 @@ def test_healthy_snapshot_is_pure_and_has_no_problem_signals() -> None:
     assert repository.value is snapshot
     assert len(repository.calls) == 1
     assert result.signals == ()
+
+
+def test_empty_snapshot_has_all_fixed_zero_entity_groups_in_design_order() -> None:
+    # Поломка: empty DB рендерит пустые content/packages/delivery вместо явных нулей.
+    result, _ = report(raw_snapshot(published_today=3))
+
+    assert tuple(item.code for item in result.content_attempts) == (
+        "processing",
+        "retry_scheduled",
+        "failed",
+        "analyzed_not_selected",
+        "packaged",
+    )
+    assert tuple(item.count for item in result.content_attempts) == (0, 0, 0, 0, 0)
+    assert tuple(item.code for item in result.packages) == (
+        "processing",
+        "awaiting_review",
+        "approved",
+        "rejected",
+        "failed",
+        "published",
+    )
+    assert tuple(item.code for item in result.delivery) == (
+        "ready",
+        "sending",
+        "retryable",
+        "failed",
+        "uncertain",
+        "published",
+        "cleanup_pending",
+    )
+
+
+def test_fixed_group_normalization_keeps_unknown_persisted_group() -> None:
+    # Поломка: zero-fill скрывает неизвестный persisted status.
+    result, _ = report(
+        raw_snapshot(content_attempts=(_group("future_attempt", ids=(31,)),))
+    )
+
+    assert result.content_attempts[-1].code == "future_attempt"
+    assert result.content_attempts[-1].ids == (31,)

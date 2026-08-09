@@ -165,3 +165,21 @@ def test_operation_run_summary_accepts_each_consistent_state(
         failure_code,
         finished_at,
     )
+
+
+@pytest.mark.parametrize(
+    ("operation", "outcome"),
+    [
+        ("run_once", "published"),
+        ("publish_once", "completed"),
+        ("publish_once", "free_text"),
+    ],
+)
+def test_operation_run_summary_rejects_outcome_outside_operation_vocabulary(
+    operation: str, outcome: str
+) -> None:
+    # Поломка: произвольный successful outcome попадает в durable report.
+    _, _, _, OperationRun, *_ = _models()
+
+    with pytest.raises(ValueError, match="outcome"):
+        OperationRun(4, operation, "succeeded", outcome, None, NOW, started_at=NOW)

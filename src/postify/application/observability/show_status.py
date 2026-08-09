@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -130,6 +130,7 @@ class ShowOperationalStatus:
             day_end=end_local.astimezone(UTC),
             limit=10,
         )
+        snapshot = self._with_fixed_groups(snapshot)
         coverage = snapshot.published_today + len(snapshot.delivery_ready_ids)
         deficit = max(self.daily_target - coverage, 0)
         reasons = self._reasons(snapshot, deficit)
@@ -143,6 +144,43 @@ class ShowOperationalStatus:
             reasons,
             self._signals(snapshot, runtime),
         )
+
+    @staticmethod
+    def _with_fixed_groups(snapshot: RawOperationalSnapshot) -> RawOperationalSnapshot:
+        expected = {
+            "content_attempts": (
+                "processing",
+                "retry_scheduled",
+                "failed",
+                "analyzed_not_selected",
+                "packaged",
+            ),
+            "packages": (
+                "processing",
+                "awaiting_review",
+                "approved",
+                "rejected",
+                "failed",
+                "published",
+            ),
+            "delivery": (
+                "ready",
+                "sending",
+                "retryable",
+                "failed",
+                "uncertain",
+                "published",
+                "cleanup_pending",
+            ),
+        }
+        values: dict[str, tuple[GroupedState, ...]] = {}
+        for field, codes in expected.items():
+            persisted = getattr(snapshot, field)
+            by_code = {item.code: item for item in persisted}
+            values[field] = tuple(
+                by_code.get(code, GroupedState(code, 0)) for code in codes
+            ) + tuple(item for item in persisted if item.code not in codes)
+        return replace(snapshot, **values)
 
     def _reasons(self, s: RawOperationalSnapshot, deficit: int) -> tuple[str, ...]:
         if not deficit:

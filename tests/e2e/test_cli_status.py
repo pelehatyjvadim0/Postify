@@ -36,12 +36,18 @@ class FakeSystemd:
         }[unit]
 
     def timer_properties(self) -> dict[str, str]:
-        return {"LastTriggerUSec": "2026-08-09T09:00:00+03:00", "NextElapseUSecRealtime": "2026-08-09T12:00:00+03:00"}
+        return {
+            "LastTriggerUSec": "2026-08-09T09:00:00+03:00",
+            "NextElapseUSecRealtime": "2026-08-09T12:00:00+03:00",
+        }
 
     def publish_timer_properties(self) -> dict[str, str]:
         if self.failing_unit == "postify-publish-once.timer":
             raise OSError("SENTINEL publish timer stderr")
-        return {"LastTriggerUSec": "2026-08-09T08:00:00+03:00", "NextElapseUSecRealtime": "2026-08-09T11:00:00+03:00"}
+        return {
+            "LastTriggerUSec": "2026-08-09T08:00:00+03:00",
+            "NextElapseUSecRealtime": "2026-08-09T11:00:00+03:00",
+        }
 
 
 class FakeStatusAction:
@@ -69,10 +75,20 @@ def _report(*, signals=()):
         candidate_total=9,
         candidate_undecided=0,
         candidate_decisions=(group("selected", 9), group("rejected", 0)),
-        content_attempts=(group("processing", 1), group("failed", 0), group("packaged", 1)),
-        packages=(group("awaiting_review", 1), group("approved", 0), group("published", 1)),
+        content_attempts=(
+            group("processing", 1),
+            group("failed", 0),
+            group("packaged", 1),
+        ),
+        packages=(
+            group("awaiting_review", 1),
+            group("approved", 0),
+            group("published", 1),
+        ),
         delivery=(group("ready", 0), group("published", 1), group("uncertain", 0)),
-        latest_packages=(SimpleNamespace(package_id=1, status="published", created_at=NOW),),
+        latest_packages=(
+            SimpleNamespace(package_id=1, status="published", created_at=NOW),
+        ),
         latest_delivery_attempts=(
             SimpleNamespace(
                 package_id=1,
@@ -112,7 +128,9 @@ def _configure(monkeypatch, *, action, systemd=None, database_ready=True, at_hea
         "TelegramSettings",
         lambda: (_ for _ in ()).throw(AssertionError("status must not load Telegram")),
     )
-    monkeypatch.setattr(cli, "create_systemd_controller", lambda configured: systemd or FakeSystemd())
+    monkeypatch.setattr(
+        cli, "create_systemd_controller", lambda configured: systemd or FakeSystemd()
+    )
     monkeypatch.setattr(cli, "database_is_ready", lambda configured: database_ready)
     monkeypatch.setattr(cli, "candidate_count", lambda configured: 9)
     monkeypatch.setattr(cli, "migrations_at_head", lambda configured: at_head)
@@ -125,7 +143,9 @@ def _configure(monkeypatch, *, action, systemd=None, database_ready=True, at_hea
     return cli
 
 
-def test_status_prints_complete_deterministic_report_without_sensitive_fields(monkeypatch) -> None:
+def test_status_prints_complete_deterministic_report_without_sensitive_fields(
+    monkeypatch,
+) -> None:
     # Поломка: CLI опускает section/zero/history/deficit или печатает DB payload.
     action = FakeStatusAction(_report())
     cli = _configure(monkeypatch, action=action)
@@ -159,10 +179,18 @@ def test_status_prints_complete_deterministic_report_without_sensitive_fields(mo
     assert len(action.runtimes) == 1
 
 
-def test_one_systemd_probe_failure_keeps_database_snapshot_and_safe_signal(monkeypatch) -> None:
+def test_one_systemd_probe_failure_keeps_database_snapshot_and_safe_signal(
+    monkeypatch,
+) -> None:
     # Поломка: one systemd failure скрывает DB или утекает stderr/unit argv.
     action = FakeStatusAction(
-        _report(signals=(SimpleNamespace(severity="warning", code="systemd_probe_failed", count=1, ids=()),))
+        _report(
+            signals=(
+                SimpleNamespace(
+                    severity="warning", code="systemd_probe_failed", count=1, ids=()
+                ),
+            )
+        )
     )
     cli = _configure(
         monkeypatch,
@@ -180,7 +208,9 @@ def test_one_systemd_probe_failure_keeps_database_snapshot_and_safe_signal(monke
     assert "/private/path" not in result.output
 
 
-def test_database_unavailable_prints_systemd_partial_report_and_safe_error(monkeypatch) -> None:
+def test_database_unavailable_prints_systemd_partial_report_and_safe_error(
+    monkeypatch,
+) -> None:
     # Поломка: DB failure выдумывает counts, теряет systemd facts или печатает DSN.
     action = FakeStatusAction(_report())
     cli = _configure(monkeypatch, action=action, database_ready=False)
@@ -209,3 +239,29 @@ def test_migration_not_at_head_prints_partial_report_and_exits_one(monkeypatch) 
     assert "migration_not_at_head" in result.output
     assert "import timer: active" in result.output
     assert action.runtimes == []
+
+
+def test_status_full_report_has_one_postgresql_row_and_renders_signal_ids(
+    monkeypatch,
+) -> None:
+    # Поломка: runtime prepend дублирует PostgreSQL или теряет безопасные IDs сигнала.
+    action = FakeStatusAction(
+        _report(
+            signals=(
+                SimpleNamespace(
+                    severity="warning", code="delivery_failed", count=2, ids=(42, 41)
+                ),
+                SimpleNamespace(
+                    severity="warning", code="systemd_probe_failed", count=1, ids=()
+                ),
+            )
+        )
+    )
+    cli = _configure(monkeypatch, action=action)
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert result.exit_code == 0
+    assert result.output.count("PostgreSQL: доступна; migrations=head") == 1
+    assert "WARNING delivery_failed: count=2; ids=42,41" in result.output
+    assert "WARNING systemd_probe_failed: count=1\n" in result.output
