@@ -87,3 +87,21 @@ selected/nonselected behavioral assertions сохранены.
 
 Production не изменялся; сеть и настоящий Codex в RED-проходе не
 вызывались.
+
+## Round 2 GREEN evidence
+
+На базе `9d5021da17ce84e3a37efe82fe242bd4cfe6c905` изменены только оба
+discriminator leaves: selected branch использует
+`{"type": "boolean", "const": true}`, unselected branch —
+`{"type": "boolean", "const": false}`. Остальная schema, runtime parser и
+domain validation не менялись.
+
+Локальная верификация без реального `codex exec` и без сетевых вызовов:
+
+- focused node: `1 passed`;
+- `tests/unit/adapters/ai/test_codex_content_analyzer.py`: `16 passed`;
+- `uv run pytest -m 'not integration' -q`: `327 passed, 42 deselected`;
+- `TEST_DATABASE_URL=postgresql+psycopg://user@127.0.0.1:55432/postify_test uv run pytest -m integration -q`:
+  `42 passed, 327 deselected`;
+- `uv run python -m compileall -q src`, `uv run ruff check src`,
+  `uv lock --check`, `git diff --check`: GREEN.

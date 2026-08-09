@@ -136,7 +136,7 @@ class CodexContentAnalyzer:
             "required": required,
             "properties": {
                 **common_properties,
-                "selected": {"const": True},
+                "selected": {"type": "boolean", "const": True},
                 "post_text": {"type": "string", "minLength": 1},
                 "media_query": {"type": "string", "minLength": 1},
             },
@@ -147,7 +147,7 @@ class CodexContentAnalyzer:
             "required": required,
             "properties": {
                 **common_properties,
-                "selected": {"const": False},
+                "selected": {"type": "boolean", "const": False},
                 "post_text": {"type": "null"},
                 "media_query": {"type": "null"},
             },
