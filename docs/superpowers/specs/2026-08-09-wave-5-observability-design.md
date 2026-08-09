@@ -305,14 +305,18 @@ Live acceptance выполняется на существующей smoke DB б
 
 1. до upgrade подтвердить package `1`, delivery `published`, одну attempt и
    `message_id=6`, не печатая DSN или credentials;
-2. выполнить `04 → 05`, реальный `postify status` и увидеть package `1`,
-   `published`, attempt `1`, `message_id=6`, дневной deficit и безопасные
-   operational signals;
-3. повторным read-only запросом подтвердить, что сам `status` не изменил число
-   delivery attempts, `message_id` или состояние package/delivery;
-4. downgrade `05 → 04` и повторный upgrade должны сохранить Wave 4 данные;
-5. повторный `status` должен дать тот же delivery fact и добавить только
-   доказанные operation runs.
+2. выполнить `04 → 05`, затем реальный `publish-once` с переданной только в
+   process Telegram-конфигурацией: уже опубликованный package `1` означает
+   пустую очередь, outcome `empty`, Telegram adapter не вызывается, а
+   delivery attempt count и `message_id` не меняются;
+3. реальный `postify status` должен показать package `1`, `published`, attempt
+   `1`, `message_id=6`, сохранённый успешный operation run с outcome `empty`,
+   дневной deficit и безопасные operational signals;
+4. повторным read-only запросом подтвердить, что каждый вызов `status` не
+   создал operation run и вообще не изменил ни одной строки;
+5. downgrade `05 → 04` и повторный upgrade должны сохранить все Wave 4 данные;
+   удаление Wave 5 operation runs при downgrade соответствует rollback новой
+   таблицы, а финальный `status` не выдумывает утраченный при rollback запуск.
 
 До live proof Wave 5 не объявляется принятой. Merge в `main`, повторный gate на
 `main`, удаление ветки/worktree и cleanup выполняет корневой оркестратор.
