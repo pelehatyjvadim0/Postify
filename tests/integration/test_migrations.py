@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from alembic import command
 from alembic.config import Config
+from datetime import UTC, datetime
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 
 pytestmark = pytest.mark.integration
@@ -270,3 +271,151 @@ def test_telegram_delivery_migration_downgrades_to_wave_three_and_upgrades_again
         )
     finally:
         engine.dispose()
+
+
+def test_operation_runs_migration_has_exact_named_schema(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка: Wave 5 таблица теряет column, timezone или именованный invariant.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        inspector = inspect(engine)
+        assert "operation_runs" in inspector.get_table_names()
+        columns = {
+            item["name"]: item for item in inspector.get_columns("operation_runs")
+        }
+        assert set(columns) == {
+            "id",
+            "operation",
+            "status",
+            "outcome",
+            "failure_code",
+            "started_at",
+            "finished_at",
+        }
+        assert columns["id"]["type"].__class__.__name__ == "BIGINT"
+        assert columns["started_at"]["type"].timezone is True
+        assert columns["finished_at"]["type"].timezone is True
+        assert {name for name, column in columns.items() if column["nullable"]} == {
+            "outcome",
+            "failure_code",
+            "finished_at",
+        }
+        checks = {
+            item["name"]: item["sqltext"].casefold()
+            for item in inspector.get_check_constraints("operation_runs")
+        }
+        assert set(checks) == {
+            "ck_operation_runs_operation",
+            "ck_operation_runs_status",
+            "ck_operation_runs_terminal_fields",
+        }
+        assert all(code in checks["ck_operation_runs_operation"] for code in (
+            "run_once", "publish_once"
+        ))
+        assert all(code in checks["ck_operation_runs_status"] for code in (
+            "running", "succeeded", "failed"
+        ))
+        terminal = checks["ck_operation_runs_terminal_fields"]
+        assert all(field in terminal for field in (
+            "outcome", "failure_code", "finished_at"
+        ))
+    finally:
+        engine.dispose()
+
+
+def test_operation_runs_upgrade_downgrade_reupgrade_preserves_wave_four_fixture(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка: 04→05→04→05 удаляет package/delivery/attempt или message_id=6.
+    command.upgrade(alembic_config, "20260809_04")
+    engine = create_engine(isolated_database_url)
+    now = datetime(2026, 8, 9, 9, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            candidate_id = connection.execute(
+                text(
+                    "INSERT INTO candidates "
+                    "(id,source_name,source_id,title,url,discovered_at,raw_payload) "
+                    "VALUES (1,'hn','wave4','Wave 4','https://source.test/1',:now,'{}'::jsonb) "
+                    "RETURNING id"
+                ),
+                {"now": now},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO candidate_decisions "
+                    "(id,candidate_id,status,reason,explanation,signals,policy_version,decided_at) "
+                    "VALUES (1,:candidate_id,'selected','eligible_for_ai','safe','{}'::jsonb,'v1',:now)"
+                ),
+                {"candidate_id": candidate_id, "now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO content_attempts "
+                    "(id,candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
+                    "analysis,started_at,finished_at) VALUES "
+                    "(1,:candidate_id,1,'fresh','packaged','https://source.test/1','title',"
+                    "'article','analysis',:now,:now)"
+                ),
+                {"candidate_id": candidate_id, "now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO content_packages "
+                    "(id,attempt_id,source_url,context,analysis,post_text,review_required,status,"
+                    "created_at,updated_at) VALUES "
+                    "(1,1,'https://source.test/1','context','analysis','post',true,'published',:now,:now)"
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO telegram_deliveries "
+                    "(id,package_id,status,attempt_no,message_id,sending_started_at,confirmed_at,"
+                    "media_deleted_at,created_at,updated_at) "
+                    "VALUES (1,1,'published',1,6,:now,:now,:now,:now,:now)"
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO telegram_delivery_attempts "
+                    "(id,delivery_id,attempt_no,outcome,started_at,finished_at,message_id) "
+                    "VALUES (1,1,1,'published',:now,:now,6)"
+                ),
+                {"now": now},
+            )
+    finally:
+        engine.dispose()
+
+    def wave_four_fixture() -> tuple[object, ...]:
+        current_engine = create_engine(isolated_database_url)
+        try:
+            with current_engine.connect() as connection:
+                return connection.execute(
+                    text(
+                        "SELECT p.id,p.status,d.status,d.message_id,a.attempt_no,a.message_id "
+                        "FROM content_packages p "
+                        "JOIN telegram_deliveries d ON d.package_id=p.id "
+                        "JOIN telegram_delivery_attempts a ON a.delivery_id=d.id "
+                        "WHERE p.id=1"
+                    )
+                ).one()
+        finally:
+            current_engine.dispose()
+
+    expected = (1, "published", "published", 6, 1, 6)
+    assert wave_four_fixture() == expected
+    command.upgrade(alembic_config, "20260809_05")
+    assert wave_four_fixture() == expected
+    command.downgrade(alembic_config, "20260809_04")
+    assert wave_four_fixture() == expected
+    engine = create_engine(isolated_database_url)
+    try:
+        assert "operation_runs" not in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+    command.upgrade(alembic_config, "20260809_05")
+    assert wave_four_fixture() == expected

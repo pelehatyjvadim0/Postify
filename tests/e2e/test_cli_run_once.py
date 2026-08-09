@@ -132,6 +132,66 @@ def test_run_once_prints_import_and_selection_result_from_real_typer_command(mon
     )
 
 
+def test_open_run_once_yields_recorded_action_and_preserves_execute_result(monkeypatch) -> None:
+    # Поломка: bootstrap обходит running→succeeded journal или меняет result RunOnce.
+    from postify import bootstrap
+    from postify.application.observability.record_operation import RecordedAction
+    from postify.infrastructure.repositories import sqlalchemy_observability
+
+    events: list[tuple[str, object]] = []
+    expected = object()
+
+    class Journal:
+        def __init__(self, factory) -> None:
+            assert factory is resources.session_factory
+
+        def start(self, operation, *, now):
+            events.append(("start", operation.value))
+            return 71
+
+        def succeed(self, run_id, *, outcome, now):
+            assert run_id == 71
+            events.append(("succeed", outcome))
+
+        def fail(self, run_id, *, failure_code, now):
+            events.append(("fail", failure_code))
+
+    class Underlying:
+        def execute(self):
+            events.append(("action", "run_once"))
+            return expected
+
+    resources = SimpleNamespace(
+        source=object(),
+        session_factory=object(),
+        client=object(),
+        url_policy=object(),
+    )
+
+    @contextmanager
+    def opened_resources(settings, *, transport=None):
+        yield resources
+
+    monkeypatch.setattr(bootstrap, "_open_import_resources", opened_resources)
+    monkeypatch.setattr(bootstrap, "selection_profile_from_settings", lambda configured: object())
+    monkeypatch.setattr(bootstrap, "ImportCandidates", lambda *args: object())
+    monkeypatch.setattr(bootstrap, "SelectCandidates", lambda *args: object())
+    monkeypatch.setattr(bootstrap, "RunOnce", lambda *args: Underlying())
+    monkeypatch.setattr(bootstrap, "_content_processor", lambda *args: None)
+    monkeypatch.setattr(sqlalchemy_observability, "SqlAlchemyOperationRunRepository", Journal)
+
+    with bootstrap.open_run_once(SimpleNamespace()) as action:
+        assert isinstance(action, RecordedAction)
+        result = action.execute()
+
+    assert result is expected
+    assert events == [
+        ("start", "run_once"),
+        ("action", "run_once"),
+        ("succeed", "completed"),
+    ]
+
+
 def test_run_once_reports_source_error_without_traceback(monkeypatch) -> None:
     # Break caught: leaking a traceback or returning success when the source is unavailable.
     from postify import cli
