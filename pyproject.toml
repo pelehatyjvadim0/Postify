@@ -32,6 +32,7 @@ postify = [
 ]
 
 [tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
 markers = [
     "integration: тесты с настоящей PostgreSQL",
 ]
