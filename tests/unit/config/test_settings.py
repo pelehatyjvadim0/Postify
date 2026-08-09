@@ -79,9 +79,6 @@ TELEGRAM_REQUIRED_NAMES = [
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "TELEGRAM_TIMEOUT_SECONDS",
-    "TELEGRAM_ON_CALENDAR_MORNING",
-    "TELEGRAM_ON_CALENDAR_DAY",
-    "TELEGRAM_ON_CALENDAR_EVENING",
 ]
 
 
@@ -379,9 +376,6 @@ def test_settings_exposes_all_six_telegram_values_without_plain_token(
     assert settings.telegram_bot_token.get_secret_value() == "123456:test-token"
     assert settings.telegram_chat_id == "-100123456789"
     assert settings.telegram_timeout_seconds == 10
-    assert settings.telegram_on_calendar_morning == "*-*-* 09:00:00"
-    assert settings.telegram_on_calendar_day == "*-*-* 13:00:00"
-    assert settings.telegram_on_calendar_evening == "*-*-* 18:00:00"
     assert "test-token" not in repr(settings)
 
 
@@ -396,31 +390,12 @@ def test_settings_requires_each_telegram_value(
     with pytest.raises(ValidationError):
         TelegramSettings()
 
-
 @pytest.mark.parametrize("timeout", ["0", "-1"])
 def test_settings_requires_positive_telegram_timeout(
     monkeypatch: pytest.MonkeyPatch, timeout: str
 ) -> None:
     # Поломка: нулевой/отрицательный timeout проходит к HTTP client.
     set_required_environment(monkeypatch, TELEGRAM_TIMEOUT_SECONDS=timeout)
-
-    with pytest.raises(ValidationError):
-        TelegramSettings()
-
-
-@pytest.mark.parametrize(
-    "calendar_name",
-    [
-        "TELEGRAM_ON_CALENDAR_MORNING",
-        "TELEGRAM_ON_CALENDAR_DAY",
-        "TELEGRAM_ON_CALENDAR_EVENING",
-    ],
-)
-def test_settings_rejects_blank_telegram_calendar(
-    monkeypatch: pytest.MonkeyPatch, calendar_name: str
-) -> None:
-    # Поломка: whitespace-only слот выглядит настроенным.
-    set_required_environment(monkeypatch, **{calendar_name: "   "})
 
     with pytest.raises(ValidationError):
         TelegramSettings()

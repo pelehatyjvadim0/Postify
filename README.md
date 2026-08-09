@@ -157,12 +157,15 @@ POSTIFY_ALEMBIC_DATABASE_URL='postgresql+psycopg://<пользователь>:<�
 
 ```sh
 uv run --env-file .env postify run-once
+uv run --env-file .env postify publish-once
 uv run --env-file .env postify start
 uv run --env-file .env postify status
 uv run --env-file .env postify stop
 ```
 
-`run-once` выводит счётчики импорта, проверенных кандидатов, `selected`, `rejected` и конкурентных конфликтов. `start` ждёт доступности базы и проверяет Alembic head перед включением timer. `stop` сначала отключает timer и ждёт завершения текущего запуска.
+`run-once` выводит счётчики импорта, проверенных кандидатов, `selected`, `rejected` и конкурентных конфликтов. `publish-once` доставляет один approved пакет; для него нужны только `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и `TELEGRAM_TIMEOUT_SECONDS`. `start` включает отдельные import и Telegram timers, а `stop` ждёт завершения обоих one-shot services.
+
+Telegram preflight с реальными credentials остаётся pending: до него не заявляется живая приёмка доставки.
 
 ## Установка systemd units
 
@@ -182,7 +185,7 @@ sh scripts/install-systemd.sh \
   --on-calendar 'Mon..Fri *-*-* 19:00:00'
 ```
 
-Скрипт проверяет расписание и сгенерированные units до установки; он не читает и не исполняет содержимое `.env`.
+Три `--on-calendar` остаются расписанием import timer. Отдельный publish timer читает только `TELEGRAM_ON_CALENDAR_MORNING`, `TELEGRAM_ON_CALENDAR_DAY` и `TELEGRAM_ON_CALENDAR_EVENING` из указанного `.env`; parser не исполняет содержимое файла. Скрипт проверяет оба набора расписаний и все units до установки.
 
 ## Как я развиваю проект
 

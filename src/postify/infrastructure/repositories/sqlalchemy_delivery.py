@@ -18,7 +18,7 @@ class SqlAlchemyDeliveryRepository:
                     FROM content_packages p
                     LEFT JOIN telegram_deliveries d ON d.package_id = p.id
                     WHERE p.status = 'approved' AND (d.id IS NULL OR d.status = 'retryable')
-                    ORDER BY CASE WHEN d.id IS NULL THEN 0 ELSE 1 END, p.id
+                    ORDER BY p.created_at, p.id
                     FOR UPDATE OF p SKIP LOCKED LIMIT 1
                 """)).mappings().first()
                 if row is None:

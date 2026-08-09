@@ -66,7 +66,12 @@ def run_installer(
     project = tmp_path / "project"
     project.mkdir()
     environment_file = project / ".env"
-    environment_file.write_text("POSTIFY_TEST_VALUE=$(touch must-not-run)\n")
+    environment_file.write_text(
+        "POSTIFY_TEST_VALUE=$(touch must-not-run)\n"
+        "TELEGRAM_ON_CALENDAR_MORNING=Mon..Fri 10:00\n"
+        "TELEGRAM_ON_CALENDAR_DAY='Mon..Fri 14:00'\n"
+        'TELEGRAM_ON_CALENDAR_EVENING="Mon..Fri 19:00"\n'
+    )
     destination = tmp_path / "systemd"
     if with_existing_units:
         destination.mkdir()
@@ -160,12 +165,17 @@ WantedBy=timers.target
         "systemd-analyze calendar Mon..Fri 13:00",
         "systemd-analyze calendar Mon..Fri 18:00",
     ]
-    assert command_lines[3].startswith("systemd-analyze verify ")
-    assert command_lines[4].endswith(f" {destination}/postify-run-once.service")
-    assert command_lines[5].endswith(f" {destination}/postify-run-once.timer")
-    assert command_lines[6].endswith(f" {destination}/postify-publish-once.service")
-    assert command_lines[7].endswith(f" {destination}/postify-publish-once.timer")
-    assert command_lines[8] == "systemctl daemon-reload"
+    assert command_lines[3:6] == [
+        "systemd-analyze calendar Mon..Fri 10:00",
+        "systemd-analyze calendar Mon..Fri 14:00",
+        "systemd-analyze calendar Mon..Fri 19:00",
+    ]
+    assert command_lines[6].startswith("systemd-analyze verify ")
+    assert command_lines[7].endswith(f" {destination}/postify-run-once.service")
+    assert command_lines[8].endswith(f" {destination}/postify-run-once.timer")
+    assert command_lines[9].endswith(f" {destination}/postify-publish-once.service")
+    assert command_lines[10].endswith(f" {destination}/postify-publish-once.timer")
+    assert command_lines[11] == "systemctl daemon-reload"
 
 
 @pytest.mark.parametrize(
@@ -241,9 +251,9 @@ def test_installer_creates_separate_publish_units_and_verifies_all_before_copy(
     assert "ExecStart=/usr/bin/python3 -m postify.cli publish-once" in service
     assert "SyslogIdentifier=postify-publish" in service
     assert timer.count("OnCalendar=") == 3
-    assert "OnCalendar=Mon..Fri 09:00" in timer
-    assert "OnCalendar=Mon..Fri 13:00" in timer
-    assert "OnCalendar=Mon..Fri 18:00" in timer
+    assert "OnCalendar=Mon..Fri 10:00" in timer
+    assert "OnCalendar=Mon..Fri 14:00" in timer
+    assert "OnCalendar=Mon..Fri 19:00" in timer
     assert "Unit=postify-publish-once.service" in timer
     lines = log_file.read_text().splitlines()
     verify_index = next(index for index, line in enumerate(lines) if line.startswith("systemd-analyze verify "))

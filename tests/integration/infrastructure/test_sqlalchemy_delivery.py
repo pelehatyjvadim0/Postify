@@ -175,24 +175,39 @@ def test_retryable_is_the_only_failure_claimed_again_with_next_attempt(
     uncertain_id = _seed_package(engine, marker="uncertain")
     repository = _repository(engine)
     try:
-        for expected_id, kind in (
-            (retry_id, FailureKind.RETRYABLE),
-            (failed_id, FailureKind.FAILED),
-            (uncertain_id, FailureKind.UNCERTAIN),
-        ):
-            claim = repository.reserve_next(now=NOW)
-            assert claim is not None and claim.package_id == expected_id
-            repository.record_failure(
-                claim, kind=kind, code=f"code_{kind.value}", reason="safe", now=NOW
-            )
-
+        claim = repository.reserve_next(now=NOW)
+        assert claim is not None and claim.package_id == retry_id
+        repository.record_failure(claim, kind=FailureKind.RETRYABLE, code="retry", reason="safe", now=NOW)
         retry = repository.reserve_next(now=NOW + timedelta(minutes=1))
         assert retry is not None and retry.package_id == retry_id
         assert retry.attempt_no == 2
         repository.record_failure(
             retry, kind=FailureKind.FAILED, code="terminal", reason="safe", now=NOW
         )
+        for expected_id, kind in ((failed_id, FailureKind.FAILED), (uncertain_id, FailureKind.UNCERTAIN)):
+            claim = repository.reserve_next(now=NOW + timedelta(minutes=1))
+            assert claim is not None and claim.package_id == expected_id
+            repository.record_failure(claim, kind=kind, code=f"code_{kind.value}", reason="safe", now=NOW)
         assert repository.reserve_next(now=NOW + timedelta(minutes=2)) is None
+    finally:
+        engine.dispose()
+
+
+def test_older_retryable_precedes_later_new_package_in_fifo_order(migrated_database_url: str) -> None:
+    # Поломка: CASE new-first бесконечно отодвигает ранний retryable поздними новыми пакетами.
+    FailureKind, _ = _api()
+    engine = create_engine(migrated_database_url)
+    retryable_id = _seed_package(engine, marker="older-retryable")
+    later_id = _seed_package(engine, marker="later-new")
+    repository = _repository(engine)
+    try:
+        claim = repository.reserve_next(now=NOW)
+        assert claim is not None and claim.package_id == retryable_id
+        repository.record_failure(claim, kind=FailureKind.RETRYABLE, code="retry", reason="safe", now=NOW)
+        retry = repository.reserve_next(now=NOW + timedelta(minutes=1))
+        assert retry is not None and retry.package_id == retryable_id
+        assert retry.attempt_no == 2
+        assert later_id != retry.package_id
     finally:
         engine.dispose()
 

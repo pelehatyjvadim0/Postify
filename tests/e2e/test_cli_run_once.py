@@ -74,6 +74,12 @@ class FakeSystemd:
             raise self.run_once_error
         return "inactive"
 
+    def wait_for_publish_once(self, *, timeout: float, poll_interval: float) -> str:
+        self.events.append(f"publish-once:wait:{timeout}:{poll_interval}")
+        if self.run_once_error is not None:
+            raise self.run_once_error
+        return "inactive"
+
     def active_state(self, unit: str) -> str:
         self.events.append(f"state:{unit}")
         return {
@@ -420,7 +426,7 @@ def test_stop_stops_postgresql_after_run_once_finishes(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "PostgreSQL и таймер Postify остановлены" in result.output
-    assert events == ["timer:disable-stop", "publish-timer:disable-stop", "run-once:wait:7.0:0.1", "postgresql:stop"]
+    assert events == ["timer:disable-stop", "publish-timer:disable-stop", "run-once:wait:7.0:0.1", "publish-once:wait:7.0:0.1", "postgresql:stop"]
 
 
 @dataclass

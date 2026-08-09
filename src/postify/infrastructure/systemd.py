@@ -22,6 +22,7 @@ class SystemdController:
     _timer_unit = "postify-run-once.timer"
     _publish_timer_unit = "postify-publish-once.timer"
     _run_once_service = "postify-run-once.service"
+    _publish_once_service = "postify-publish-once.service"
 
     def __init__(
         self,
@@ -92,13 +93,19 @@ class SystemdController:
         return dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
 
     def wait_for_run_once(self, *, timeout: float, poll_interval: float) -> str:
+        return self._wait_for_service(self._run_once_service, timeout=timeout, poll_interval=poll_interval)
+
+    def wait_for_publish_once(self, *, timeout: float, poll_interval: float) -> str:
+        return self._wait_for_service(self._publish_once_service, timeout=timeout, poll_interval=poll_interval)
+
+    def _wait_for_service(self, service: str, *, timeout: float, poll_interval: float) -> str:
         deadline = self._clock() + timeout
         while True:
-            state = self.active_state(self._run_once_service)
+            state = self.active_state(service)
             if state in {"inactive", "failed"}:
                 return state
             if self._clock() >= deadline:
-                raise RunOnceTimeoutError("Превышено время ожидания postify-run-once.service")
+                raise RunOnceTimeoutError(f"Превышено время ожидания {service}")
             self._sleeper(poll_interval)
 
     def _run(self, argv: list[str]) -> CommandResult:

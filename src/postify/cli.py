@@ -250,6 +250,10 @@ def stop() -> None:
             timeout=settings.run_once_wait_timeout_seconds,
             poll_interval=0.1,
         )
+        systemd.wait_for_publish_once(
+            timeout=settings.run_once_wait_timeout_seconds,
+            poll_interval=0.1,
+        )
         systemd.stop_postgresql()
     except ValidationError:
         _fail(RuntimeError("Некорректная конфигурация"))

@@ -104,11 +104,7 @@ class TelegramSettings(BaseSettings):
     telegram_bot_token: SecretStr
     telegram_chat_id: str = Field(min_length=1)
     telegram_timeout_seconds: float = Field(gt=0)
-    telegram_on_calendar_morning: str = Field(min_length=1)
-    telegram_on_calendar_day: str = Field(min_length=1)
-    telegram_on_calendar_evening: str = Field(min_length=1)
-
-    @field_validator("telegram_chat_id", "telegram_on_calendar_morning", "telegram_on_calendar_day", "telegram_on_calendar_evening")
+    @field_validator("telegram_chat_id")
     @classmethod
     def validate_nonblank_telegram_value(cls, value: str) -> str:
         if not value.strip():

@@ -40,7 +40,6 @@ def open_content_review(settings: Settings):
     from postify.application.content.review_content import ReviewContent
     from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
-    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.infrastructure.repositories.sqlalchemy_content import (
         SqlAlchemyContentRepository,
     )

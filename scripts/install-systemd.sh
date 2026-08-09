@@ -15,6 +15,20 @@ require_value() {
     fi
 }
 
+read_dotenv_schedule() {
+    key=$1
+    count=$(grep -c "^$key=" "$environment_file" || :)
+    [ "$count" -eq 1 ] || die "Некорректная настройка расписания Telegram: $key"
+    line=$(grep "^$key=" "$environment_file")
+    value=${line#*=}
+    case "$value" in
+        \"*\") value=${value#\"}; value=${value%\"} ;;
+        \'*\') value=${value#\'}; value=${value%\'} ;;
+    esac
+    require_value "$key" "$value"
+    printf '%s' "$value"
+}
+
 require_absolute_path() {
     name=$1
     value=$2
@@ -93,6 +107,9 @@ esac
 [ -d "$project_dir" ] || die "Каталог проекта не найден: $project_dir"
 [ -f "$environment_file" ] || die "Файл окружения не найден: $environment_file"
 [ -x "$python_path" ] || die "Python не исполняемый: $python_path"
+publish_calendar_1=$(read_dotenv_schedule TELEGRAM_ON_CALENDAR_MORNING)
+publish_calendar_2=$(read_dotenv_schedule TELEGRAM_ON_CALENDAR_DAY)
+publish_calendar_3=$(read_dotenv_schedule TELEGRAM_ON_CALENDAR_EVENING)
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 templates_dir="$script_dir/../deploy/systemd"
@@ -142,6 +159,12 @@ render_template() {
 
 render_template "$templates_dir/postify-run-once.service" "$temp_dir/postify-run-once.service"
 render_template "$templates_dir/postify-run-once.timer" "$temp_dir/postify-run-once.timer"
+systemd-analyze calendar "$calendar_1"
+systemd-analyze calendar "$calendar_2"
+systemd-analyze calendar "$calendar_3"
+calendar_1=$publish_calendar_1
+calendar_2=$publish_calendar_2
+calendar_3=$publish_calendar_3
 render_template "$templates_dir/postify-publish-once.service" "$temp_dir/postify-publish-once.service"
 render_template "$templates_dir/postify-publish-once.timer" "$temp_dir/postify-publish-once.timer"
 
