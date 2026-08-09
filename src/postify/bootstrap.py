@@ -200,7 +200,11 @@ def open_run_once(
             if callable(resources.session_factory)
             else None,
         )
-        if not callable(resources.session_factory):
+        is_real_repository = (
+            SqlAlchemyOperationRunRepository.__module__
+            == "postify.infrastructure.repositories.sqlalchemy_observability"
+        )
+        if not callable(resources.session_factory) and is_real_repository:
             # Тестовая lifecycle-граница без SQL session остаётся прежней.
             yield action
         else:
