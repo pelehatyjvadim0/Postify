@@ -397,16 +397,21 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
     assert topics_schema["minItems"] == 2
     assert topics_schema["maxItems"] == 2
     topic_schema = topics_schema["items"]
-    assert topic_schema["additionalProperties"] is False
-    assert set(topic_schema["required"]) == {
-        "attempt_id",
-        "analysis",
-        "usefulness",
-        "selected",
-        "post_text",
-        "media_query",
-    }
-    properties = topic_schema["properties"]
+    assert set(topic_schema) == {"anyOf"}
+    assert len(topic_schema["anyOf"]) == 2
+    selected_schema, unselected_schema = topic_schema["anyOf"]
+    for branch in (selected_schema, unselected_schema):
+        assert branch["type"] == "object"
+        assert branch["additionalProperties"] is False
+        assert set(branch["required"]) == {
+            "attempt_id",
+            "analysis",
+            "usefulness",
+            "selected",
+            "post_text",
+            "media_query",
+        }
+    properties = selected_schema["properties"]
     assert properties["attempt_id"] == {"type": "integer", "minimum": 1}
     assert properties["analysis"] == {"type": "string", "minLength": 1}
     assert properties["usefulness"] == {
@@ -414,12 +419,15 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
         "minimum": 0,
         "maximum": 100,
     }
-    assert properties["selected"] == {"type": "boolean"}
-    nullable_text = {
-        "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+    assert properties["selected"] == {"const": True}
+    assert properties["post_text"] == {"type": "string", "minLength": 1}
+    assert properties["media_query"] == {"type": "string", "minLength": 1}
+    assert unselected_schema["properties"] == {
+        **properties,
+        "selected": {"const": False},
+        "post_text": {"type": "null"},
+        "media_query": {"type": "null"},
     }
-    assert properties["post_text"] == nullable_text
-    assert properties["media_query"] == nullable_text
     common = {
         "attempt_id": 17,
         "analysis": "Полный анализ",

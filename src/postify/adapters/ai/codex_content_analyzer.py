@@ -117,46 +117,40 @@ class CodexContentAnalyzer:
 
     @staticmethod
     def _schema(article_count: int) -> dict[str, object]:
-        topic = {
+        common_properties = {
+            "attempt_id": {"type": "integer", "minimum": 1},
+            "analysis": {"type": "string", "minLength": 1},
+            "usefulness": {"type": "integer", "minimum": 0, "maximum": 100},
+        }
+        required = [
+            "attempt_id",
+            "analysis",
+            "usefulness",
+            "selected",
+            "post_text",
+            "media_query",
+        ]
+        selected_topic = {
             "type": "object",
             "additionalProperties": False,
-            "required": [
-                "attempt_id",
-                "analysis",
-                "usefulness",
-                "selected",
-                "post_text",
-                "media_query",
-            ],
+            "required": required,
             "properties": {
-                "attempt_id": {"type": "integer", "minimum": 1},
-                "analysis": {"type": "string", "minLength": 1},
-                "usefulness": {"type": "integer", "minimum": 0, "maximum": 100},
-                "selected": {"type": "boolean"},
-                "post_text": {
-                    "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
-                },
-                "media_query": {
-                    "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
-                },
+                **common_properties,
+                "selected": {"const": True},
+                "post_text": {"type": "string", "minLength": 1},
+                "media_query": {"type": "string", "minLength": 1},
             },
-            "allOf": [
-                {
-                    "if": {"properties": {"selected": {"const": True}}},
-                    "then": {
-                        "properties": {
-                            "post_text": {"type": "string", "minLength": 1},
-                            "media_query": {"type": "string", "minLength": 1},
-                        }
-                    },
-                    "else": {
-                        "properties": {
-                            "post_text": {"type": "null"},
-                            "media_query": {"type": "null"},
-                        }
-                    },
-                }
-            ],
+        }
+        unselected_topic = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": required,
+            "properties": {
+                **common_properties,
+                "selected": {"const": False},
+                "post_text": {"type": "null"},
+                "media_query": {"type": "null"},
+            },
         }
         return {
             "type": "object",
@@ -167,7 +161,7 @@ class CodexContentAnalyzer:
                     "type": "array",
                     "minItems": article_count,
                     "maxItems": article_count,
-                    "items": topic,
+                    "items": {"anyOf": [selected_topic, unselected_topic]},
                 }
             },
         }
