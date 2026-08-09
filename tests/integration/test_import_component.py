@@ -402,6 +402,9 @@ def test_start_reaches_alembic_head_check_from_another_current_directory(
         def enable_and_start_timer(self) -> None:
             events.append("timer:enable-start")
 
+        def enable_and_start_publish_timer(self) -> None:
+            events.append("publish-timer:enable-start")
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         cli,
@@ -415,7 +418,7 @@ def test_start_reaches_alembic_head_check_from_another_current_directory(
 
     assert result.exit_code == 0
     assert result.output == "Таймер Postify запущен\n"
-    assert events == ["postgresql:start", "database:ready", "timer:enable-start"]
+    assert events == ["postgresql:start", "database:ready", "timer:enable-start", "publish-timer:enable-start"]
 
 
 def test_installed_wheel_checks_migrations_at_head_outside_checkout(

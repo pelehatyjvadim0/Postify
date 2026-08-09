@@ -22,7 +22,7 @@ from postify.adapters.sources.hn_algolia import HnAlgoliaCandidateSource
 from postify.application.ingestion.import_candidates import ImportCandidates
 from postify.application.jobs.run_once import RunOnce
 from postify.application.selection.select_candidates import SelectCandidates
-from postify.config import Settings
+from postify.config import Settings, TelegramSettings
 from postify.domain.candidates.selection import SelectionProfile
 from postify.domain.candidates.statuses import RejectionRule
 from postify.infrastructure.database.engine import create_engine_from_settings
@@ -69,25 +69,28 @@ def open_content_review(settings: Settings):
 
 
 @contextmanager
-def open_publish_once(settings: Settings):
+def open_publish_once(settings: Settings, telegram: TelegramSettings):
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.adapters.telegram.bot_api import TelegramBotApiPublisher
     from postify.application.delivery.publish_content import PublishContent
     from postify.infrastructure.repositories.sqlalchemy_delivery import SqlAlchemyDeliveryRepository
 
     engine = create_engine_from_settings(settings)
-    client = httpx.Client(timeout=settings.telegram_timeout_seconds)
+    client: httpx.Client | None = None
     try:
+        client = httpx.Client(timeout=telegram.telegram_timeout_seconds)
         media = LocalMediaProvider(client, settings.content_media_dir, settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy())
         yield PublishContent(
             SqlAlchemyDeliveryRepository(sessionmaker(engine)),
-            TelegramBotApiPublisher(client, bot_token=settings.telegram_bot_token.get_secret_value(), chat_id=settings.telegram_chat_id),
+            TelegramBotApiPublisher(client, bot_token=telegram.telegram_bot_token.get_secret_value(), chat_id=telegram.telegram_chat_id),
             media,
-            timeout_seconds=settings.telegram_timeout_seconds,
+            timeout_seconds=telegram.telegram_timeout_seconds,
             clock=lambda: datetime.now(UTC),
         )
     finally:
-        client.close()
+        if client is not None:
+            client.close()
         engine.dispose()
 
 

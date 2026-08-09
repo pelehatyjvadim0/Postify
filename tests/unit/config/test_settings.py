@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from postify.config import Settings
+from postify.config import Settings, TelegramSettings
 
 
 REQUIRED_ENVIRONMENT = {
@@ -373,7 +373,7 @@ def test_settings_exposes_all_six_telegram_values_without_plain_token(
     from pydantic import SecretStr
 
     set_required_environment(monkeypatch)
-    settings = Settings()
+    settings = TelegramSettings()
 
     assert isinstance(settings.telegram_bot_token, SecretStr)
     assert settings.telegram_bot_token.get_secret_value() == "123456:test-token"
@@ -394,7 +394,7 @@ def test_settings_requires_each_telegram_value(
     monkeypatch.delenv(missing_name)
 
     with pytest.raises(ValidationError):
-        Settings()
+        TelegramSettings()
 
 
 @pytest.mark.parametrize("timeout", ["0", "-1"])
@@ -405,7 +405,7 @@ def test_settings_requires_positive_telegram_timeout(
     set_required_environment(monkeypatch, TELEGRAM_TIMEOUT_SECONDS=timeout)
 
     with pytest.raises(ValidationError):
-        Settings()
+        TelegramSettings()
 
 
 @pytest.mark.parametrize(
@@ -423,4 +423,4 @@ def test_settings_rejects_blank_telegram_calendar(
     set_required_environment(monkeypatch, **{calendar_name: "   "})
 
     with pytest.raises(ValidationError):
-        Settings()
+        TelegramSettings()

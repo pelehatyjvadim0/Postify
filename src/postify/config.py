@@ -41,12 +41,6 @@ class Settings(BaseSettings):
     content_article_max_bytes: int = Field(gt=0)
     content_media_max_bytes: int = Field(gt=0)
     content_codex_timeout_seconds: int = Field(gt=0)
-    telegram_bot_token: SecretStr
-    telegram_chat_id: str = Field(min_length=1)
-    telegram_timeout_seconds: float = Field(gt=0)
-    telegram_on_calendar_morning: str = Field(min_length=1)
-    telegram_on_calendar_day: str = Field(min_length=1)
-    telegram_on_calendar_evening: str = Field(min_length=1)
 
     @field_validator(
         "selection_rules",
@@ -101,6 +95,18 @@ class Settings(BaseSettings):
         if not value.endswith(".service"):
             raise ValueError("Имя systemd-unit должно оканчиваться на .service")
         return value
+
+class TelegramSettings(BaseSettings):
+    """Настройки, нужные только команде доставки."""
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    telegram_bot_token: SecretStr
+    telegram_chat_id: str = Field(min_length=1)
+    telegram_timeout_seconds: float = Field(gt=0)
+    telegram_on_calendar_morning: str = Field(min_length=1)
+    telegram_on_calendar_day: str = Field(min_length=1)
+    telegram_on_calendar_evening: str = Field(min_length=1)
 
     @field_validator("telegram_chat_id", "telegram_on_calendar_morning", "telegram_on_calendar_day", "telegram_on_calendar_evening")
     @classmethod

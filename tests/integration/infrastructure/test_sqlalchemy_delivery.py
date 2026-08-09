@@ -122,6 +122,27 @@ def test_two_concurrent_claims_receive_different_packages(
         engine.dispose()
 
 
+def test_claim_skips_a_lock_held_on_the_oldest_package(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: удалённый SKIP LOCKED блокирует слот вместо выбора следующего пакета.
+    engine = create_engine(migrated_database_url, pool_size=3)
+    first_id = _seed_package(engine, marker="locked-first")
+    second_id = _seed_package(engine, marker="locked-second")
+    repository = _repository(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(text("SELECT id FROM content_packages WHERE id=:id FOR UPDATE"), {"id": first_id})
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            claim = executor.submit(repository.reserve_next, now=NOW).result(timeout=2)
+        assert claim is not None and claim.package_id == second_id
+    finally:
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
+
+
 def test_delivery_has_one_row_per_package(migrated_database_url: str) -> None:
     # Поломка: удалён unique package_id и один пакет получает две delivery.
     engine = create_engine(migrated_database_url)

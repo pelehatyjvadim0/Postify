@@ -59,8 +59,14 @@ class FakeSystemd:
     def enable_and_start_timer(self) -> None:
         self.events.append("timer:enable-start")
 
+    def enable_and_start_publish_timer(self) -> None:
+        self.events.append("publish-timer:enable-start")
+
     def disable_and_stop_timer(self) -> None:
         self.events.append("timer:disable-stop")
+
+    def disable_and_stop_publish_timer(self) -> None:
+        self.events.append("publish-timer:disable-stop")
 
     def wait_for_run_once(self, *, timeout: float, poll_interval: float) -> str:
         self.events.append(f"run-once:wait:{timeout}:{poll_interval}")
@@ -73,10 +79,14 @@ class FakeSystemd:
         return {
             "postgresql-custom.service": "active",
             "postify-run-once.timer": "active",
+            "postify-publish-once.timer": "active",
             "postify-run-once.service": "inactive",
         }[unit]
 
     def timer_properties(self) -> dict[str, str]:
+        return {"LastTriggerUSec": "сегодня", "NextElapseUSecRealtime": "завтра"}
+
+    def publish_timer_properties(self) -> dict[str, str]:
         return {"LastTriggerUSec": "сегодня", "NextElapseUSecRealtime": "завтра"}
 
 
@@ -307,7 +317,7 @@ def test_start_enables_timer_only_after_database_and_migrations(monkeypatch) -> 
 
     assert result.exit_code == 0
     assert "Таймер Postify запущен" in result.output
-    assert events == ["postgresql:start", "database:ready", "migrations:head", "timer:enable-start"]
+    assert events == ["postgresql:start", "database:ready", "migrations:head", "timer:enable-start", "publish-timer:enable-start"]
 
 
 def test_start_does_not_enable_timer_when_migrations_are_behind(monkeypatch) -> None:
@@ -367,11 +377,13 @@ def test_status_reports_real_boundary_data_without_inventing_queue_or_errors(mon
     assert "БД: доступна; кандидатов: 4" in result.output
     assert "Таймер: active; последнее: сегодня; следующее: завтра" in result.output
     assert "run-once: inactive" in result.output
+    assert "Telegram-таймер: active; последнее: сегодня; следующее: завтра" in result.output
     assert "очеред" not in result.output.lower()
     assert "ошибк" not in result.output.lower()
     assert events == [
         "state:postgresql-custom.service",
         "state:postify-run-once.timer",
+        "state:postify-publish-once.timer",
         "state:postify-run-once.service",
     ]
 
@@ -393,7 +405,7 @@ def test_stop_keeps_postgresql_running_when_run_once_wait_times_out(monkeypatch)
 
     assert result.exit_code != 0
     assert "долгое выполнение" in result.output
-    assert events == ["timer:disable-stop", "run-once:wait:7.0:0.1"]
+    assert events == ["timer:disable-stop", "publish-timer:disable-stop", "run-once:wait:7.0:0.1"]
 
 
 def test_stop_stops_postgresql_after_run_once_finishes(monkeypatch) -> None:
@@ -408,7 +420,7 @@ def test_stop_stops_postgresql_after_run_once_finishes(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "PostgreSQL и таймер Postify остановлены" in result.output
-    assert events == ["timer:disable-stop", "run-once:wait:7.0:0.1", "postgresql:stop"]
+    assert events == ["timer:disable-stop", "publish-timer:disable-stop", "run-once:wait:7.0:0.1", "postgresql:stop"]
 
 
 @dataclass

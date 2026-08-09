@@ -20,6 +20,7 @@ class SystemdCommandError(RuntimeError):
 
 class SystemdController:
     _timer_unit = "postify-run-once.timer"
+    _publish_timer_unit = "postify-publish-once.timer"
     _run_once_service = "postify-run-once.service"
 
     def __init__(
@@ -50,12 +51,23 @@ class SystemdController:
     def enable_and_start_timer(self) -> None:
         self.enable_timer()
 
+    def enable_and_start_publish_timer(self) -> None:
+        self._run([self._command_name, "enable", self._publish_timer_unit])
+        self._run([self._command_name, "start", self._publish_timer_unit])
+
     def disable_timer(self) -> None:
         self._run([self._command_name, "disable", self._timer_unit])
         self._run([self._command_name, "stop", self._timer_unit])
 
     def disable_and_stop_timer(self) -> None:
         self.disable_timer()
+
+    def disable_and_stop_publish_timer(self) -> None:
+        self._run([self._command_name, "disable", self._publish_timer_unit])
+        self._run([self._command_name, "stop", self._publish_timer_unit])
+
+    def publish_timer_properties(self) -> dict[str, str]:
+        return self._timer_properties(self._publish_timer_unit)
 
     def active_state(self, unit: str) -> str:
         result = self._runner([self._command_name, "is-active", unit])
@@ -65,11 +77,14 @@ class SystemdController:
         return state
 
     def timer_properties(self) -> dict[str, str]:
+        return self._timer_properties(self._timer_unit)
+
+    def _timer_properties(self, timer_unit: str) -> dict[str, str]:
         output = self._run(
             [
                 self._command_name,
                 "show",
-                self._timer_unit,
+                timer_unit,
                 "--property=NextElapseUSecRealtime",
                 "--property=LastTriggerUSec",
             ]

@@ -19,7 +19,7 @@ from postify.bootstrap import (
     open_run_once,
     wait_for_database,
 )
-from postify.config import Settings
+from postify.config import Settings, TelegramSettings
 from postify.infrastructure.systemd import (
     RunOnceTimeoutError,
     SystemdCommandError,
@@ -89,7 +89,8 @@ def publish_once() -> None:
     """Опубликовать один подтверждённый пакет в Telegram."""
     try:
         settings = Settings()
-        with open_publish_once(settings) as action:
+        telegram = TelegramSettings()
+        with open_publish_once(settings, telegram) as action:
             result = action.execute()
     except ValidationError:
         _fail(RuntimeError("Некорректная конфигурация Telegram"))
@@ -183,6 +184,7 @@ def start() -> None:
         if not migrations_ready:
             raise RuntimeError("Миграции БД не находятся на Alembic head")
         systemd.enable_and_start_timer()
+        systemd.enable_and_start_publish_timer()
     except ValidationError:
         _fail(RuntimeError("Некорректная конфигурация"))
         return
@@ -206,8 +208,10 @@ def status() -> None:
         systemd = create_systemd_controller(settings)
         postgresql_state = systemd.active_state(settings.postgresql_systemd_unit)
         timer_state = systemd.active_state("postify-run-once.timer")
+        publish_timer_state = systemd.active_state("postify-publish-once.timer")
         run_once_state = systemd.active_state("postify-run-once.service")
         timer = systemd.timer_properties()
+        publish_timer = systemd.publish_timer_properties()
         ready = database_is_ready(settings)
         count = candidate_count(settings) if ready else None
     except ValidationError:
@@ -227,6 +231,11 @@ def status() -> None:
         f"следующее: {timer.get('NextElapseUSecRealtime', 'неизвестно')}"
     )
     typer.echo(f"run-once: {run_once_state}")
+    typer.echo(
+        "Telegram-таймер: "
+        f"{publish_timer_state}; последнее: {publish_timer.get('LastTriggerUSec', 'неизвестно')}; "
+        f"следующее: {publish_timer.get('NextElapseUSecRealtime', 'неизвестно')}"
+    )
 
 
 @app.command()
@@ -236,6 +245,7 @@ def stop() -> None:
         settings = Settings()
         systemd = create_systemd_controller(settings)
         systemd.disable_and_stop_timer()
+        systemd.disable_and_stop_publish_timer()
         systemd.wait_for_run_once(
             timeout=settings.run_once_wait_timeout_seconds,
             poll_interval=0.1,

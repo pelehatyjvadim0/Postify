@@ -43,7 +43,8 @@ def test_publish_once_prints_each_safe_outcome(monkeypatch, result, expected: st
     from postify import cli
 
     monkeypatch.setattr(cli, "Settings", lambda: SimpleNamespace())
-    monkeypatch.setattr(cli, "open_publish_once", lambda settings: opened(FakePublishOnce(result)), raising=False)
+    monkeypatch.setattr(cli, "TelegramSettings", lambda: SimpleNamespace())
+    monkeypatch.setattr(cli, "open_publish_once", lambda settings, telegram: opened(FakePublishOnce(result)), raising=False)
 
     completed = runner.invoke(cli.app, ["publish-once"])
 
@@ -68,7 +69,8 @@ def test_publish_once_validates_settings_before_opening_boundary(monkeypatch) ->
         calls.append("opened")
         raise AssertionError
 
-    monkeypatch.setattr(cli, "Settings", invalid_settings)
+    monkeypatch.setattr(cli, "Settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(cli, "TelegramSettings", invalid_settings)
     monkeypatch.setattr(cli, "open_publish_once", forbidden_boundary, raising=False)
 
     completed = runner.invoke(cli.app, ["publish-once"])
@@ -86,10 +88,11 @@ def test_publish_once_normalizes_runtime_error_without_secrets(monkeypatch) -> N
 
     leaked = "123456:SENTINEL-TOKEN https://api.telegram.org/bot/private SECRET-CAPTION /media/private.png"
     monkeypatch.setattr(cli, "Settings", lambda: SimpleNamespace())
+    monkeypatch.setattr(cli, "TelegramSettings", lambda: SimpleNamespace())
     monkeypatch.setattr(
         cli,
         "open_publish_once",
-        lambda settings: opened(FakePublishOnce(error=RuntimeError(leaked))),
+        lambda settings, telegram: opened(FakePublishOnce(error=RuntimeError(leaked))),
         raising=False,
     )
 

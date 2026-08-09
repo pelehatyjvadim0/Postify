@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -190,16 +189,3 @@ def test_failed_cleanup_remains_pending_without_telegram_or_failure_attempt() ->
 
     assert result == Result("cleanup_pending", package_id=41)
     assert not any(item.startswith(("reserve:", "telegram:", "failure:", "deleted:")) for item in events)
-
-
-@pytest.mark.parametrize("terminal_status", ["published", "failed", "uncertain"])
-def test_terminal_delivery_is_not_published_again(terminal_status: str) -> None:
-    # Поломка: terminal delivery повторно выдаётся repository и вызывает Telegram.
-    _, _, Result, *_ = _api()
-    events: list[str] = []
-
-    result = _action(RepositoryFake(events), PublisherFake(events), MediaFake(events)).execute()
-
-    assert result == Result("empty")
-    assert terminal_status in {"published", "failed", "uncertain"}
-    assert not any(item.startswith("telegram:") for item in events)

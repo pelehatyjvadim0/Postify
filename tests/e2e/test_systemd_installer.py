@@ -163,7 +163,9 @@ WantedBy=timers.target
     assert command_lines[3].startswith("systemd-analyze verify ")
     assert command_lines[4].endswith(f" {destination}/postify-run-once.service")
     assert command_lines[5].endswith(f" {destination}/postify-run-once.timer")
-    assert command_lines[6] == "systemctl daemon-reload"
+    assert command_lines[6].endswith(f" {destination}/postify-publish-once.service")
+    assert command_lines[7].endswith(f" {destination}/postify-publish-once.timer")
+    assert command_lines[8] == "systemctl daemon-reload"
 
 
 @pytest.mark.parametrize(

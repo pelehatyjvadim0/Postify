@@ -98,6 +98,23 @@ def test_enable_and_disable_timer_start_and_stop_the_timer() -> None:
     ]
 
 
+def test_publish_timer_has_its_own_complete_lifecycle() -> None:
+    # Поломка: установленный Telegram timer не включается или не выключается оператором.
+    systemd = importlib.import_module("postify.infrastructure.systemd")
+    runner = RecordingRunner()
+    controller = systemd.SystemdController(command_name="systemctl", postgresql_unit="postgresql.service", clock=lambda: 0.0, sleeper=lambda _: None, runner=runner)
+
+    controller.enable_and_start_publish_timer()
+    controller.disable_and_stop_publish_timer()
+
+    assert runner.calls == [
+        ["systemctl", "enable", "postify-publish-once.timer"],
+        ["systemctl", "start", "postify-publish-once.timer"],
+        ["systemctl", "disable", "postify-publish-once.timer"],
+        ["systemctl", "stop", "postify-publish-once.timer"],
+    ]
+
+
 def test_cli_lifecycle_methods_keep_enable_start_and_disable_stop_atomic() -> None:
     # Break caught: CLI orchestration calling only half of either timer lifecycle operation.
     systemd = importlib.import_module("postify.infrastructure.systemd")
