@@ -311,4 +311,8 @@ class ShowOperationalStatus:
             signals.append(
                 OperationalSignal("warning", "systemd_probe_failed", len(failures))
             )
+        if runtime.import_timer in {"inactive", "failed"}:
+            signals.append(OperationalSignal("warning", "import_timer_inactive", 1))
+        if runtime.publish_timer in {"inactive", "failed"}:
+            signals.append(OperationalSignal("warning", "publish_timer_inactive", 1))
         return tuple(signals)

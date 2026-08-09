@@ -392,3 +392,44 @@ def test_candidate_normalization_keeps_unknown_reason_group() -> None:
     )
 
     assert result.rejection_reasons[-1].code == "future_reason"
+
+
+@pytest.mark.parametrize(
+    ("runtime_overrides", "signal_code"),
+    [
+        ({"import_timer": "inactive"}, "import_timer_inactive"),
+        ({"import_timer": "failed"}, "import_timer_inactive"),
+        ({"publish_timer": "inactive"}, "publish_timer_inactive"),
+        ({"publish_timer": "failed"}, "publish_timer_inactive"),
+    ],
+)
+def test_inactive_or_failed_timer_emits_stable_warning(
+    runtime_overrides: dict[str, object], signal_code: str
+) -> None:
+    # Поломка: inactive/failed timer показан healthy при полном DB report.
+    result, _ = report(
+        raw_snapshot(published_today=3), runtime_snapshot=runtime(**runtime_overrides)
+    )
+
+    signal = _signal(result, signal_code)
+    assert signal.severity == "warning"
+    assert signal.count == 1
+
+
+def test_active_timers_and_unknown_failed_probe_emit_no_false_inactive_signal() -> None:
+    # Поломка: active/unknown timer создаёт ложную operational problem.
+    active, _ = report(
+        raw_snapshot(published_today=3),
+        runtime_snapshot=runtime(import_timer="active", publish_timer="active"),
+    )
+    unknown, _ = report(
+        raw_snapshot(published_today=3),
+        runtime_snapshot=runtime(import_timer="unknown", systemd_failures=("safe",)),
+    )
+
+    assert all(
+        signal.code not in {"import_timer_inactive", "publish_timer_inactive"}
+        for signal in active.signals
+    )
+    assert all(signal.code != "import_timer_inactive" for signal in unknown.signals)
+    assert _signal(unknown, "systemd_probe_failed").count == 1
