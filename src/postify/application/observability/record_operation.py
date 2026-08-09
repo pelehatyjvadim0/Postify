@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Generic, Protocol, TypeVar
+
+from postify.application.ports.operation_run_repository import OperationRunRepository
+from postify.domain.observability.models import OperationKind
+
+T = TypeVar("T")
+
+
+class _Action(Protocol[T]):
+    def execute(self) -> T: ...
+
+
+class RecordedAction(Generic[T]):
+    def __init__(self, action: _Action[T], journal: OperationRunRepository, *, operation: OperationKind, success_outcome: str | Callable[[T], str], failure_code: str, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+        self._action = action
+        self._journal = journal
+        self._operation = operation
+        self._success_outcome = success_outcome
+        self._failure_code = failure_code
+        self._clock = clock
+
+    def execute(self) -> T:
+        run_id = self._journal.start(self._operation, now=self._clock())
+        try:
+            result = self._action.execute()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:
+            try:
+                self._journal.fail(run_id, failure_code=self._failure_code, now=self._clock())
+            except BaseException:
+                pass
+            raise
+        outcome = self._success_outcome(result) if callable(self._success_outcome) else self._success_outcome
+        self._journal.succeed(run_id, outcome=outcome, now=self._clock())
+        return result
+
+    def __getattr__(self, name: str):
+        return getattr(self._action, name)

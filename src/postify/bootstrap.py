@@ -73,19 +73,29 @@ def open_publish_once(settings: Settings, telegram: TelegramSettings):
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.adapters.telegram.bot_api import TelegramBotApiPublisher
     from postify.application.delivery.publish_content import PublishContent
+    from postify.application.observability.record_operation import RecordedAction
+    from postify.domain.observability.models import OperationKind
     from postify.infrastructure.repositories.sqlalchemy_delivery import SqlAlchemyDeliveryRepository
+    from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
 
     engine = create_engine_from_settings(settings)
     client: httpx.Client | None = None
     try:
         client = httpx.Client(timeout=telegram.telegram_timeout_seconds)
         media = LocalMediaProvider(client, settings.content_media_dir, settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy())
-        yield PublishContent(
+        action = PublishContent(
             SqlAlchemyDeliveryRepository(sessionmaker(engine)),
             TelegramBotApiPublisher(client, bot_token=telegram.telegram_bot_token.get_secret_value(), chat_id=telegram.telegram_chat_id),
             media,
             timeout_seconds=telegram.telegram_timeout_seconds,
             clock=lambda: datetime.now(UTC),
+        )
+        yield RecordedAction(
+            action,
+            SqlAlchemyOperationRunRepository(sessionmaker(engine)),
+            operation=OperationKind.PUBLISH_ONCE,
+            success_outcome=lambda result: result.outcome,
+            failure_code="publish_once_failed",
         )
     finally:
         if client is not None:
@@ -171,9 +181,12 @@ def selection_profile_from_settings(settings: Settings) -> SelectionProfile:
 def open_run_once(
     settings: Settings, *, transport: httpx.BaseTransport | None = None
 ) -> Iterator[RunOnce]:
+    from postify.application.observability.record_operation import RecordedAction
+    from postify.domain.observability.models import OperationKind
+    from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
     profile = selection_profile_from_settings(settings)
     with _open_import_resources(settings, transport=transport) as resources:
-        yield RunOnce(
+        action = RunOnce(
             ImportCandidates(
                 resources.source,
                 SqlAlchemyCandidateRepository(resources.session_factory),
@@ -186,6 +199,13 @@ def open_run_once(
             _content_processor(settings, resources)
             if callable(resources.session_factory)
             else None,
+        )
+        yield RecordedAction(
+            action,
+            SqlAlchemyOperationRunRepository(resources.session_factory),
+            operation=OperationKind.RUN_ONCE,
+            success_outcome="completed",
+            failure_code="run_once_failed",
         )
 
 
@@ -295,5 +315,25 @@ def candidate_count(settings: Settings) -> int:
     engine = create_engine_from_settings(settings)
     try:
         return SqlAlchemyCandidateRepository(sessionmaker(engine)).count()
+    finally:
+        engine.dispose()
+
+
+@contextmanager
+def open_operational_status(settings: Settings):
+    from postify.application.observability.show_status import ShowOperationalStatus
+    from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationalStatusRepository
+    from zoneinfo import ZoneInfo
+
+    engine = create_engine_from_settings(settings)
+    try:
+        yield ShowOperationalStatus(
+            SqlAlchemyOperationalStatusRepository(sessionmaker(engine)),
+            timezone=ZoneInfo(settings.postify_timezone),
+            daily_target=3,
+            analysis_limit=settings.content_daily_analysis_limit,
+            package_limit=settings.content_daily_package_limit,
+            clock=lambda: datetime.now(UTC),
+        )
     finally:
         engine.dispose()
