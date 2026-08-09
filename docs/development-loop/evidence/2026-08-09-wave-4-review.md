@@ -12,4 +12,14 @@
 
 Старт: `0C/3I/2M`: FIFO, source schedules, graceful stop, duplicate import, README. После `c5d019a` parser re-review нашёл `1I/1M` (internal/trailing quotes и отдельный publish timeout); исправлено `dbee031`, `88e5b28`. Финал: `0C/0I/0M`.
 
-Проверены full gates: non-integration `390 passed`, PostgreSQL integration `59 passed`, scoped Ruff и wheel/installer GREEN. Live status: pending; решение — не принят до реального Telegram preflight. Секреты не выводились.
+Проверены full gates: non-integration `390 passed`, PostgreSQL integration `59 passed`, scoped Ruff и wheel/installer GREEN. Секреты не выводились.
+
+## Live Telegram preflight
+
+Root выполнил разрешённую проверку на feature head `c77aade`. Бот имел право администратора `can_post_messages=true`. Первый `postify publish-once` завершился с кодом `0` и опубликовал package `1` с `message_id=6`.
+
+PostgreSQL подтвердил `package.status=published`, `delivery.status=published`, установленный `confirmed_at`, одну attempt с `outcome=published`, `code=NULL` и тем же `message_id`. В delivery и package установлены `media_deleted_at`, локальный файл отсутствует.
+
+Повторный `publish-once` завершился с кодом `0` и результатом «Слот пуст». Delivery и `message_id` не изменились, число attempts осталось `1`: повторной отправки не было. Token и значения конфигурации не выводились.
+
+Live gate принят. Feature head готов к merge root; полное завершение Wave 4 требует merge, повторного полного gate на `main` и очистки ветки/worktree.
