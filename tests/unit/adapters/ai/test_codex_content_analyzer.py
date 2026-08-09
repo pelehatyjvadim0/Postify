@@ -89,6 +89,18 @@ def _schema_accepts(schema: dict[str, object], value: object) -> bool:
     return True
 
 
+def _schema_keys(value: object) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            keys.add(key)
+            keys.update(_schema_keys(child))
+    elif isinstance(value, list):
+        for child in value:
+            keys.update(_schema_keys(child))
+    return keys
+
+
 def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path) -> None:
     # Поломка (gate 4): marker article body не передаётся в stdin Codex.
     AnalysisInput, _, CodexContentAnalyzer = _api()
@@ -394,12 +406,20 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
         "post_text",
         "media_query",
     }
-    assert topic_schema["properties"]["selected"] == {"type": "boolean"}
+    properties = topic_schema["properties"]
+    assert properties["attempt_id"] == {"type": "integer", "minimum": 1}
+    assert properties["analysis"] == {"type": "string", "minLength": 1}
+    assert properties["usefulness"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+    }
+    assert properties["selected"] == {"type": "boolean"}
     nullable_text = {
         "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
     }
-    assert topic_schema["properties"]["post_text"] == nullable_text
-    assert topic_schema["properties"]["media_query"] == nullable_text
+    assert properties["post_text"] == nullable_text
+    assert properties["media_query"] == nullable_text
     common = {
         "attempt_id": 17,
         "analysis": "Полный анализ",
@@ -421,6 +441,16 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
         topic_schema,
         {**common, "selected": False, "post_text": "Пост", "media_query": "db"},
     )
+    unsupported_composition = {
+        "allOf",
+        "not",
+        "dependentRequired",
+        "dependentSchemas",
+        "if",
+        "then",
+        "else",
+    }
+    assert _schema_keys(schema) & unsupported_composition == set()
     prompt = str(captured["prompt"])
     assert "на русском" in prompt.casefold()
     assert "кажд" in prompt.casefold() and "стать" in prompt.casefold()
