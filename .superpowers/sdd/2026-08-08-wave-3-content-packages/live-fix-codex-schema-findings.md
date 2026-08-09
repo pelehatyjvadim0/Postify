@@ -61,3 +61,29 @@ RED с точным множеством `{"allOf", "if", "then", "else"}`. Он
   `42 passed, 327 deselected`;
 - `uv run python -m compileall -q src`, `uv run ruff check src`,
   `uv lock --check`, `git diff --check`: GREEN.
+
+## Round 2: typed discriminator leaf
+
+После fix `579b74d` live preflight всё ещё завершается
+`400 invalid_json_schema` до analysis. В sanitized diagnostic `anyOf` упомянут
+только в context path `items` / branch `0`; признаков запрета
+`anyOf`, root-ошибки или не-object type нет. Это локализует
+несовместимость в leaf `selected` первой object-ветки.
+
+Текущие leaves равны `{"const": true}` и `{"const": false}`. Для
+current Structured Outputs validator discriminator обязан быть самодостаточно
+типизирован: `{"type": "boolean", "const": true/false}`.
+
+Existing generated-schema node усилен только двумя literal expectations.
+Он даёт точный RED: actual `{"const": true}` не содержит
+`{"type": "boolean"}`. Все прежние compatibility, strictness, bounds и
+selected/nonselected behavioral assertions сохранены.
+
+- Baseline non-integration: `327 passed, 42 deselected`.
+- Focused node: `1 failed`.
+- Codex adapter file: `1 failed, 15 passed`.
+- Retained non-integration: `326 passed, 43 deselected`.
+- Full non-integration: `1 failed, 326 passed, 42 deselected`.
+
+Production не изменялся; сеть и настоящий Codex в RED-проходе не
+вызывались.

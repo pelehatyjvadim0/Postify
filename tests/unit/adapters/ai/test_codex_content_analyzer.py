@@ -419,12 +419,12 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
         "minimum": 0,
         "maximum": 100,
     }
-    assert properties["selected"] == {"const": True}
+    assert properties["selected"] == {"type": "boolean", "const": True}
     assert properties["post_text"] == {"type": "string", "minLength": 1}
     assert properties["media_query"] == {"type": "string", "minLength": 1}
     assert unselected_schema["properties"] == {
         **properties,
-        "selected": {"const": False},
+        "selected": {"type": "boolean", "const": False},
         "post_text": {"type": "null"},
         "media_query": {"type": "null"},
     }
