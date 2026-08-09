@@ -43,4 +43,6 @@ Live proof: article HTTP и Wikimedia GREEN; Commons returned URL проходи
 strict MIME whitelist (`image/jpeg`, `image/png`, `image/webp`).
 Live fix Wikimedia: complete (RED `418ec2a`, GREEN `ab3df25`, fresh scoped
 re-review Approved без Critical/Important/Minor; MIME Important закрыт).
-Official operator Codex preflight всё ещё ждёт явного подтверждения.
+Codex schema live fix: complete (`579b74d`, `5ea09b2`); authorized operator
+preflight GREEN (`topics=1`, `selected=0`, strict schema, cleanup), fresh
+round 2 re-review Approved без замечаний.

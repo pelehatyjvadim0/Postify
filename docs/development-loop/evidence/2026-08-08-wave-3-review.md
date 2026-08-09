@@ -167,5 +167,15 @@ Live query через production transport подтвердил допустим
 Контроллер подтвердил полный GREEN: non-integration `327 passed, 42 deselected`;
 `TEST_DATABASE_URL=postgresql+psycopg://user@127.0.0.1:55432/postify_test .venv/bin/pytest -q -m integration`
 — `42 passed, 327 deselected in 6.87s`; также GREEN `compileall`, `ruff`,
-`uv lock --check` и `git diff --check`. Official operator Codex preflight всё
-ещё требует явного подтверждения.
+`uv lock --check` и `git diff --check`.
+
+## Codex schema: финальное live evidence
+
+После `5ea09b2` авторизованный production preflight вернул
+`CODEX_PREFLIGHT_OK topics=1 selected=0 schema=strict cleanup=ok`. Запуск
+использовал production flags `--ephemeral --sandbox read-only`
+`--ignore-user-config --ignore-rules --skip-git-repo-check`; временная
+директория вне repository удалена, raw output и stderr не печатались.
+Предыдущие schema failures честно сохранены в отдельном live-fix evidence как
+основание двух исправлений. Fresh round 2 re-review: **Approved**, замечаний
+нет.

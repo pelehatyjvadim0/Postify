@@ -62,6 +62,22 @@ RED с точным множеством `{"allOf", "if", "then", "else"}`. Он
 - `uv run python -m compileall -q src`, `uv run ruff check src`,
   `uv lock --check`, `git diff --check`: GREEN.
 
+## Operator preflight GREEN
+
+После `5ea09b2` авторизованный production preflight завершился:
+
+```text
+CODEX_PREFLIGHT_OK topics=1 selected=0 schema=strict cleanup=ok
+```
+
+Использованы production flags `--ephemeral --sandbox read-only`
+`--ignore-user-config --ignore-rules --skip-git-repo-check`. Временная
+директория была вне repository и удалена; raw output и stderr не печатались.
+Это не отменяет ранее зафиксированные schema failures: они предшествовали
+двум исправлениям и остаются частью evidence.
+
+Fresh round 2 re-review: **Approved**, замечаний нет.
+
 ## Round 2: typed discriminator leaf
 
 После fix `579b74d` live preflight всё ещё завершается
