@@ -22,8 +22,14 @@ read_dotenv_schedule() {
     line=$(grep "^$key=" "$environment_file")
     value=${line#*=}
     case "$value" in
-        \"*\") value=${value#\"}; value=${value%\"} ;;
-        \'*\') value=${value#\'}; value=${value%\'} ;;
+        \"*)
+            stripped=${value#\"}
+            case "$stripped" in *\") value=${stripped%\"} ;; *) die "Некорректная настройка расписания Telegram: $key" ;; esac
+            ;;
+        \'*)
+            stripped=${value#\'}
+            case "$stripped" in *\') value=${stripped%\'} ;; *) die "Некорректная настройка расписания Telegram: $key" ;; esac
+            ;;
     esac
     require_value "$key" "$value"
     printf '%s' "$value"

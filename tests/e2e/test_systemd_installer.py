@@ -61,17 +61,18 @@ def run_installer(
     interrupt_after_first_install: bool = False,
     interrupt_install_at: int | None = None,
     with_existing_units: bool = False,
+    environment_text: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     binary_dir, log_file = write_fake_binaries(tmp_path)
     project = tmp_path / "project"
     project.mkdir()
     environment_file = project / ".env"
-    environment_file.write_text(
+    environment_file.write_text(environment_text or (
         "POSTIFY_TEST_VALUE=$(touch must-not-run)\n"
         "TELEGRAM_ON_CALENDAR_MORNING=Mon..Fri 10:00\n"
         "TELEGRAM_ON_CALENDAR_DAY='Mon..Fri 14:00'\n"
         'TELEGRAM_ON_CALENDAR_EVENING="Mon..Fri 19:00"\n'
-    )
+    ))
     destination = tmp_path / "systemd"
     if with_existing_units:
         destination.mkdir()
@@ -206,6 +207,48 @@ def test_installer_does_not_copy_when_systemd_verify_fails(tmp_path: Path) -> No
     assert result.returncode != 0
     assert destination.exists() is False
     assert log_file.read_text().splitlines()[-1].startswith("systemd-analyze verify ")
+
+
+@pytest.mark.parametrize(
+    "environment_text",
+    [
+        "TELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+        "TELEGRAM_ON_CALENDAR_MORNING=Mon 10:00\nTELEGRAM_ON_CALENDAR_MORNING=Mon 11:00\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+        "TELEGRAM_ON_CALENDAR_MORNING=\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+        "TELEGRAM_ON_CALENDAR_MORNING=''\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+        'TELEGRAM_ON_CALENDAR_MORNING=""\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n',
+        "TELEGRAM_ON_CALENDAR_MORNING=Mon 10:00\tbad\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+        "TELEGRAM_ON_CALENDAR_MORNING='Mon 10:00\nTELEGRAM_ON_CALENDAR_DAY=Mon 14:00\nTELEGRAM_ON_CALENDAR_EVENING=Mon 19:00\n",
+    ],
+)
+def test_installer_rejects_invalid_telegram_dotenv_schedules_without_execution(
+    tmp_path: Path, environment_text: str
+) -> None:
+    # Поломка: unsafe/malformed dotenv schedule рендерится, исполняется или меняет destination.
+    result, destination, _ = run_installer(tmp_path, environment_text=environment_text)
+
+    assert result.returncode != 0
+    assert destination.exists() is False
+    assert "Mon 10:00" not in result.stderr
+    assert (tmp_path / "must-not-run").exists() is False
+
+
+def test_installer_reads_quoted_and_unquoted_telegram_dotenv_schedules(tmp_path: Path) -> None:
+    # Поломка: parser меняет literal values или использует CLI calendars для publish timer.
+    text = (
+        "POSTIFY_TEST_VALUE=$(touch must-not-run)\n"
+        "TELEGRAM_ON_CALENDAR_MORNING=Mon..Fri 10:00\n"
+        "TELEGRAM_ON_CALENDAR_DAY='Mon..Fri 14:00'\n"
+        'TELEGRAM_ON_CALENDAR_EVENING="Mon..Fri 19:00"\n'
+    )
+    result, destination, _ = run_installer(tmp_path, environment_text=text)
+
+    assert result.returncode == 0
+    timer = (destination / "postify-publish-once.timer").read_text()
+    assert "OnCalendar=Mon..Fri 10:00" in timer
+    assert "OnCalendar=Mon..Fri 14:00" in timer
+    assert "OnCalendar=Mon..Fri 19:00" in timer
+    assert (tmp_path / "must-not-run").exists() is False
 
 
 def test_installer_restores_existing_units_when_second_copy_fails(tmp_path: Path) -> None:
