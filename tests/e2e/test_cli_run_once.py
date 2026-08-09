@@ -430,6 +430,34 @@ def test_stop_stops_postgresql_after_run_once_finishes(monkeypatch) -> None:
     assert events == ["timer:disable-stop", "publish-timer:disable-stop", "run-once:wait:7.0:0.1", "publish-once:wait:7.0:0.1", "postgresql:stop"]
 
 
+def test_stop_keeps_postgresql_running_when_publish_wait_times_out(monkeypatch) -> None:
+    # Поломка: publish confirmation ещё active, но PostgreSQL уже остановлен.
+    from postify import cli
+    from postify.infrastructure.systemd import RunOnceTimeoutError
+
+    events: list[str] = []
+    monkeypatch.setattr(cli, "Settings", settings)
+    monkeypatch.setattr(
+        cli,
+        "create_systemd_controller",
+        lambda configured_settings: FakeSystemd(
+            events, publish_error=RunOnceTimeoutError("postify-publish-once.service")
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["stop"])
+
+    assert result.exit_code != 0
+    assert "postify-publish-once.service" in result.output
+    assert "Traceback" not in result.output
+    assert events == [
+        "timer:disable-stop",
+        "publish-timer:disable-stop",
+        "run-once:wait:7.0:0.1",
+        "publish-once:wait:7.0:0.1",
+    ]
+
+
 @dataclass
 class FakeContentReview:
     package: SimpleNamespace
