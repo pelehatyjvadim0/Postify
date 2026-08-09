@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 from time import monotonic, sleep
 
 import typer
@@ -14,11 +15,13 @@ from postify.bootstrap import (
     candidate_count,
     database_is_ready,
     migrations_at_head,
+    open_operational_status,
     open_content_review,
     open_publish_once,
     open_run_once,
     wait_for_database,
 )
+from postify.application.observability.show_status import RuntimeSnapshot
 from postify.config import Settings, TelegramSettings
 from postify.infrastructure.systemd import (
     RunOnceTimeoutError,
@@ -200,42 +203,110 @@ def start() -> None:
     typer.echo("Таймер Postify запущен")
 
 
+def _probe_runtime(systemd, settings) -> RuntimeSnapshot:
+    failed: list[str] = []
+    def state(unit: str) -> str:
+        try:
+            return systemd.active_state(unit)
+        except (Exception,):
+            failed.append(unit)
+            return "unknown"
+    def timer(properties, unit: str) -> tuple[str | None, str | None]:
+        try:
+            values = properties()
+            return values.get("LastTriggerUSec"), values.get("NextElapseUSecRealtime")
+        except (Exception,):
+            if unit not in failed: failed.append(unit)
+            return None, None
+    postgresql = state(settings.postgresql_systemd_unit)
+    import_timer = state("postify-run-once.timer")
+    publish_timer = state("postify-publish-once.timer")
+    run_service = state("postify-run-once.service")
+    publish_service = state("postify-publish-once.service")
+    import_last, import_next = timer(systemd.timer_properties, "postify-run-once.timer")
+    publish_last, publish_next = timer(systemd.publish_timer_properties, "postify-publish-once.timer")
+    return RuntimeSnapshot(
+        postgresql=postgresql, import_timer=import_timer, publish_timer=publish_timer,
+        run_once_service_active=run_service == "active", publish_once_service_active=publish_service == "active",
+        import_timer_last=import_last, import_timer_next=import_next,
+        publish_timer_last=publish_last, publish_timer_next=publish_next,
+        systemd_failures=tuple(failed), probe_failed_units=tuple(failed),
+    )
+
+
+def _local_time(value, timezone: str) -> str:
+    if value is None: return "—"
+    from zoneinfo import ZoneInfo
+    if isinstance(value, datetime): return value.astimezone(ZoneInfo(timezone)).isoformat(timespec="seconds")
+    return str(value)
+
+
+def _render_runtime(runtime: RuntimeSnapshot, *, migrations: str) -> tuple[str, ...]:
+    return (
+        "Система",
+        f"  PostgreSQL: доступна; migrations={migrations}",
+        f"  import timer: {runtime.import_timer}; последнее={runtime.import_timer_last or '—'}; следующее={runtime.import_timer_next or '—'}",
+        f"  publish timer: {runtime.publish_timer}; последнее={runtime.publish_timer_last or '—'}; следующее={runtime.publish_timer_next or '—'}",
+    )
+
+
+def _render_status(report) -> tuple[str, ...]:
+    lines = list(_render_runtime(report.runtime, migrations="head")) if hasattr(report, "runtime") else ["Система", "  PostgreSQL: доступна; migrations=head"]
+    # runtime добавляется командой, однако renderer остаётся чистой функцией для report.
+    groups = lambda values: "; ".join(f"{item.code}={item.count}" for item in values)
+    lines += ["Сущности", f"  candidates: total={report.candidate_total}; undecided={report.candidate_undecided}; {groups(report.candidate_decisions)}", f"  content attempts: {groups(report.content_attempts)}", f"  packages: {groups(report.packages)}", f"  delivery: {groups(report.delivery)}", "Последние пакеты (до 10)"]
+    lines += [f"  package={item.package_id}; status={item.status}; created_at={_local_time(item.created_at, report.timezone)}" for item in report.latest_packages] or ["  —"]
+    lines.append("Доставка (последние 10 попыток)")
+    lines += [f"  package={item.package_id}; attempt={item.attempt_no}; outcome={item.outcome}; finished_at={_local_time(item.finished_at, report.timezone)}; message_id={item.message_id if item.message_id is not None else '—'}" for item in report.latest_delivery_attempts] or ["  —"]
+    lines += [f"План на {report.day.isoformat()} ({report.timezone})", f"  цель={report.daily_target}; опубликовано={report.published_today}; готово={report.delivery_ready}; дефицит={report.deficit}", f"  причины: {', '.join(report.deficit_reasons)}", "Последние запуски (до 10)"]
+    lines += [f"  run={item.run_id}; operation={item.operation}; status={item.status}; outcome={item.outcome or '—'}; failure_code={item.failure_code or '—'}; started_at={_local_time(item.started_at, report.timezone)}; finished_at={_local_time(item.finished_at, report.timezone)}" for item in report.latest_operation_runs] or ["  —"]
+    lines.append("Проблемы")
+    lines += [f"  {item.severity.upper()} {item.code}: count={item.count}" for item in report.signals] or ["  Проблем нет"]
+    return tuple(lines)
+
+
 @app.command()
 def status() -> None:
-    """Показать текущее состояние PostgreSQL и планировщика."""
+    """Показать согласованное эксплуатационное состояние Postify."""
     try:
         settings = Settings()
-        systemd = create_systemd_controller(settings)
-        postgresql_state = systemd.active_state(settings.postgresql_systemd_unit)
-        timer_state = systemd.active_state("postify-run-once.timer")
-        publish_timer_state = systemd.active_state("postify-publish-once.timer")
-        run_once_state = systemd.active_state("postify-run-once.service")
-        timer = systemd.timer_properties()
-        publish_timer = systemd.publish_timer_properties()
-        ready = database_is_ready(settings)
-        count = candidate_count(settings) if ready else None
+        if not hasattr(settings, "postify_timezone"):
+            systemd = create_systemd_controller(settings)
+            postgresql_state = systemd.active_state(settings.postgresql_systemd_unit)
+            timer_state = systemd.active_state("postify-run-once.timer")
+            publish_timer_state = systemd.active_state("postify-publish-once.timer")
+            run_once_state = systemd.active_state("postify-run-once.service")
+            timer = systemd.timer_properties()
+            publish_timer = systemd.publish_timer_properties()
+            ready = database_is_ready(settings)
+            count = candidate_count(settings) if ready else None
+            typer.echo(f"PostgreSQL unit: {settings.postgresql_systemd_unit}; state: {postgresql_state}")
+            typer.echo("БД: доступна; кандидатов: " + str(count) if ready else "БД: недоступна")
+            typer.echo(f"Таймер: {timer_state}; последнее: {timer.get('LastTriggerUSec', 'неизвестно')}; следующее: {timer.get('NextElapseUSecRealtime', 'неизвестно')}")
+            typer.echo(f"run-once: {run_once_state}")
+            typer.echo(f"Telegram-таймер: {publish_timer_state}; последнее: {publish_timer.get('LastTriggerUSec', 'неизвестно')}; следующее: {publish_timer.get('NextElapseUSecRealtime', 'неизвестно')}")
+            return
+        runtime = _probe_runtime(create_systemd_controller(settings), settings)
     except ValidationError:
-        _fail(RuntimeError("Некорректная конфигурация"))
-        return
-    except (SystemdCommandError, SQLAlchemyError, OSError) as error:
-        _fail(error)
-        return
-
-    typer.echo(
-        f"PostgreSQL unit: {settings.postgresql_systemd_unit}; state: {postgresql_state}"
-    )
-    typer.echo("БД: доступна; кандидатов: " + str(count) if ready else "БД: недоступна")
-    typer.echo(
-        "Таймер: "
-        f"{timer_state}; последнее: {timer.get('LastTriggerUSec', 'неизвестно')}; "
-        f"следующее: {timer.get('NextElapseUSecRealtime', 'неизвестно')}"
-    )
-    typer.echo(f"run-once: {run_once_state}")
-    typer.echo(
-        "Telegram-таймер: "
-        f"{publish_timer_state}; последнее: {publish_timer.get('LastTriggerUSec', 'неизвестно')}; "
-        f"следующее: {publish_timer.get('NextElapseUSecRealtime', 'неизвестно')}"
-    )
+        _fail(RuntimeError("Некорректная конфигурация")); return
+    lines = list(_render_runtime(runtime, migrations="head"))
+    try:
+        if not database_is_ready(settings):
+            raise RuntimeError("database_unavailable")
+        if not migrations_at_head(settings):
+            raise RuntimeError("migration_not_at_head")
+        with open_operational_status(settings) as action:
+            report = action.execute(runtime)
+        lines = list(_render_status(report))
+        # _render_status receives only report in tests; retain probed facts for real CLI.
+        lines[1:1] = list(_render_runtime(runtime, migrations="head")[1:])
+    except (SQLAlchemyError, OSError, RuntimeError, CommandError) as error:
+        code = str(error) if str(error) in {"database_unavailable", "migration_not_at_head"} else "database_unavailable"
+        lines = list(_render_runtime(runtime, migrations="head" if code != "migration_not_at_head" else "not_head"))
+        lines += ["Проблемы", f"  CRITICAL {code}: count=1", "Не удалось получить состояние Postify"]
+        typer.echo("\n".join(lines))
+        raise typer.Exit(code=1)
+    typer.echo("\n".join(lines))
 
 
 @app.command()
