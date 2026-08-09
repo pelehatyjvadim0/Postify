@@ -20,6 +20,7 @@ class PackageStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     FAILED = "failed"
+    PUBLISHED = "published"
 
 
 def validate_transition(current: str, target: str) -> None:
@@ -29,6 +30,7 @@ def validate_transition(current: str, target: str) -> None:
         ("processing", "approved"),
         ("awaiting_review", "approved"),
         ("awaiting_review", "rejected"),
+        ("approved", "published"),
     }
     if (str(current), str(target)) not in allowed:
         raise InvalidContentTransition("Недопустимый переход пакета")
