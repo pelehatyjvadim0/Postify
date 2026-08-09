@@ -189,3 +189,28 @@ def test_failed_cleanup_remains_pending_without_telegram_or_failure_attempt() ->
 
     assert result == Result("cleanup_pending", package_id=41)
     assert not any(item.startswith(("reserve:", "telegram:", "failure:", "deleted:")) for item in events)
+
+
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_real_media_cleanup_error_keeps_publication_pending_without_new_delivery_attempt(
+    cleanup: bool,
+) -> None:
+    # Поломка: LocalMediaProvider.delete поднимает MediaAcquireError, а action отменяет published.
+    from postify.adapters.media.local_media_provider import MediaAcquireError
+
+    _, _, Result, *_ = _api()
+    events: list[str] = []
+    claim = approved_claim()
+    result = _action(
+        RepositoryFake(events, claim=None if cleanup else claim, cleanup=claim if cleanup else None),
+        PublisherFake(events),
+        MediaFake(events, error=MediaAcquireError()),
+    ).execute()
+
+    assert result == Result("cleanup_pending", package_id=41)
+    assert "failure:" not in " ".join(events)
+    assert not any(item.startswith("deleted:") for item in events)
+    if cleanup:
+        assert not any(item.startswith(("reserve:", "telegram:")) for item in events)
+    else:
+        assert events[-3:] == ["telegram:41", "commit:731", "delete:/media/41.png"]

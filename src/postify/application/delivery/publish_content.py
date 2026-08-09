@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from postify.domain.delivery.models import PublishContentResult, TelegramPublishError
+from postify.application.ports.media_provider import MediaCleanupError
 
 
 class PublishContent:
@@ -22,7 +23,7 @@ class PublishContent:
         if cleanup is not None:
             try:
                 self.media.delete(cleanup.media_path)
-            except OSError:
+            except (OSError, MediaCleanupError):
                 return PublishContentResult("cleanup_pending", package_id=cleanup.package_id)
             self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
             return PublishContentResult("cleanup_completed", package_id=cleanup.package_id)
@@ -37,7 +38,7 @@ class PublishContent:
         self.repository.confirm_published(claim, message_id=message.message_id, now=now)
         try:
             self.media.delete(claim.media_path)
-        except OSError:
+        except (OSError, MediaCleanupError):
             return PublishContentResult("cleanup_pending", package_id=claim.package_id)
         self.repository.mark_media_deleted(claim.delivery_id, now=now)
         return PublishContentResult("published", package_id=claim.package_id, message_id=message.message_id)

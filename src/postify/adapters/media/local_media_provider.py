@@ -10,9 +10,10 @@ import httpx
 
 from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy, UnsafePublicUrlError
 from postify.domain.content.models import StoredMedia
+from postify.application.ports.media_provider import MediaCleanupError
 
 
-class MediaAcquireError(RuntimeError):
+class MediaAcquireError(MediaCleanupError):
     def __init__(self, message: str = "media_failed") -> None:
         super().__init__(message)
         self.code = "media_failed"
