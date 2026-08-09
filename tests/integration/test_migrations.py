@@ -182,3 +182,91 @@ def test_content_migration_creates_complete_schema_and_downgrades_to_wave_two(
         engine.dispose()
 
     command.upgrade(alembic_config, "head")
+
+
+def test_telegram_delivery_migration_has_exact_named_schema(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка: delivery schema теряет nullable/timezone или named invariant.
+    command.upgrade(alembic_config, "20260808_03")
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        inspector = inspect(engine)
+        assert {"telegram_deliveries", "telegram_delivery_attempts"} <= set(
+            inspector.get_table_names()
+        )
+        delivery = {item["name"]: item for item in inspector.get_columns("telegram_deliveries")}
+        attempts = {
+            item["name"]: item
+            for item in inspector.get_columns("telegram_delivery_attempts")
+        }
+        assert set(delivery) == {
+            "id", "package_id", "status", "attempt_no", "message_id",
+            "sending_started_at", "confirmed_at", "media_deleted_at",
+            "failure_code", "failure_reason", "created_at", "updated_at",
+        }
+        assert set(attempts) == {
+            "id", "delivery_id", "attempt_no", "outcome", "code", "reason",
+            "started_at", "finished_at", "message_id",
+        }
+        assert all(delivery[name]["type"].timezone is True for name in (
+            "sending_started_at", "confirmed_at", "media_deleted_at", "created_at", "updated_at"
+        ))
+        assert all(attempts[name]["type"].timezone is True for name in ("started_at", "finished_at"))
+        assert {name for name, column in delivery.items() if column["nullable"]} == {
+            "message_id", "confirmed_at", "media_deleted_at", "failure_code", "failure_reason"
+        }
+        assert {name for name, column in attempts.items() if column["nullable"]} == {
+            "code", "reason", "message_id"
+        }
+        assert {item["name"] for item in inspector.get_unique_constraints("telegram_deliveries")} == {
+            "uq_telegram_deliveries_package_id"
+        }
+        assert {item["name"] for item in inspector.get_unique_constraints("telegram_delivery_attempts")} == {
+            "uq_telegram_delivery_attempts_delivery_id_attempt_no"
+        }
+        assert {item["name"] for item in inspector.get_foreign_keys("telegram_deliveries")} == {
+            "fk_telegram_deliveries_package_id_content_packages"
+        }
+        assert {item["name"] for item in inspector.get_foreign_keys("telegram_delivery_attempts")} == {
+            "fk_telegram_delivery_attempts_delivery_id_telegram_deliveries"
+        }
+        delivery_checks = inspector.get_check_constraints("telegram_deliveries")
+        attempt_checks = inspector.get_check_constraints("telegram_delivery_attempts")
+        assert {item["name"] for item in delivery_checks} == {"ck_telegram_deliveries_status"}
+        assert {item["name"] for item in attempt_checks} == {"ck_telegram_delivery_attempts_outcome"}
+        assert all(status in delivery_checks[0]["sqltext"] for status in (
+            "sending", "retryable", "published", "failed", "uncertain"
+        ))
+        assert all(status in attempt_checks[0]["sqltext"] for status in (
+            "retryable", "published", "failed", "uncertain"
+        ))
+    finally:
+        engine.dispose()
+
+
+def test_telegram_delivery_migration_downgrades_to_wave_three_and_upgrades_again(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка: rollback оставляет Wave 4 или удаляет Wave 3.
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "20260808_03")
+    engine = create_engine(isolated_database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "content_packages" in tables
+        assert "content_package_status_history" in tables
+        assert "telegram_deliveries" not in tables
+        assert "telegram_delivery_attempts" not in tables
+    finally:
+        engine.dispose()
+
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        assert {"telegram_deliveries", "telegram_delivery_attempts"} <= set(
+            inspect(engine).get_table_names()
+        )
+    finally:
+        engine.dispose()
