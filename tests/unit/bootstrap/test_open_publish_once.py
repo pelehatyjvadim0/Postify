@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from types import SimpleNamespace
 
 import httpx
 
@@ -78,3 +80,60 @@ def test_open_publish_once_closes_engine_when_client_construction_fails(monkeypa
     else:
         raise AssertionError("Ожидалась ошибка client")
     assert events == ["engine:close"]
+
+
+def test_open_publish_once_records_safe_publish_outcome_without_replacing_result(
+    monkeypatch,
+) -> None:
+    # Поломка: composition root обходит running→succeeded journal или меняет PublishContentResult.
+    from postify import bootstrap
+    from postify.application.delivery import publish_content
+    from postify.application.observability.record_operation import RecordedAction
+    from postify.domain.delivery.models import PublishContentResult
+    from postify.infrastructure.repositories import sqlalchemy_observability
+
+    events: list[tuple[object, ...]] = []
+    expected = PublishContentResult("empty")
+
+    class Engine:
+        def dispose(self) -> None:
+            events.append(("engine:close",))
+
+    class Underlying:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def execute(self) -> PublishContentResult:
+            events.append(("action",))
+            return expected
+
+    class Journal:
+        def __init__(self, factory) -> None:
+            events.append(("journal", factory))
+
+        def start(self, operation, *, now: datetime) -> int:
+            events.append(("start", operation.value))
+            return 17
+
+        def succeed(self, run_id: int, *, outcome: str, now: datetime) -> None:
+            events.append(("succeed", run_id, outcome))
+
+        def fail(self, run_id: int, *, failure_code: str, now: datetime) -> None:
+            events.append(("fail", run_id, failure_code))
+
+    factory = object()
+    monkeypatch.setattr(bootstrap, "create_engine_from_settings", lambda _: Engine())
+    monkeypatch.setattr(bootstrap, "sessionmaker", lambda _: factory)
+    monkeypatch.setattr(bootstrap.httpx, "Client", lambda **_: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(publish_content, "PublishContent", Underlying)
+    monkeypatch.setattr(sqlalchemy_observability, "SqlAlchemyOperationRunRepository", Journal)
+
+    with bootstrap.open_publish_once(_settings(), _telegram()) as action:
+        assert isinstance(action, RecordedAction)
+        result = action.execute()
+
+    assert result is expected
+    assert ("start", "publish_once") in events
+    assert ("action",) in events
+    assert ("succeed", 17, "empty") in events
+    assert all(event != ("fail", 17, "publish_once_failed") for event in events)
