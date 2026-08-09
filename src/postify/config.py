@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, PostgresDsn, field_validator, model_validator
+from pydantic import Field, PostgresDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import NoDecode
 
@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     content_article_max_bytes: int = Field(gt=0)
     content_media_max_bytes: int = Field(gt=0)
     content_codex_timeout_seconds: int = Field(gt=0)
+    telegram_bot_token: SecretStr
+    telegram_chat_id: str = Field(min_length=1)
+    telegram_timeout_seconds: float = Field(gt=0)
+    telegram_on_calendar_morning: str = Field(min_length=1)
+    telegram_on_calendar_day: str = Field(min_length=1)
+    telegram_on_calendar_evening: str = Field(min_length=1)
 
     @field_validator(
         "selection_rules",
@@ -94,4 +100,11 @@ class Settings(BaseSettings):
     def validate_postgresql_systemd_unit(cls, value: str) -> str:
         if not value.endswith(".service"):
             raise ValueError("Имя systemd-unit должно оканчиваться на .service")
+        return value
+
+    @field_validator("telegram_chat_id", "telegram_on_calendar_morning", "telegram_on_calendar_day", "telegram_on_calendar_evening")
+    @classmethod
+    def validate_nonblank_telegram_value(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Настройка Telegram не может быть пустой")
         return value

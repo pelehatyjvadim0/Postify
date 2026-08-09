@@ -15,6 +15,7 @@ from postify.bootstrap import (
     database_is_ready,
     migrations_at_head,
     open_content_review,
+    open_publish_once,
     open_run_once,
     wait_for_database,
 )
@@ -81,6 +82,31 @@ def run_once() -> None:
 
 def _content_error(action: str) -> None:
     _fail(RuntimeError(f"Не удалось {action} контентный пакет"))
+
+
+@app.command("publish-once")
+def publish_once() -> None:
+    """Опубликовать один подтверждённый пакет в Telegram."""
+    try:
+        settings = Settings()
+        with open_publish_once(settings) as action:
+            result = action.execute()
+    except ValidationError:
+        _fail(RuntimeError("Некорректная конфигурация Telegram"))
+        return
+    except (SQLAlchemyError, OSError, RuntimeError, ValueError):
+        _fail(RuntimeError("Не удалось выполнить Telegram-доставку"))
+        return
+    if result.outcome == "empty":
+        typer.echo("Слот пуст")
+    elif result.outcome == "published":
+        typer.echo(f"Опубликован пакет {result.package_id}; message_id={result.message_id}")
+    elif result.outcome == "cleanup_completed":
+        typer.echo(f"Cleanup завершён для пакета {result.package_id}")
+    elif result.outcome == "cleanup_pending":
+        typer.echo(f"Cleanup ожидает повтора для пакета {result.package_id}")
+    else:
+        typer.echo(f"Исход доставки пакета {result.package_id}: {result.outcome}")
 
 
 @content_app.command("list")

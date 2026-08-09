@@ -40,6 +40,7 @@ def open_content_review(settings: Settings):
     from postify.application.content.review_content import ReviewContent
     from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.infrastructure.repositories.sqlalchemy_content import (
         SqlAlchemyContentRepository,
     )
@@ -65,6 +66,29 @@ def open_content_review(settings: Settings):
             engine.dispose()
 
     return opened()
+
+
+@contextmanager
+def open_publish_once(settings: Settings):
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.telegram.bot_api import TelegramBotApiPublisher
+    from postify.application.delivery.publish_content import PublishContent
+    from postify.infrastructure.repositories.sqlalchemy_delivery import SqlAlchemyDeliveryRepository
+
+    engine = create_engine_from_settings(settings)
+    client = httpx.Client(timeout=settings.telegram_timeout_seconds)
+    try:
+        media = LocalMediaProvider(client, settings.content_media_dir, settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy())
+        yield PublishContent(
+            SqlAlchemyDeliveryRepository(sessionmaker(engine)),
+            TelegramBotApiPublisher(client, bot_token=settings.telegram_bot_token.get_secret_value(), chat_id=settings.telegram_chat_id),
+            media,
+            timeout_seconds=settings.telegram_timeout_seconds,
+            clock=lambda: datetime.now(UTC),
+        )
+    finally:
+        client.close()
+        engine.dispose()
 
 
 class DatabaseUnavailableError(RuntimeError):
