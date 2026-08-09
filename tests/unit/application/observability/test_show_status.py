@@ -367,3 +367,28 @@ def test_fixed_group_normalization_keeps_unknown_persisted_group() -> None:
 
     assert result.content_attempts[-1].code == "future_attempt"
     assert result.content_attempts[-1].ids == (31,)
+
+
+def test_empty_snapshot_has_candidate_and_rejection_taxonomy_zero_groups() -> None:
+    # Поломка: empty report скрывает selected/rejected и причины отклонения.
+    result, _ = report(raw_snapshot(published_today=3))
+
+    assert tuple((item.code, item.count) for item in result.candidate_decisions) == (
+        ("selected", 0),
+        ("rejected", 0),
+    )
+    assert tuple((item.code, item.count) for item in result.rejection_reasons) == (
+        ("advertising", 0),
+        ("out_of_scope", 0),
+        ("hiring", 0),
+        ("technical_without_use", 0),
+    )
+
+
+def test_candidate_normalization_keeps_unknown_reason_group() -> None:
+    # Поломка: fixed rejection taxonomy замалчивает новое persisted reason.
+    result, _ = report(
+        raw_snapshot(rejection_reasons=(_group("future_reason", ids=(41,)),))
+    )
+
+    assert result.rejection_reasons[-1].code == "future_reason"

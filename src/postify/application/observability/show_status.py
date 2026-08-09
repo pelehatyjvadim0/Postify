@@ -59,6 +59,10 @@ class StatusReport:
         return self.snapshot.candidate_decisions
 
     @property
+    def rejection_reasons(self):
+        return self.snapshot.rejection_reasons
+
+    @property
     def content_attempts(self):
         return self.snapshot.content_attempts
 
@@ -148,6 +152,13 @@ class ShowOperationalStatus:
     @staticmethod
     def _with_fixed_groups(snapshot: RawOperationalSnapshot) -> RawOperationalSnapshot:
         expected = {
+            "candidate_decisions": ("selected", "rejected"),
+            "rejection_reasons": (
+                "advertising",
+                "out_of_scope",
+                "hiring",
+                "technical_without_use",
+            ),
             "content_attempts": (
                 "processing",
                 "retry_scheduled",

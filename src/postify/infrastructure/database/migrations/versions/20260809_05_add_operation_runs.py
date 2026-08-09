@@ -23,12 +23,20 @@ def upgrade() -> None:
         sa.Column("failure_code", sa.String()),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
-        sa.CheckConstraint("operation IN ('run_once', 'publish_once')", name="ck_operation_runs_operation"),
-        sa.CheckConstraint("status IN ('running', 'succeeded', 'failed')", name="ck_operation_runs_status"),
+        sa.CheckConstraint(
+            "operation IN ('run_once', 'publish_once')",
+            name="ck_operation_runs_operation",
+        ),
+        sa.CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed')",
+            name="ck_operation_runs_status",
+        ),
         sa.CheckConstraint(
             "(status = 'running' AND outcome IS NULL AND failure_code IS NULL AND finished_at IS NULL) "
             "OR (status = 'succeeded' AND btrim(outcome) <> '' AND failure_code IS NULL AND finished_at IS NOT NULL) "
-            "OR (status = 'failed' AND outcome IS NULL AND btrim(failure_code) <> '' AND finished_at IS NOT NULL)",
+            "OR (status = 'failed' AND outcome IS NULL AND btrim(failure_code) <> '' AND finished_at IS NOT NULL "
+            "AND ((operation = 'run_once' AND failure_code = 'run_once_failed') "
+            "OR (operation = 'publish_once' AND failure_code = 'publish_once_failed')))",
             name="ck_operation_runs_terminal_fields",
         ),
     )

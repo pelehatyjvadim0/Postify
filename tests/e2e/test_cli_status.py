@@ -265,3 +265,22 @@ def test_status_full_report_has_one_postgresql_row_and_renders_signal_ids(
     assert result.output.count("PostgreSQL: доступна; migrations=head") == 1
     assert "WARNING delivery_failed: count=2; ids=42,41" in result.output
     assert "WARNING systemd_probe_failed: count=1\n" in result.output
+
+
+def test_status_renders_candidate_and_rejection_zero_taxonomy(monkeypatch) -> None:
+    # Поломка: CLI скрывает fixed zero candidate/rejection state groups.
+    action = FakeStatusAction(_report())
+    cli = _configure(monkeypatch, action=action)
+    action.report.candidate_total = 0
+    action.report.candidate_undecided = 0
+    action.report.candidate_decisions = ()
+    action.report.rejection_reasons = ()
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert result.exit_code == 0
+    assert "candidates: total=0; undecided=0; selected=0; rejected=0" in result.output
+    assert (
+        "rejection reasons: advertising=0; out_of_scope=0; hiring=0; technical_without_use=0"
+        in result.output
+    )

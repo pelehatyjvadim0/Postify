@@ -183,3 +183,21 @@ def test_operation_run_summary_rejects_outcome_outside_operation_vocabulary(
 
     with pytest.raises(ValueError, match="outcome"):
         OperationRun(4, operation, "succeeded", outcome, None, NOW, started_at=NOW)
+
+
+@pytest.mark.parametrize(
+    ("operation", "failure_code"),
+    [
+        ("run_once", "publish_once_failed"),
+        ("publish_once", "run_once_failed"),
+        ("publish_once", "private"),
+    ],
+)
+def test_operation_run_summary_rejects_failure_code_outside_operation_vocabulary(
+    operation: str, failure_code: str
+) -> None:
+    # Поломка: arbitrary failure code сохраняется и затем показывается operator-у.
+    _, _, _, OperationRun, *_ = _models()
+
+    with pytest.raises(ValueError, match="failure"):
+        OperationRun(4, operation, "failed", None, failure_code, NOW, started_at=NOW)

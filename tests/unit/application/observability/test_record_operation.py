@@ -248,3 +248,17 @@ def test_invalid_callable_success_outcome_does_not_reach_journal() -> None:
         recorded.execute()
 
     assert events == [("start", "publish_once", STARTED), ("action",)]
+
+
+def test_invalid_failure_code_is_rejected_before_action_starts() -> None:
+    # Поломка: wrong failure pairing writes arbitrary text after an action failure.
+    events: list[tuple[object, ...]] = []
+
+    with pytest.raises(ValueError, match="failure"):
+        _recorded(
+            FakeAction(events, error=SourceFailure("original")),
+            FakeJournal(events),
+            failure_code="private failure",
+        )
+
+    assert events == []

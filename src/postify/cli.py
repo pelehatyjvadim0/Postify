@@ -275,12 +275,16 @@ def _render_status(report) -> tuple[str, ...]:
     )
 
     # runtime добавляется командой, однако renderer остаётся чистой функцией для report.
-    def groups(values) -> str:
-        return "; ".join(f"{item.code}={item.count}" for item in values)
+    def groups(values, expected: tuple[str, ...] = ()) -> str:
+        by_code = {item.code: item.count for item in values}
+        fixed = [f"{code}={by_code.pop(code, 0)}" for code in expected]
+        unknown = [f"{code}={count}" for code, count in by_code.items()]
+        return "; ".join((*fixed, *unknown))
 
     lines += [
         "Сущности",
-        f"  candidates: total={report.candidate_total}; undecided={report.candidate_undecided}; {groups(report.candidate_decisions)}",
+        f"  candidates: total={report.candidate_total}; undecided={report.candidate_undecided}; {groups(report.candidate_decisions, ('selected', 'rejected'))}",
+        f"  rejection reasons: {groups(getattr(report, 'rejection_reasons', ()), ('advertising', 'out_of_scope', 'hiring', 'technical_without_use'))}",
         f"  content attempts: {groups(report.content_attempts)}",
         f"  packages: {groups(report.packages)}",
         f"  delivery: {groups(report.delivery)}",

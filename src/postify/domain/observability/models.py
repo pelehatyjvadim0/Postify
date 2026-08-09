@@ -31,12 +31,26 @@ OPERATION_OUTCOMES = {
     ),
 }
 
+OPERATION_FAILURE_CODES = {
+    OperationKind.RUN_ONCE: "run_once_failed",
+    OperationKind.PUBLISH_ONCE: "publish_once_failed",
+}
+
 
 def validate_operation_outcome(operation: OperationKind | str, outcome: str) -> str:
     kind = OperationKind(operation)
     if outcome not in OPERATION_OUTCOMES[kind]:
         raise ValueError("Недопустимый outcome операции")
     return outcome
+
+
+def validate_operation_failure_code(
+    operation: OperationKind | str, failure_code: str
+) -> str:
+    kind = OperationKind(operation)
+    if failure_code != OPERATION_FAILURE_CODES[kind]:
+        raise ValueError("Недопустимый failure code операции")
+    return failure_code
 
 
 def _positive(value: int, name: str) -> None:
@@ -129,6 +143,8 @@ class OperationRunSummary:
             raise ValueError("Некорректные terminal поля operation run")
         if status is OperationStatus.SUCCEEDED:
             validate_operation_outcome(operation, self.outcome)
+        if status is OperationStatus.FAILED:
+            validate_operation_failure_code(operation, self.failure_code)
 
 
 @dataclass(frozen=True, slots=True)

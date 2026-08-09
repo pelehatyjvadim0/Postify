@@ -7,6 +7,7 @@ from typing import Generic, Protocol, TypeVar
 from postify.application.ports.operation_run_repository import OperationRunRepository
 from postify.domain.observability.models import (
     OperationKind,
+    validate_operation_failure_code,
     validate_operation_outcome,
 )
 
@@ -32,7 +33,7 @@ class RecordedAction(Generic[T]):
         self._journal = journal
         self._operation = operation
         self._success_outcome = success_outcome
-        self._failure_code = failure_code
+        self._failure_code = validate_operation_failure_code(operation, failure_code)
         self._clock = clock
 
     def execute(self) -> T:
