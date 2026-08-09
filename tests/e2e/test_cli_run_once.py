@@ -46,9 +46,10 @@ def run_once_context(run_once: FakeRunOnce):
 
 
 class FakeSystemd:
-    def __init__(self, events: list[str], *, run_once_error: Exception | None = None) -> None:
+    def __init__(self, events: list[str], *, run_once_error: Exception | None = None, publish_error: Exception | None = None) -> None:
         self.events = events
         self.run_once_error = run_once_error
+        self.publish_error = publish_error
 
     def start_postgresql(self) -> None:
         self.events.append("postgresql:start")
@@ -76,8 +77,8 @@ class FakeSystemd:
 
     def wait_for_publish_once(self, *, timeout: float, poll_interval: float) -> str:
         self.events.append(f"publish-once:wait:{timeout}:{poll_interval}")
-        if self.run_once_error is not None:
-            raise self.run_once_error
+        if self.publish_error is not None:
+            raise self.publish_error
         return "inactive"
 
     def active_state(self, unit: str) -> str:

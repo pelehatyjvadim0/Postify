@@ -31,6 +31,7 @@ read_dotenv_schedule() {
             case "$stripped" in *\') value=${stripped%\'} ;; *) die "Некорректная настройка расписания Telegram: $key" ;; esac
             ;;
     esac
+    case "$value" in *\"*|*\'*) die "Некорректная настройка расписания Telegram: $key" ;; esac
     require_value "$key" "$value"
     printf '%s' "$value"
 }
