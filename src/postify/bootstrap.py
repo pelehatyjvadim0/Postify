@@ -200,13 +200,17 @@ def open_run_once(
             if callable(resources.session_factory)
             else None,
         )
-        yield RecordedAction(
-            action,
-            SqlAlchemyOperationRunRepository(resources.session_factory),
-            operation=OperationKind.RUN_ONCE,
-            success_outcome="completed",
-            failure_code="run_once_failed",
-        )
+        if not callable(resources.session_factory):
+            # Тестовая lifecycle-граница без SQL session остаётся прежней.
+            yield action
+        else:
+            yield RecordedAction(
+                action,
+                SqlAlchemyOperationRunRepository(resources.session_factory),
+                operation=OperationKind.RUN_ONCE,
+                success_outcome="completed",
+                failure_code="run_once_failed",
+            )
 
 
 def _content_processor(settings: Settings, resources: _ImportResources):
