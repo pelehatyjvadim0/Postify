@@ -1,0 +1,13 @@
+[Unit]
+Description=Postify scheduled Telegram publication
+
+[Timer]
+OnCalendar=@ON_CALENDAR_1@
+OnCalendar=@ON_CALENDAR_2@
+OnCalendar=@ON_CALENDAR_3@
+Timezone=@TIMEZONE@
+Persistent=true
+Unit=postify-publish-once.service
+
+[Install]
+WantedBy=timers.target

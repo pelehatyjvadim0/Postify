@@ -100,24 +100,19 @@ temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/postify-systemd.XXXXXXXXXX")
 backup_dir="$temp_dir/backup"
 destination_service="$destination/postify-run-once.service"
 destination_timer="$destination/postify-run-once.timer"
-service_was_present=0
-timer_was_present=0
 installation_started=0
 daemon_reload_started=0
 
 cleanup() {
     exit_status=$?
     if [ "$exit_status" -ne 0 ] && [ "$installation_started" -eq 1 ]; then
-        if [ "$service_was_present" -eq 1 ]; then
-            cp "$backup_dir/postify-run-once.service" "$destination_service"
-        else
-            rm -f "$destination_service"
-        fi
-        if [ "$timer_was_present" -eq 1 ]; then
-            cp "$backup_dir/postify-run-once.timer" "$destination_timer"
-        else
-            rm -f "$destination_timer"
-        fi
+        for unit in postify-run-once.service postify-run-once.timer postify-publish-once.service postify-publish-once.timer; do
+            if [ -e "$backup_dir/$unit" ]; then
+                cp "$backup_dir/$unit" "$destination/$unit"
+            else
+                rm -f "$destination/$unit"
+            fi
+        done
         if [ "$daemon_reload_started" -eq 1 ]; then
             systemctl daemon-reload || :
         fi
@@ -147,25 +142,26 @@ render_template() {
 
 render_template "$templates_dir/postify-run-once.service" "$temp_dir/postify-run-once.service"
 render_template "$templates_dir/postify-run-once.timer" "$temp_dir/postify-run-once.timer"
+render_template "$templates_dir/postify-publish-once.service" "$temp_dir/postify-publish-once.service"
+render_template "$templates_dir/postify-publish-once.timer" "$temp_dir/postify-publish-once.timer"
 
 systemd-analyze calendar "$calendar_1"
 systemd-analyze calendar "$calendar_2"
 systemd-analyze calendar "$calendar_3"
-systemd-analyze verify "$temp_dir/postify-run-once.service" "$temp_dir/postify-run-once.timer"
+systemd-analyze verify "$temp_dir/postify-run-once.service" "$temp_dir/postify-run-once.timer" "$temp_dir/postify-publish-once.service" "$temp_dir/postify-publish-once.timer"
 
 mkdir -p "$backup_dir"
-if [ -e "$destination_service" ]; then
-    cp "$destination_service" "$backup_dir/postify-run-once.service"
-    service_was_present=1
-fi
-if [ -e "$destination_timer" ]; then
-    cp "$destination_timer" "$backup_dir/postify-run-once.timer"
-    timer_was_present=1
-fi
+for unit in postify-run-once.service postify-run-once.timer postify-publish-once.service postify-publish-once.timer; do
+    if [ -e "$destination/$unit" ]; then
+        cp "$destination/$unit" "$backup_dir/$unit"
+    fi
+done
 
 installation_started=1
 install -D -m 0644 "$temp_dir/postify-run-once.service" "$destination_service"
 install -D -m 0644 "$temp_dir/postify-run-once.timer" "$destination_timer"
+install -D -m 0644 "$temp_dir/postify-publish-once.service" "$destination/postify-publish-once.service"
+install -D -m 0644 "$temp_dir/postify-publish-once.timer" "$destination/postify-publish-once.timer"
 daemon_reload_started=1
 systemctl daemon-reload
 daemon_reload_started=0
