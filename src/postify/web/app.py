@@ -3,12 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import NoResultFound
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.staticfiles import StaticFiles
 
 from postify.web.dependencies import WebContainer, build_default_container
-from postify.web.errors import ApiError, NotFoundError, error_response
+from postify.web.errors import ApiError, error_response
 from postify.web.routes.api import router
 
 
@@ -31,6 +34,21 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     @app.exception_handler(LookupError)
     async def not_found(request: Request, error: LookupError) -> JSONResponse:
         return error_response(request, 404, "not_found")
+
+    @app.exception_handler(NoResultFound)
+    async def missing_row(request: Request, error: NoResultFound) -> JSONResponse:
+        return error_response(request, 404, "not_found")
+
+    @app.exception_handler(StarletteHTTPException)
+    async def missing_route(
+        request: Request, error: StarletteHTTPException
+    ) -> JSONResponse:
+        if error.status_code == 404:
+            return error_response(request, 404, "not_found")
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"code": "http_error", "requestId": request.state.request_id},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(
@@ -59,12 +77,12 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
         return error_response(request, 503, "service_unavailable")
 
-    @app.get("/", include_in_schema=False)
-    async def static_index() -> Response:
-        index = Path(__file__).with_name("static") / "index.html"
-        if not index.is_file():
-            raise NotFoundError()
-        return FileResponse(index)
-
     app.include_router(router)
+    static = _static_directory()
+    if static.is_dir():
+        app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
+
+
+def _static_directory() -> Path:
+    return Path(__file__).with_name("static")

@@ -128,7 +128,9 @@ class WebApplication:
 
     def run_once(self, project_id: int) -> dict[str, object]:
         self._projects.get(project_id)
-        self._operations.submit(project_id, "run_once", self._run_once)
+        self._operations.submit(
+            project_id, "run_once", lambda: self._run_once(project_id)
+        )
         return {"status": "accepted"}
 
     def publish_once(self, project_id: int) -> dict[str, object]:
@@ -203,8 +205,8 @@ class WebApplication:
         finally:
             client.close()
 
-    def _run_once(self) -> None:
-        with open_run_once(self._settings) as action:
+    def _run_once(self, project_id: int) -> None:
+        with open_run_once(self._settings, project_id=project_id) as action:
             action.execute()
 
 

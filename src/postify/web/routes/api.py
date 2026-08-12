@@ -151,37 +151,20 @@ def update_settings(
     )
 
 
-@router.get("/projects/{project_id}/{resource}")
-def resources(project_id: int, resource: str, container: Container):
-    _resource(resource)
+def _resources(project_id: int, resource: str, container: Container):
     return _response(container.api.resources(project_id, resource))
 
 
-@router.post("/projects/{project_id}/{resource}", status_code=201)
-def create_resource(
-    project_id: int,
-    resource: str,
-    body: SourceRequest | ChannelRequest | CtaRequest | RouteRequest,
-    container: Container,
-):
-    _resource(resource)
-    _body_matches_resource(resource, body)
+def _create_resource(project_id: int, resource: str, body, container: Container):
     return _response(
         container.api.create_resource(project_id, resource, body.model_dump(mode="json")),
         status_code=201,
     )
 
 
-@router.put("/projects/{project_id}/{resource}/{resource_id}")
-def update_resource(
-    project_id: int,
-    resource: str,
-    resource_id: int,
-    body: SourceRequest | ChannelRequest | CtaRequest | RouteRequest,
-    container: Container,
+def _update_resource(
+    project_id: int, resource: str, resource_id: int, body, container: Container
 ):
-    _resource(resource)
-    _body_matches_resource(resource, body)
     return _response(
         container.api.update_resource(
             project_id, resource, resource_id, body.model_dump(mode="json")
@@ -189,13 +172,99 @@ def update_resource(
     )
 
 
-@router.delete("/projects/{project_id}/{resource}/{resource_id}", status_code=204)
-def delete_resource(
+def _delete_resource(
     project_id: int, resource: str, resource_id: int, container: Container
 ) -> Response:
-    _resource(resource)
     container.api.delete_resource(project_id, resource, resource_id)
     return Response(status_code=204)
+
+
+@router.get("/projects/{project_id}/sources")
+def sources(project_id: int, container: Container):
+    return _resources(project_id, "sources", container)
+
+
+@router.post("/projects/{project_id}/sources", status_code=201)
+def create_source(project_id: int, body: SourceRequest, container: Container):
+    return _create_resource(project_id, "sources", body, container)
+
+
+@router.put("/projects/{project_id}/sources/{resource_id}")
+def update_source(
+    project_id: int, resource_id: int, body: SourceRequest, container: Container
+):
+    return _update_resource(project_id, "sources", resource_id, body, container)
+
+
+@router.delete("/projects/{project_id}/sources/{resource_id}", status_code=204)
+def delete_source(project_id: int, resource_id: int, container: Container) -> Response:
+    return _delete_resource(project_id, "sources", resource_id, container)
+
+
+@router.get("/projects/{project_id}/channels")
+def channels(project_id: int, container: Container):
+    return _resources(project_id, "channels", container)
+
+
+@router.post("/projects/{project_id}/channels", status_code=201)
+def create_channel(project_id: int, body: ChannelRequest, container: Container):
+    return _create_resource(project_id, "channels", body, container)
+
+
+@router.put("/projects/{project_id}/channels/{resource_id}")
+def update_channel(
+    project_id: int, resource_id: int, body: ChannelRequest, container: Container
+):
+    return _update_resource(project_id, "channels", resource_id, body, container)
+
+
+@router.delete("/projects/{project_id}/channels/{resource_id}", status_code=204)
+def delete_channel(project_id: int, resource_id: int, container: Container) -> Response:
+    return _delete_resource(project_id, "channels", resource_id, container)
+
+
+@router.get("/projects/{project_id}/ctas")
+def ctas(project_id: int, container: Container):
+    return _resources(project_id, "ctas", container)
+
+
+@router.post("/projects/{project_id}/ctas", status_code=201)
+def create_cta(project_id: int, body: CtaRequest, container: Container):
+    return _create_resource(project_id, "ctas", body, container)
+
+
+@router.put("/projects/{project_id}/ctas/{resource_id}")
+def update_cta(
+    project_id: int, resource_id: int, body: CtaRequest, container: Container
+):
+    return _update_resource(project_id, "ctas", resource_id, body, container)
+
+
+@router.delete("/projects/{project_id}/ctas/{resource_id}", status_code=204)
+def delete_cta(project_id: int, resource_id: int, container: Container) -> Response:
+    return _delete_resource(project_id, "ctas", resource_id, container)
+
+
+@router.get("/projects/{project_id}/routes")
+def routes(project_id: int, container: Container):
+    return _resources(project_id, "routes", container)
+
+
+@router.post("/projects/{project_id}/routes", status_code=201)
+def create_route(project_id: int, body: RouteRequest, container: Container):
+    return _create_resource(project_id, "routes", body, container)
+
+
+@router.put("/projects/{project_id}/routes/{resource_id}")
+def update_route(
+    project_id: int, resource_id: int, body: RouteRequest, container: Container
+):
+    return _update_resource(project_id, "routes", resource_id, body, container)
+
+
+@router.delete("/projects/{project_id}/routes/{resource_id}", status_code=204)
+def delete_route(project_id: int, resource_id: int, container: Container) -> Response:
+    return _delete_resource(project_id, "routes", resource_id, container)
 
 
 @router.post("/projects/{project_id}/channels/{channel_id}/check")
@@ -207,19 +276,3 @@ def check_channel(project_id: int, channel_id: int, container: Container):
 def package_media(project_id: int, package_id: int, container: Container) -> Response:
     body, media_type = container.api.package_media(project_id, package_id)
     return Response(content=body, media_type=media_type)
-
-
-def _resource(value: str) -> None:
-    if value not in {"sources", "channels", "ctas", "routes"}:
-        raise ValueError("unknown_resource")
-
-
-def _body_matches_resource(value: str, body: object) -> None:
-    expected = {
-        "sources": SourceRequest,
-        "channels": ChannelRequest,
-        "ctas": CtaRequest,
-        "routes": RouteRequest,
-    }[value]
-    if not isinstance(body, expected):
-        raise ValueError("invalid_resource_payload")

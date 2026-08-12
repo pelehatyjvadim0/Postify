@@ -179,7 +179,10 @@ def selection_profile_from_settings(settings: Settings) -> SelectionProfile:
 
 @contextmanager
 def open_run_once(
-    settings: Settings, *, transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    *,
+    project_id: int = 1,
+    transport: httpx.BaseTransport | None = None,
 ) -> Iterator[RunOnce]:
     from postify.application.observability.record_operation import RecordedAction
     from postify.domain.observability.models import OperationKind
@@ -189,14 +192,18 @@ def open_run_once(
         action = RunOnce(
             ImportCandidates(
                 resources.source,
-                SqlAlchemyCandidateRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyCandidateRepository, resources.session_factory, project_id
+                ),
             ),
             SelectCandidates(
-                SqlAlchemyDecisionRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyDecisionRepository, resources.session_factory, project_id
+                ),
                 profile,
                 lambda: datetime.now(UTC),
             ),
-            _content_processor(settings, resources)
+            _content_processor(settings, resources, project_id=project_id)
             if callable(resources.session_factory)
             else None,
         )
@@ -210,14 +217,20 @@ def open_run_once(
         else:
             yield RecordedAction(
                 action,
-                SqlAlchemyOperationRunRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyOperationRunRepository,
+                    resources.session_factory,
+                    project_id,
+                ),
                 operation=OperationKind.RUN_ONCE,
                 success_outcome="completed",
                 failure_code="run_once_failed",
             )
 
 
-def _content_processor(settings: Settings, resources: _ImportResources):
+def _content_processor(
+    settings: Settings, resources: _ImportResources, *, project_id: int = 1
+):
     from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
     from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
     from postify.adapters.media.local_media_provider import LocalMediaProvider
@@ -231,7 +244,7 @@ def _content_processor(settings: Settings, resources: _ImportResources):
 
     policy = getattr(resources, "url_policy", None) or PublicHttpUrlPolicy()
     return ProcessContent(
-        SqlAlchemyContentRepository(resources.session_factory),
+        SqlAlchemyContentRepository(resources.session_factory, project_id=project_id),
         HttpArticleExtractor(
             client=resources.client,
             max_bytes=settings.content_article_max_bytes,
@@ -325,6 +338,13 @@ def candidate_count(settings: Settings) -> int:
         return SqlAlchemyCandidateRepository(sessionmaker(engine)).count()
     finally:
         engine.dispose()
+
+
+def _for_project(factory, session_factory, project_id: int):
+    """Retain default constructor compatibility while making non-default scope explicit."""
+    if project_id == 1:
+        return factory(session_factory)
+    return factory(session_factory, project_id=project_id)
 
 
 @contextmanager

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from postify.adapters.channels.registry import ChannelProviderRegistry
@@ -15,6 +14,7 @@ from postify.web.app import create_app
 from postify.web.dependencies import WebContainer
 from postify.web.services import WebApplication
 from tests.integration.test_import_component import configured_settings
+from tests.unit.web.test_api import ApiClient
 
 
 pytestmark = pytest.mark.integration
@@ -35,7 +35,7 @@ def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
             cipher=None,
             clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
         ).execute(settings, telegram=None)
-        client = TestClient(create_app(WebContainer(api=WebApplication(settings, None))))
+        client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
 
         bootstrap = client.get("/api/v1/bootstrap")
         dashboard = client.get("/api/v1/projects/1/dashboard")

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
-from fastapi.testclient import TestClient
+import httpx
 
 
 NOW = datetime(2026, 8, 12, 9, tzinfo=UTC)
@@ -101,11 +102,38 @@ class ApiStub:
         return b"image", "image/jpeg"
 
 
-def client_for(stub: ApiStub) -> TestClient:
+class ApiClient:
+    def __init__(self, app) -> None:
+        self._app = app
+
+    def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        async def send() -> httpx.Response:
+            transport = httpx.ASGITransport(app=self._app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                return await client.request(method, path, **kwargs)
+
+        return asyncio.run(send())
+
+    def get(self, path: str, **kwargs: object) -> httpx.Response:
+        return self.request("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs: object) -> httpx.Response:
+        return self.request("POST", path, **kwargs)
+
+    def put(self, path: str, **kwargs: object) -> httpx.Response:
+        return self.request("PUT", path, **kwargs)
+
+    def delete(self, path: str, **kwargs: object) -> httpx.Response:
+        return self.request("DELETE", path, **kwargs)
+
+
+def client_for(stub: ApiStub) -> ApiClient:
     from postify.web.app import create_app
     from postify.web.dependencies import WebContainer
 
-    return TestClient(create_app(WebContainer(api=stub)))
+    return ApiClient(create_app(WebContainer(api=stub)))
 
 
 def test_bootstrap_returns_active_project_and_registered_providers() -> None:
@@ -229,3 +257,24 @@ def test_media_is_loaded_only_by_owned_package_id_without_url_proxying() -> None
     assert response.status_code == 200
     assert response.content == b"image"
     assert stub.calls == [("package_media", (1, 7))]
+
+
+def test_every_missing_resource_uses_stable_not_found_error_contract() -> None:
+    # Break caught: repository and unmatched-route not-found paths return a framework payload or 503.
+    from sqlalchemy.exc import NoResultFound
+
+    stub = ApiStub()
+    client = client_for(stub)
+
+    def missing(project_id: int, package_id: int):
+        raise NoResultFound("internal package lookup")
+
+    stub.approve = missing
+    missing_package = client.post("/api/v1/projects/1/packages/999/approve")
+    missing_route = client.get("/api/v1/projects/1/unknown-resource")
+
+    for response in (missing_package, missing_route):
+        assert response.status_code == 404
+        assert response.json()["code"] == "not_found"
+        assert response.json()["requestId"]
+        assert "internal" not in response.text
