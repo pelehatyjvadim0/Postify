@@ -16,13 +16,17 @@ class CandidateModel(Base):
     __tablename__ = "candidates"
     __table_args__ = (
         UniqueConstraint(
+            "project_id",
             "source_name",
             "source_id",
-            name="uq_candidates_source_name_source_id",
+            name="uq_candidates_project_source_name_source_id",
         ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("content_projects.id"), nullable=False, default=1
+    )
     source_name: Mapped[str] = mapped_column(String, nullable=False)
     source_id: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str] = mapped_column(String, nullable=False)
@@ -37,11 +41,18 @@ class CandidateModel(Base):
 class CandidateDecisionModel(Base):
     __tablename__ = "candidate_decisions"
     __table_args__ = (
-        UniqueConstraint("candidate_id", name="uq_candidate_decisions_candidate_id"),
+        UniqueConstraint(
+            "project_id",
+            "candidate_id",
+            name="uq_candidate_decisions_project_candidate_id",
+        ),
         CheckConstraint("status IN ('selected', 'rejected')", name="ck_candidate_decisions_status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("content_projects.id"), nullable=False, default=1
+    )
     candidate_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("candidates.id", name="fk_candidate_decisions_candidate_id_candidates"),

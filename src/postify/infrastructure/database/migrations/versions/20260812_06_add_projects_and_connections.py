@@ -289,9 +289,17 @@ def upgrade() -> None:
         ["channel_id"],
         ["id"],
     )
+    # Совместимые имена сохраняют работу CLI Wave 4–5 во время перехода
+    # application-слоя на универсальные доставки.
+    op.execute("CREATE VIEW telegram_deliveries AS SELECT * FROM deliveries")
+    op.execute(
+        "CREATE VIEW telegram_delivery_attempts AS SELECT * FROM delivery_attempts"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP VIEW telegram_delivery_attempts")
+    op.execute("DROP VIEW telegram_deliveries")
     op.drop_constraint(
         "fk_deliveries_channel_id_channel_connections", "deliveries", type_="foreignkey"
     )
@@ -362,4 +370,3 @@ def downgrade() -> None:
     op.drop_table("content_formats")
     op.drop_table("source_connections")
     op.drop_table("content_projects")
-

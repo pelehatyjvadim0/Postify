@@ -418,3 +418,33 @@ def test_snapshot_remains_consistent_when_a_complete_graph_is_committed_mid_read
         event.remove(engine, "after_cursor_execute", pause_after_first_select)
         writer_finished.set()
         engine.dispose()
+
+
+def test_snapshot_counts_only_requested_project(migrated_database_url: str) -> None:
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO content_projects "
+                "(id,name,topic,language,audience,timezone,configuration,created_at,updated_at) "
+                "VALUES (2,'Второй','Тема','ru','Аудитория','UTC','{}'::jsonb,now(),now())"
+            )
+        )
+        for project_id in (1, 2):
+            connection.execute(
+                text(
+                    "INSERT INTO candidates "
+                    "(project_id,source_name,source_id,title,url,discovered_at,raw_payload) "
+                    "VALUES (:project,'source',:source,'Title','https://example.test',:now,'{}'::jsonb)"
+                ),
+                {"project": project_id, "source": str(project_id), "now": NOW},
+            )
+    try:
+        _, StatusRepository, _ = _api()
+        first = StatusRepository(sessionmaker(engine), project_id=1)
+        second = StatusRepository(sessionmaker(engine), project_id=2)
+
+        assert first.snapshot(day=DAY, day_start=DAY_START, day_end=DAY_END).candidate_total == 1
+        assert second.snapshot(day=DAY, day_start=DAY_START, day_end=DAY_END).candidate_total == 1
+    finally:
+        engine.dispose()

@@ -333,7 +333,7 @@ def test_confirmation_sql_failure_rolls_back_every_write(
             )
             connection.execute(
                 text(
-                    "CREATE TRIGGER fail_telegram_attempt BEFORE INSERT ON telegram_delivery_attempts "
+                    "CREATE TRIGGER fail_telegram_attempt BEFORE INSERT ON delivery_attempts "
                     "FOR EACH ROW EXECUTE FUNCTION fail_telegram_attempt_insert()"
                 )
             )
