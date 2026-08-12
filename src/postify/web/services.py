@@ -18,6 +18,7 @@ from postify.application.content.review_content import ReviewContent
 from postify.application.dashboard.show_dashboard import ShowDashboard
 from postify.application.projects.manage_project import ManageProject
 from postify.application.projects.manage_resources import ManageProjectResources
+from postify.application.projects.manage_schedule import ManageProjectSchedule
 from postify.application.projects.check_channel import CheckChannel
 from postify.bootstrap import open_publish_once, open_run_once
 from postify.config import Settings, TelegramSettings
@@ -155,6 +156,10 @@ class WebApplication:
         }
 
     def update_settings(self, project_id: int, section: str, payload: dict[str, object]) -> dict[str, object]:
+        if section == "schedule":
+            return ManageProjectSchedule(self._projects).update(
+                project_id, payload, now=datetime.now(UTC)
+            )
         return _project(ManageProject(self._projects).update(project_id, section, payload, now=datetime.now(UTC)))
 
     def resources(self, project_id: int, resource: str) -> dict[str, object]:

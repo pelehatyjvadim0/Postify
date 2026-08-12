@@ -52,7 +52,7 @@ def test_provider_catalog_describes_configuration_without_leaking_common_model_d
         "code": "hn_algolia",
         "label": "HN Algolia",
         "fields": (
-            {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+            {"name": "url", "label": "Адрес API", "type": "url", "required": True, "protocol": "https"},
             {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
             {"name": "tags", "label": "Теги", "type": "text", "required": True},
             {"name": "hits", "label": "Материалов за запрос", "type": "number", "required": True, "min": 1, "max": 1000},

@@ -5,7 +5,7 @@ import {
   runOnce, updateResource, updateSettings,
 } from "./api.js";
 import {dateTime, escapeHtml, externalLink, label, screens, statusBadge} from "./screens.js";
-import {renderProviderConfiguration, renderSettings, serializeSettingsSection, validateSettingsSection} from "./settings.js";
+import {renderProviderConfiguration, renderSettings, serializeSettingsSection, showSettingsError, validateSettingsSection} from "./settings.js";
 
 const ROUTES = {
   overview: {title: "Сегодня", eyebrow: "Рабочая панель", load: getDashboard},
@@ -179,14 +179,6 @@ function setSettingsBusy(form, busy) {
   form.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
 }
 
-function resourcePayload(item, overrides = {}) {
-  const payload = {...item, ...overrides};
-  delete payload.id;
-  delete payload.connection_status;
-  delete payload.secretConfigured;
-  return payload;
-}
-
 async function refreshSettings(message) {
   const openSection = root.querySelector("[data-settings-section][open]")?.dataset.settingsSection;
   currentData = await getSettings(projectId);
@@ -207,51 +199,28 @@ async function saveSettingsForm(form) {
       await updateSettings(projectId, "main", payload);
     } else if (["selection", "generation", "advanced"].includes(kind)) {
       await updateSettings(projectId, "configuration", payload);
-    } else if (["sources", "cta", "route-create"].includes(kind)) {
+    } else if (form.dataset.resource && kind !== "channels") {
       const resource = form.dataset.resource;
       if (form.dataset.resourceMode === "create") await createResource(projectId, resource, payload);
       else await updateResource(projectId, resource, form.dataset.resourceId, payload);
     } else if (kind === "channels") {
-      const channelPayload = {...payload};
-      delete channelPayload.route;
       if (form.dataset.resourceMode === "create") {
-        await createResource(projectId, "channels", channelPayload);
+        await createResource(projectId, "channels", payload);
       } else {
-        await updateResource(projectId, "channels", form.dataset.resourceId, channelPayload);
-        if (payload.route && form.dataset.routeId) {
-          const route = currentData.routes.find((item) => String(item.id) === form.dataset.routeId);
-          await updateResource(projectId, "routes", form.dataset.routeId, {...payload.route, schedule: route.schedule});
-        }
+        await updateResource(projectId, "channels", form.dataset.resourceId, payload);
       }
     } else if (kind === "schedule") {
-      const source = currentData.sources.find((item) => String(item.id) === form.dataset.sourceId);
-      const route = currentData.routes.find((item) => String(item.id) === form.dataset.routeId);
-      await updateResource(projectId, "sources", source.id, resourcePayload(source, {schedule: payload.source_schedule}));
-      await updateResource(projectId, "routes", route.id, resourcePayload(route, {schedule: {autopublish: payload.autopublish, slots: payload.slots}}));
+      await updateSettings(projectId, "schedule", payload);
     }
     await refreshSettings("Настройки сохранены");
   } catch (_) {
-    const error = form.querySelector("[data-settings-error]");
-    error.textContent = "Не удалось сохранить. Проверьте поля и повторите.";
-    if (!error.id) error.id = `settings-error-${form.dataset.settingsForm}`;
-    form.setAttribute("aria-describedby", error.id);
+    showSettingsError(form, "Не удалось сохранить. Проверьте поля и повторите.", form.querySelector('[type="submit"]'));
     setSettingsBusy(form, false);
   }
 }
 
 async function settingsCommand(node) {
   const form = node.closest("form");
-  if (node.matches("[data-settings-route-delete]")) {
-    node.disabled = true;
-    try {
-      await deleteResource(projectId, "routes", node.dataset.routeId);
-      await refreshSettings("Изменение сохранено");
-    } catch (_) {
-      node.disabled = false;
-      showToast("Команда не выполнена. Повторите позже.");
-    }
-    return;
-  }
   if (node.matches("[data-settings-secret-toggle]")) {
     const token = form.querySelector('input[name="token"]');
     token.type = token.type === "password" ? "text" : "password";
@@ -273,8 +242,7 @@ async function settingsCommand(node) {
     else if (node.matches("[data-settings-channel-check]")) await checkChannel(projectId, form.dataset.resourceId);
     await refreshSettings(node.matches("[data-settings-channel-check]") ? "Канал проверен" : "Изменение сохранено");
   } catch (_) {
-    const error = form.querySelector("[data-settings-error]");
-    error.textContent = "Команда не выполнена. Повторите позже.";
+    showSettingsError(form, "Команда не выполнена. Повторите позже.", node);
     setSettingsBusy(form, false);
   }
 }
@@ -322,7 +290,7 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  const node = event.target.closest("[data-settings-add], [data-settings-delete], [data-settings-secret-toggle], [data-settings-secret-remove], [data-settings-channel-check], [data-settings-route-delete]");
+  const node = event.target.closest("[data-settings-add], [data-settings-delete], [data-settings-secret-toggle], [data-settings-secret-remove], [data-settings-channel-check]");
   if (node) settingsCommand(node);
 });
 

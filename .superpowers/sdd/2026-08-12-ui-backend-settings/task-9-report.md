@@ -117,3 +117,63 @@ Browser-тесты и sync web/API-тесты запущены отдельны�
 pytest-процессами: session Playwright держит event loop, несовместимый
 с существующим sync `ApiClient`, который вызывает `asyncio.run`.
 Предписанные Task 9 команды также являются раздельными.
+
+## CHECKPOINT: review fixes в работе
+
+Сессия остановлена по внешнему запросу; это WIP checkpoint, а не заявление о
+завершении Task 9.
+
+Готово на момент остановки:
+
+- resource settings рендерят 0, 1 и 2+ sources/CTA/channels/routes отдельными
+  формами с собственными IDs и empty states;
+- route editor использует реальные format/channel/CTA IDs, а stateful browser
+  fake подтверждает create, update и delete именно созданного route ID;
+- provider metadata передаёт HTTPS constraint; клиент блокирует HTTP source URL,
+  пустой selection rules, пустые обязательные marker groups и дубли terms;
+- `selection_policy_version` стал required editable persisted control;
+- расписание переведено на один `PUT settings/schedule` с thin application
+  action и одной repository transaction; PostgreSQL regression принудительно
+  ломает commit и подтверждает rollback source и route schedule;
+- общий `showSettingsError` связывает inline error через стабильный `id` и
+  `aria-describedby` с формой и инициирующей кнопкой; покрыты source delete,
+  token remove, channel check и route delete failures.
+
+Фактически пройдено после этих изменений:
+
+```text
+uv run pytest -q tests/ui_mockup/test_browser_flows.py
+# 69 passed in 25.42s
+
+uv run pytest -q tests/ui_mockup/test_static_contract.py tests/unit/web \
+  tests/unit/application/projects/test_manage_resources.py \
+  tests/unit/application/projects/test_manage_schedule.py \
+  tests/unit/adapters/test_provider_registries.py
+# 25 passed in 0.70s
+
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q tests/integration/infrastructure/test_sqlalchemy_projects.py \
+  tests/integration/test_web_component.py
+# 6 passed in 1.42s
+
+uv run ruff check <текущие затронутые Python-файлы>
+node --check src/postify/web/static/settings.js
+node --check src/postify/web/static/app.js
+git diff --check
+# успешно
+```
+
+Важно: после полного browser run добавлен ещё один RED browser test для stale/
+tampered route reference. Он намеренно оставлен незапущенным и без реализации
+при остановке сессии. Поэтому приведённые `69 passed` не включают этот тест.
+
+Осталось:
+
+1. Запустить новый `test_route_references_are_checked_against_rendered_resource_ids_before_request`,
+   зафиксировать RED и добавить route-form validation по IDs из исходного DTO,
+   а не только по присутствующим `<option>`.
+2. Повторить полный browser suite на 360/768/1440 после последней правки.
+3. Повторить unit/API/application и PostgreSQL integration gates.
+4. Запустить все node checks, ruff, compileall, diff-check и wheel asset check.
+5. После GREEN обновить этот отчёт финальными результатами и сделать отдельный
+   завершённый fix commit; текущий commit оставить как WIP checkpoint.

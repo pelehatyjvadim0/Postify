@@ -6,7 +6,7 @@ from alembic import command
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
@@ -137,5 +137,52 @@ def test_repository_removes_only_channel_secret_and_keeps_connection(
         assert result["connection_status"] == "unconfigured"
         assert stored["encrypted_secret"] is None
         assert stored["configuration"] == {"chat_id": "-100123"}
+    finally:
+        engine.dispose()
+
+
+def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
+    alembic_config, isolated_database_url
+) -> None:
+    # Break caught: ingestion schedule commits before publication schedule failure and leaves a partially saved section.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    normal = SqlAlchemyProjectRepository(sessionmaker(engine))
+    cipher = SecretCipher(Fernet.generate_key().decode())
+    telegram = SimpleNamespace(
+        telegram_chat_id="-100123",
+        telegram_bot_token=SecretStr("123:token"),
+    )
+
+    class FailingCommitSession(Session):
+        def commit(self) -> None:
+            self.flush()
+            raise RuntimeError("forced commit failure")
+
+    try:
+        BootstrapProject(
+            normal,
+            SourceProviderRegistry(),
+            ChannelProviderRegistry(),
+            cipher=cipher,
+            clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
+        ).execute(settings(), telegram)
+        failing = SqlAlchemyProjectRepository(
+            sessionmaker(engine, class_=FailingCommitSession)
+        )
+
+        with pytest.raises(RuntimeError, match="forced commit failure"):
+            failing.update_schedules(
+                1,
+                ({"id": 1, "schedule": "0 8 * * *"},),
+                ({"id": 1, "autopublish": False, "slots": ("08:30", "13:30", "18:30")},),
+                datetime(2026, 8, 12, 10, tzinfo=UTC),
+            )
+
+        assert normal.get_resource(1, "sources", 1)["schedule"] == "0 7 * * 1-5"
+        assert normal.get_resource(1, "routes", 1)["schedule"] == {
+            "autopublish": True,
+            "slots": ["09:00", "14:00", "19:00"],
+        }
     finally:
         engine.dispose()

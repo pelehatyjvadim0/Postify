@@ -14,6 +14,7 @@ from postify.web.schemas import (
     MainSettingsRequest,
     RejectRequest,
     RouteRequest,
+    ScheduleSettingsRequest,
     SourceRequest,
 )
 
@@ -139,14 +140,19 @@ def settings(project_id: int, container: Container):
 def update_settings(
     project_id: int,
     section: str,
-    body: MainSettingsRequest | ConfigurationSettingsRequest,
+    body: MainSettingsRequest | ConfigurationSettingsRequest | ScheduleSettingsRequest,
     container: Container,
 ):
-    if section not in {"main", "configuration"}:
+    expected = {
+        "main": MainSettingsRequest,
+        "configuration": ConfigurationSettingsRequest,
+        "schedule": ScheduleSettingsRequest,
+    }
+    if section not in expected or not isinstance(body, expected[section]):
         raise ValueError("unknown_settings_section")
     return _response(
         container.api.update_settings(
-            project_id, section, body.model_dump(exclude_none=True)
+            project_id, section, body.model_dump(mode="json", exclude_none=True)
         )
     )
 

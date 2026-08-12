@@ -9,7 +9,13 @@ class SourceProviderRegistry:
             "code": "hn_algolia",
             "label": "HN Algolia",
             "fields": (
-                {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+                {
+                    "name": "url",
+                    "label": "Адрес API",
+                    "type": "url",
+                    "required": True,
+                    "protocol": "https",
+                },
                 {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
                 {"name": "tags", "label": "Теги", "type": "text", "required": True},
                 {

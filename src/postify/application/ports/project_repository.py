@@ -8,3 +8,10 @@ class ProjectRepository(Protocol):
 
     def save(self, project: ContentProject) -> ContentProject: ...
 
+    def update_schedules(
+        self,
+        project_id: int,
+        sources: tuple[dict[str, object], ...],
+        routes: tuple[dict[str, object], ...],
+        now,
+    ) -> dict[str, int]: ...

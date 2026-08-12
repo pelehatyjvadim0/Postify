@@ -285,6 +285,52 @@ class SqlAlchemyProjectRepository:
                 session.rollback()
                 raise
 
+    def update_schedules(
+        self,
+        project_id: int,
+        sources: tuple[dict[str, object], ...],
+        routes: tuple[dict[str, object], ...],
+        now: datetime,
+    ) -> dict[str, int]:
+        with self._session_factory() as session:
+            try:
+                source_models = {
+                    item.id: item
+                    for item in session.scalars(
+                        select(SourceConnectionModel).where(
+                            SourceConnectionModel.project_id == project_id,
+                            SourceConnectionModel.id.in_(item["id"] for item in sources),
+                        )
+                    ).all()
+                }
+                route_models = {
+                    item.id: item
+                    for item in session.scalars(
+                        select(PublicationRouteModel).where(
+                            PublicationRouteModel.project_id == project_id,
+                            PublicationRouteModel.id.in_(item["id"] for item in routes),
+                        )
+                    ).all()
+                }
+                if len(source_models) != len(sources) or len(route_models) != len(routes):
+                    raise LookupError("schedule_resource")
+                for values in sources:
+                    source = source_models[values["id"]]
+                    source.schedule = values["schedule"]
+                    source.updated_at = now
+                for values in routes:
+                    route = route_models[values["id"]]
+                    route.schedule = {
+                        "autopublish": values["autopublish"],
+                        "slots": list(values["slots"]),
+                    }
+                    route.updated_at = now
+                session.commit()
+            except BaseException:
+                session.rollback()
+                raise
+        return {"sources": len(sources), "routes": len(routes)}
+
     def get_resource(
         self, project_id: int, resource: str, resource_id: int
     ) -> dict[str, object]:

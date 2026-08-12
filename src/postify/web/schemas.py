@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 class RequestSchema(BaseModel):
@@ -83,6 +83,28 @@ class PublicationScheduleRequest(RequestSchema):
             if len(slot) != 5 or not 0 <= hour <= 23 or not 0 <= minute <= 59:
                 raise ValueError("invalid_publication_slot")
         return value
+
+
+class SourceScheduleRequest(RequestSchema):
+    id: int = Field(gt=0)
+    schedule: str = Field(min_length=1)
+
+
+class RouteScheduleRequest(PublicationScheduleRequest):
+    id: int = Field(gt=0)
+
+
+class ScheduleSettingsRequest(RequestSchema):
+    sources: tuple[SourceScheduleRequest, ...]
+    routes: tuple[RouteScheduleRequest, ...]
+
+    @model_validator(mode="after")
+    def unique_resource_ids(self):
+        if len({item.id for item in self.sources}) != len(self.sources):
+            raise ValueError("duplicate_source_schedule")
+        if len({item.id for item in self.routes}) != len(self.routes):
+            raise ValueError("duplicate_route_schedule")
+        return self
 
 
 class RouteRequest(RequestSchema):

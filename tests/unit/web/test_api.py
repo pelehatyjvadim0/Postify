@@ -208,6 +208,33 @@ def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> No
     ]
 
 
+def test_schedule_section_is_one_strict_atomic_command() -> None:
+    # Break caught: schedule persistence requires separate source/route requests or accepts invalid publication slots.
+    stub = ApiStub()
+    client = client_for(stub)
+    payload = {
+        "sources": [{"id": 1, "schedule": "0 8 * * *"}],
+        "routes": [{
+            "id": 10,
+            "autopublish": False,
+            "slots": ["08:30", "13:30", "18:30"],
+        }],
+    }
+
+    updated = client.put("/api/v1/projects/1/settings/schedule", json=payload)
+    invalid = client.put(
+        "/api/v1/projects/1/settings/schedule",
+        json={
+            "sources": [],
+            "routes": [{"id": 10, "autopublish": True, "slots": ["09:00", "09:00", "19:00"]}],
+        },
+    )
+
+    assert updated.status_code == 200
+    assert invalid.status_code == 422
+    assert stub.calls == [("update_settings", (1, "schedule", payload))]
+
+
 def test_settings_never_serializes_channel_secret_and_forbids_unknown_request_fields() -> None:
     # Break caught: a persistence secret reaches a GET payload or Pydantic silently accepts typoed fields.
     client = client_for(ApiStub())

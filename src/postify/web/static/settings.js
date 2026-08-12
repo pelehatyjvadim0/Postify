@@ -17,6 +17,7 @@ function input(label, name, value, options = {}) {
     options.nullEmpty ? "data-null-empty" : "",
     options.array ? "data-array" : "",
     options.multi ? "data-multi" : "",
+    options.protocol ? `data-protocol="${escapeHtml(options.protocol)}"` : "",
   ].filter(Boolean).join(" ");
   return `<label class="settings-field"><span>${escapeHtml(label)}</span><input ${attrs}></label>`;
 }
@@ -75,8 +76,7 @@ function sourceForm(source, providers, mode = "update") {
 function selectionForm(config) {
   const rules = new Set(config.selection_rules || []);
   return `<form class="settings-form" data-settings-form="selection" data-settings-section-api="configuration" novalidate>
-    <div class="policy-note"><span>Версия политики</span><strong>${escapeHtml(config.selection_policy_version)}</strong></div>
-    <div class="settings-grid">${input("Окно свежести, дней", "selection_freshness_days", config.selection_freshness_days, {type: "number", min: 1, required: true})}${input("Тематические маркеры", "topic_terms", joinTerms(config.topic_terms), {array: true})}${input("Исключающие маркеры", "topic_exclusion_terms", joinTerms(config.topic_exclusion_terms), {array: true})}${input("Маркеры рекламы", "advertising_terms", joinTerms(config.advertising_terms), {array: true})}${input("Маркеры найма", "hiring_terms", joinTerms(config.hiring_terms), {array: true})}${input("Маркеры технического релиза", "technical_release_terms", joinTerms(config.technical_release_terms), {array: true})}${input("Практические маркеры", "practical_terms", joinTerms(config.practical_terms), {array: true})}</div>
+    <div class="settings-grid">${input("Версия политики", "selection_policy_version", config.selection_policy_version, {required: true})}${input("Окно свежести, дней", "selection_freshness_days", config.selection_freshness_days, {type: "number", min: 1, required: true})}${input("Тематические маркеры", "topic_terms", joinTerms(config.topic_terms), {array: true})}${input("Исключающие маркеры", "topic_exclusion_terms", joinTerms(config.topic_exclusion_terms), {array: true})}${input("Маркеры рекламы", "advertising_terms", joinTerms(config.advertising_terms), {array: true})}${input("Маркеры найма", "hiring_terms", joinTerms(config.hiring_terms), {array: true})}${input("Маркеры технического релиза", "technical_release_terms", joinTerms(config.technical_release_terms), {array: true})}${input("Практические маркеры", "practical_terms", joinTerms(config.practical_terms), {array: true})}</div>
     <fieldset class="settings-rule-list"><legend>Отсеивать</legend>${[["advertising", "Рекламу"], ["out_of_scope", "Нерелевантное"], ["hiring", "Найм"], ["technical_without_use", "Технический релиз без пользы"]].map(([value, label]) => checkbox(label, "selection_rules", rules.has(value), {multi: true, value})).join("")}</fieldset>${savebar()}</form>`;
 }
 
@@ -89,28 +89,35 @@ function ctaForm(cta, mode = "update") {
   return `<form class="settings-form resource-form" data-settings-form="cta" data-resource="ctas" data-resource-id="${escapeHtml(cta.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый CTA" : escapeHtml(cta.name)}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить</button>` : ""}</div><div class="settings-grid">${input("Название CTA", "name", cta.name, {required: true})}${input("Текст действия", "text", cta.text, {required: true})}${selectField("Режим ссылки", "link_mode", cta.link_mode || "none", [{value: "none", label: "Без ссылки"}, {value: "source", label: "Источник"}, {value: "custom", label: "Заданный URL"}], "required")}${input("Адрес ссылки", "custom_url", cta.custom_url, {nullEmpty: true})}</div>${checkbox("CTA включён", "enabled", cta.enabled ?? true)}${savebar()}</form>`;
 }
 
-function channelForm(channel, route, providers, settings, mode = "update") {
+function channelForm(channel, providers, mode = "update") {
   const provider = channel.provider || catalogFor(providers, "channels")[0]?.code || "";
   const meta = providerMeta(providers, "channels", provider);
   const token = meta.secret ? `<div class="secret-field">${input(meta.secret.label, meta.secret.name, "", {type: "password", placeholder: channel.secretConfigured ? "Токен сохранён" : "Введите токен", omitEmpty: true})}<button class="button button--quiet" type="button" data-settings-secret-toggle disabled>Показать токен</button>${channel.secretConfigured ? `<button class="button button--danger-soft" type="button" data-settings-secret-remove>Удалить токен</button>` : ""}</div>` : "";
-  const formats = settings.formats.map((item) => ({value: item.id, label: item.name}));
-  const channels = settings.channels.map((item) => ({value: item.id, label: item.name}));
-  const ctas = [{value: "", label: "Без CTA"}, ...settings.ctas.map((item) => ({value: item.id, label: item.name}))];
-  return `<form class="settings-form resource-form" data-settings-form="channels" data-resource="channels" data-resource-id="${escapeHtml(channel.id || "")}" data-resource-mode="${mode}" data-route-id="${escapeHtml(route?.id || "")}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый канал" : escapeHtml(channel.name)}</strong><span class="connection-state">${escapeHtml(channel.connection_status || "не проверен")}</span>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить</button>` : ""}</div><div class="settings-grid">${providerSelect(providers, "channels", provider)}${input("Название канала", "name", channel.name, {required: true})}<div class="provider-fields" data-provider-fields>${renderProviderConfiguration(providers, "channels", provider, channel.configuration)}</div></div>${token}${checkbox("Канал включён", "enabled", channel.enabled ?? true)}${mode === "update" ? `<button class="button button--secondary" type="button" data-settings-channel-check>Проверить канал</button>` : ""}${route ? `<fieldset class="route-fields"><legend>Маршрут публикации</legend><div class="settings-grid">${selectField("Формат", "route.format_id", route.format_id, formats, "required")}${selectField("Канал маршрута", "route.channel_id", route.channel_id, channels, "required")}${selectField("CTA маршрута", "route.cta_id", route.cta_id || "", ctas, "data-null-empty")}</div>${checkbox("Маршрут включён", "route.enabled", route.enabled)}</fieldset>` : ""}${savebar()}</form>`;
+  return `<form class="settings-form resource-form" data-settings-form="channels" data-resource="channels" data-resource-id="${escapeHtml(channel.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый канал" : escapeHtml(channel.name)}</strong><span class="connection-state">${escapeHtml(channel.connection_status || "не проверен")}</span>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить</button>` : ""}</div><div class="settings-grid">${providerSelect(providers, "channels", provider)}${input("Название канала", "name", channel.name, {required: true})}<div class="provider-fields" data-provider-fields>${renderProviderConfiguration(providers, "channels", provider, channel.configuration)}</div></div>${token}${checkbox("Канал включён", "enabled", channel.enabled ?? true)}${mode === "update" ? `<button class="button button--secondary" type="button" data-settings-channel-check>Проверить канал</button>` : ""}${savebar()}</form>`;
 }
 
-function routeForm(settings) {
+function routeForm(route, settings, mode = "update") {
   const formats = settings.formats.map((item) => ({value: item.id, label: item.name}));
   const channels = settings.channels.map((item) => ({value: item.id, label: item.name}));
   const ctas = [{value: "", label: "Без CTA"}, ...settings.ctas.map((item) => ({value: item.id, label: item.name}))];
-  return `<form class="settings-form resource-form" data-settings-form="route-create" data-resource="routes" data-resource-mode="create" hidden novalidate><div class="resource-heading"><strong>Новый маршрут</strong></div><div class="settings-grid">${selectField("Формат", "format_id", formats[0]?.value || "", formats, "required")}${selectField("Канал маршрута", "channel_id", channels[0]?.value || "", channels, "required")}${selectField("CTA маршрута", "cta_id", "", ctas, "data-null-empty")}</div>${checkbox("Маршрут включён", "enabled", true)}${savebar()}</form>`;
+  const schedule = route.schedule || {autopublish: true, slots: ["09:00", "14:00", "19:00"]};
+  return `<form class="settings-form resource-form" data-settings-form="route" data-resource="routes" data-resource-id="${escapeHtml(route.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый маршрут" : `Маршрут № ${escapeHtml(route.id)}`}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить маршрут</button>` : ""}</div><div class="settings-grid">${selectField("Формат", "format_id", route.format_id || formats[0]?.value || "", formats, "required")}${selectField("Канал маршрута", "channel_id", route.channel_id || channels[0]?.value || "", channels, "required")}${selectField("CTA маршрута", "cta_id", route.cta_id || "", ctas, "data-null-empty")}</div>${checkbox("Маршрут включён", "enabled", route.enabled ?? true)}<input type="hidden" name="schedule.autopublish" value="${escapeHtml(schedule.autopublish)}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[0])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[1])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[2])}">${savebar()}</form>`;
 }
 
 function scheduleForm(settings) {
-  const source = settings.sources[0] || {};
-  const route = settings.routes[0] || {};
-  const schedule = route.schedule || {autopublish: false, slots: ["", "", ""]};
-  return `<form class="settings-form" data-settings-form="schedule" data-source-id="${escapeHtml(source.id || "")}" data-route-id="${escapeHtml(route.id || "")}" novalidate><div class="timezone-ribbon">Время проекта: <strong>${escapeHtml(settings.project.timezone)}</strong></div><div class="settings-grid">${input("Расписание получения", "source_schedule", source.schedule, {required: true})}${input("Утренний слот", "slots", schedule.slots[0], {type: "time", required: true, multi: true})}${input("Дневной слот", "slots", schedule.slots[1], {type: "time", required: true, multi: true})}${input("Вечерний слот", "slots", schedule.slots[2], {type: "time", required: true, multi: true})}</div>${checkbox("Автопубликация", "autopublish", schedule.autopublish)}${savebar()}</form>`;
+  const sourceFields = settings.sources.map((source) => input(
+    settings.sources.length === 1 ? "Расписание получения" : `Расписание получения — ${source.name}`,
+    `source_schedule_${source.id}`,
+    source.schedule,
+    {required: true},
+  ).replace("<input ", `<input data-source-schedule-id="${escapeHtml(source.id)}" `)).join("");
+  const routeFields = settings.routes.map((route) => {
+    const schedule = route.schedule || {autopublish: false, slots: ["", "", ""]};
+    const suffix = settings.routes.length === 1 ? "" : ` — маршрут № ${route.id}`;
+    return `<fieldset class="route-fields" data-route-schedule-id="${escapeHtml(route.id)}"><legend>Публикация${escapeHtml(suffix)}</legend><div class="settings-grid">${input(`Утренний слот${suffix}`, "slots", schedule.slots[0], {type: "time", required: true, multi: true})}${input(`Дневной слот${suffix}`, "slots", schedule.slots[1], {type: "time", required: true, multi: true})}${input(`Вечерний слот${suffix}`, "slots", schedule.slots[2], {type: "time", required: true, multi: true})}</div>${checkbox("Автопубликация", "autopublish", schedule.autopublish)}</fieldset>`;
+  }).join("");
+  if (!sourceFields && !routeFields) return `<p class="resource-empty">Расписание появится после добавления источника или маршрута.</p>`;
+  return `<form class="settings-form" data-settings-form="schedule" novalidate><div class="timezone-ribbon">Время проекта: <strong>${escapeHtml(settings.project.timezone)}</strong></div><div class="settings-grid">${sourceFields}</div>${routeFields}${savebar()}</form>`;
 }
 
 function advancedForm(config) {
@@ -120,19 +127,24 @@ function advancedForm(config) {
 export function renderSettings(settings, providers) {
   const project = settings.project || {};
   const config = project.configuration || {};
-  const source = settings.sources?.[0] || {};
-  const cta = settings.ctas?.[0] || {};
-  const channel = settings.channels?.[0] || {};
-  const route = settings.routes?.[0] || {};
+  const sources = settings.sources || [];
+  const ctas = settings.ctas || [];
+  const channels = settings.channels || [];
+  const routes = settings.routes || [];
+  const sourceEditors = sources.map((source) => sourceForm(source, providers)).join("") || `<p class="resource-empty">Источники не настроены</p>`;
+  const ctaEditors = ctas.map((cta) => ctaForm(cta)).join("") || `<p class="resource-empty">CTA не настроены</p>`;
+  const channelEditors = channels.map((channel) => channelForm(channel, providers)).join("") || `<p class="resource-empty">Каналы не настроены</p>`;
+  const routeEditors = routes.map((route) => routeForm(route, settings)).join("") || `<p class="resource-empty">Маршруты не настроены</p>`;
+  const selectedRoute = routes[0];
   return `<section class="screen settings-screen" data-screen="settings">
     <header class="settings-intro"><p class="section-kicker">Контур редакции</p><p>Меняйте один смысловой блок за раз. Итог секции обновится после ответа Postify.</p></header><div class="settings-accordion">
     ${details("main", "Основное", `${project.name || "Без названия"} · ${project.language || "—"}`, mainForm(project), true)}
-    ${details("sources", "Источники", `${settings.sources?.length || 0} · ${source.enabled ? "включёны" : "выключены"}`, `${sourceForm(source, providers)}<button class="button button--secondary add-resource" type="button" data-settings-add="sources">Добавить источник</button>${sourceForm({enabled: true, configuration: {}}, providers, "create")}`)}
+    ${details("sources", "Источники", `${sources.length} · ${sources.filter((item) => item.enabled).length} включено`, `${sourceEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="sources">Добавить источник</button>${sourceForm({enabled: true, configuration: {}}, providers, "create")}`)}
     ${details("selection", "Аудитория и отбор", `${config.selection_freshness_days || "—"} дней · ${config.selection_policy_version || "—"}`, selectionForm(config))}
-    ${details("generation", "Генерация и форматы", `${config.daily_package_limit || 0} пакета · ${settings.formats?.find((item) => item.id === route.format_id)?.name || "формат не выбран"}`, generationForm(config, settings.formats || [], settings.routes || []))}
-    ${details("cta", "CTA", cta.name || "Не настроен", `${ctaForm(cta)}<button class="button button--secondary add-resource" type="button" data-settings-add="ctas">Добавить CTA</button>${ctaForm({enabled: true, link_mode: "none"}, "create")}`)}
-    ${details("channels", "Каналы и маршруты", `${channel.name || "Без канала"} · ${channel.connection_status || "не проверен"}`, `${channelForm(channel, route, providers, settings)}<button class="button button--secondary add-resource" type="button" data-settings-add="channels">Добавить канал</button>${channelForm({enabled: true, configuration: {}, secretConfigured: false}, null, providers, settings, "create")}<div class="route-resource-actions"><button class="button button--secondary add-resource" type="button" data-settings-add="routes">Добавить маршрут</button>${route?.id ? `<button class="button button--quiet" type="button" data-settings-route-delete data-route-id="${escapeHtml(route.id)}">Удалить маршрут</button>` : ""}</div>${routeForm(settings)}`)}
-    ${details("schedule", "Расписание", `${route.schedule?.slots?.join(" · ") || "Слоты не заданы"} · ${project.timezone || "—"}`, scheduleForm(settings))}
+    ${details("generation", "Генерация и форматы", `${config.daily_package_limit || 0} пакета · ${settings.formats?.find((item) => item.id === selectedRoute?.format_id)?.name || "формат не выбран"}`, generationForm(config, settings.formats || [], routes))}
+    ${details("cta", "CTA", `${ctas.length} · ${ctas.filter((item) => item.enabled).length} включено`, `${ctaEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="ctas">Добавить CTA</button>${ctaForm({enabled: true, link_mode: "none"}, "create")}`)}
+    ${details("channels", "Каналы и маршруты", `${channels.length} канала · ${routes.length} маршрута`, `${channelEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="channels">Добавить канал</button>${channelForm({enabled: true, configuration: {}, secretConfigured: false}, providers, "create")}<div class="route-resource-actions"><strong>Маршруты</strong>${routeEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="routes">Добавить маршрут</button>${routeForm({enabled: true}, settings, "create")}</div>`)}
+    ${details("schedule", "Расписание", `${routes.length} маршрута · ${project.timezone || "—"}`, scheduleForm(settings))}
     ${details("advanced", "Дополнительно", `${config.analysis_timeout_seconds || "—"} с · ${config.media_max_bytes || "—"} байт`, advancedForm(config))}
   </div></section>`;
 }
@@ -145,6 +157,19 @@ function assign(result, path, value) {
 }
 
 export function serializeSettingsSection(form) {
+  if (form.dataset.settingsForm === "schedule") {
+    return {
+      sources: [...form.querySelectorAll("[data-source-schedule-id]")].map((control) => ({
+        id: Number(control.dataset.sourceScheduleId),
+        schedule: control.value.trim(),
+      })),
+      routes: [...form.querySelectorAll("[data-route-schedule-id]")].map((group) => ({
+        id: Number(group.dataset.routeScheduleId),
+        autopublish: group.querySelector('input[name="autopublish"]').checked,
+        slots: [...group.querySelectorAll('input[name="slots"]')].map((control) => control.value.trim()),
+      })),
+    };
+  }
   const result = {};
   const multi = new Map();
   for (const control of form.elements) {
@@ -158,6 +183,7 @@ export function serializeSettingsSection(form) {
     }
     let value;
     if (control.type === "checkbox") value = control.checked;
+    else if (control.type === "hidden" && ["true", "false"].includes(control.value)) value = control.value === "true";
     else if (control.type === "number" || (control.tagName === "SELECT" && control.name.endsWith("_id") && control.value)) value = Number(control.value);
     else if (control.dataset.array !== undefined) value = control.value.split(",").map((item) => item.trim()).filter(Boolean);
     else if (control.dataset.nullEmpty !== undefined && !control.value.trim()) value = null;
@@ -169,45 +195,75 @@ export function serializeSettingsSection(form) {
   return result;
 }
 
-function errorFor(form, message, control = null) {
+export function showSettingsError(form, message, control = null) {
   const error = form.querySelector("[data-settings-error]");
   if (!error.id) error.id = `settings-error-${form.dataset.settingsForm}-${form.dataset.resourceId || "section"}`;
   error.textContent = message;
+  form.setAttribute("aria-describedby", error.id);
   (control || form.querySelector("input, select"))?.setAttribute("aria-describedby", error.id);
   return false;
 }
 
 export function validateSettingsSection(form, payload) {
   form.querySelector("[data-settings-error]").textContent = "";
+  form.removeAttribute("aria-describedby");
   form.querySelectorAll("[aria-describedby^='settings-error-']").forEach((node) => node.removeAttribute("aria-describedby"));
-  if (!form.checkValidity()) return errorFor(form, "Заполните все обязательные поля.", form.querySelector(":invalid"));
+  if (!form.checkValidity()) return showSettingsError(form, "Заполните все обязательные поля.", form.querySelector(":invalid"));
+  for (const control of form.querySelectorAll("[data-protocol]")) {
+    try {
+      if (new URL(control.value).protocol !== `${control.dataset.protocol}:`) throw new Error();
+    } catch (_) { return showSettingsError(form, `Нужен абсолютный ${control.dataset.protocol.toUpperCase()} URL.`, control); }
+  }
   if (form.dataset.settingsForm === "main") {
     try { new Intl.DateTimeFormat("ru", {timeZone: payload.timezone}).format(); }
-    catch (_) { return errorFor(form, "Укажите действующий часовой пояс.", form.elements.timezone); }
+    catch (_) { return showSettingsError(form, "Укажите действующий часовой пояс.", form.elements.timezone); }
   }
   if (form.dataset.settingsForm === "generation") {
-    if (payload.fresh_share_percent + payload.reserve_share_percent !== 100) return errorFor(form, "Доли свежих и резервных должны составлять 100%.", form.elements.fresh_share_percent);
-    if (payload.daily_package_limit > payload.daily_analysis_limit) return errorFor(form, "Лимит пакетов не может превышать лимит анализа.", form.elements.daily_package_limit);
+    if (payload.fresh_share_percent + payload.reserve_share_percent !== 100) return showSettingsError(form, "Доли свежих и резервных должны составлять 100%.", form.elements.fresh_share_percent);
+    if (payload.daily_package_limit > payload.daily_analysis_limit) return showSettingsError(form, "Лимит пакетов не может превышать лимит анализа.", form.elements.daily_package_limit);
+  }
+  if (form.dataset.settingsForm === "selection") {
+    const rules = payload.selection_rules || [];
+    if (!rules.length) return showSettingsError(form, "Выберите хотя бы одно правило отбора.", form.querySelector('input[name="selection_rules"]'));
+    const markerGroups = {
+      advertising: ["advertising_terms"],
+      out_of_scope: ["topic_exclusion_terms"],
+      hiring: ["hiring_terms"],
+      technical_without_use: ["technical_release_terms", "practical_terms"],
+    };
+    for (const rule of rules) {
+      for (const field of markerGroups[rule]) {
+        if (!(payload[field] || []).length) return showSettingsError(form, "Для выбранного правила нужен маркер.", form.elements[field]);
+      }
+    }
+    for (const field of ["topic_terms", "topic_exclusion_terms", "advertising_terms", "hiring_terms", "technical_release_terms", "practical_terms"]) {
+      const terms = (payload[field] || []).map((term) => term.toLocaleLowerCase("ru"));
+      if (new Set(terms).size !== terms.length) return showSettingsError(form, "Маркеры не должны повторяться.", form.elements[field]);
+    }
   }
   if (form.dataset.settingsForm === "cta" && payload.link_mode === "custom") {
     try {
       const url = new URL(payload.custom_url || "");
       if (!["http:", "https:"].includes(url.protocol)) throw new Error();
-    } catch (_) { return errorFor(form, "Для этого режима нужен абсолютный HTTP(S) URL.", form.elements.custom_url); }
+    } catch (_) { return showSettingsError(form, "Для этого режима нужен абсолютный HTTP(S) URL.", form.elements.custom_url); }
   }
   if (form.dataset.settingsForm === "schedule") {
     const validTime = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (payload.slots.length !== 3 || payload.slots.some((slot) => !validTime.test(slot))) return errorFor(form, "Укажите три корректных времени публикации.", form.elements.slots[0]);
-    if (new Set(payload.slots).size !== 3) return errorFor(form, "Три слота публикации должны быть разными.", form.elements.slots[0]);
+    for (const route of payload.routes) {
+      const group = form.querySelector(`[data-route-schedule-id="${route.id}"]`);
+      const control = group?.querySelector('input[name="slots"]');
+      if (route.slots.length !== 3 || route.slots.some((slot) => !validTime.test(slot))) return showSettingsError(form, "Укажите три корректных времени публикации.", control);
+      if (new Set(route.slots).size !== 3) return showSettingsError(form, "Три слота публикации должны быть разными.", control);
+    }
   }
   if (form.dataset.settingsForm === "channels" && payload.route) {
     for (const field of ["format_id", "channel_id"]) {
       const select = form.elements[`route.${field}`];
-      if (!select || ![...select.options].some((option) => option.value === String(payload.route[field]))) return errorFor(form, "Маршрут ссылается на несуществующий объект.", select);
+      if (!select || ![...select.options].some((option) => option.value === String(payload.route[field]))) return showSettingsError(form, "Маршрут ссылается на несуществующий объект.", select);
     }
     if (payload.route.cta_id !== null) {
       const cta = form.elements["route.cta_id"];
-      if (![...cta.options].some((option) => option.value === String(payload.route.cta_id))) return errorFor(form, "Маршрут ссылается на несуществующий CTA.", cta);
+      if (![...cta.options].some((option) => option.value === String(payload.route.cta_id))) return showSettingsError(form, "Маршрут ссылается на несуществующий CTA.", cta);
     }
   }
   return true;

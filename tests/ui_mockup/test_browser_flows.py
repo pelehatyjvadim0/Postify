@@ -22,7 +22,7 @@ FIXTURES = {
                 "code": "hn_algolia",
                 "label": "HN Algolia",
                 "fields": [
-                    {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+                    {"name": "url", "label": "Адрес API", "type": "url", "required": True, "protocol": "https"},
                     {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
                     {"name": "tags", "label": "Теги", "type": "text", "required": True},
                     {"name": "hits", "label": "Материалов за запрос", "type": "number", "required": True, "min": 1, "max": 1000},
@@ -229,8 +229,53 @@ def install_api(page: Page, requests: list[tuple[str, str]] | None = None) -> No
     page.route("**/api/v1/**", handle)
 
 
-def install_settings_api(page: Page, calls: list[dict[str, object]]) -> None:
-    state = json.loads(json.dumps(FIXTURES[f"{PROJECT}/settings"]))
+def install_settings_api(
+    page: Page,
+    calls: list[dict[str, object]],
+    *,
+    initial_settings: dict[str, object] | None = None,
+    failures: set[str] | None = None,
+) -> None:
+    state = json.loads(json.dumps(initial_settings or FIXTURES[f"{PROJECT}/settings"]))
+    failures = failures or set()
+
+    def save_resource(method: str, path: str, body: dict[str, object] | None):
+        relative = path.removeprefix(f"{PROJECT}/")
+        parts = relative.split("/")
+        resource = parts[0]
+        if resource not in {"sources", "ctas", "channels", "routes"}:
+            return {"status": "ok"}
+        items = state[resource]
+        if method == "POST" and len(parts) == 1:
+            resource_id = max((item["id"] for item in items), default=0) + 1
+            created = {"id": resource_id, **(body or {})}
+            if resource == "channels":
+                created.pop("token", None)
+                created |= {"connection_status": "unconfigured", "secretConfigured": bool((body or {}).get("token"))}
+            if resource == "routes" and "schedule" not in created:
+                created["schedule"] = {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]}
+            items.append(created)
+            return created
+        resource_id = int(parts[1])
+        item = next(candidate for candidate in items if candidate["id"] == resource_id)
+        if method == "PUT":
+            values = dict(body or {})
+            token = values.pop("token", None)
+            item.update(values)
+            if resource == "channels" and token:
+                item["secretConfigured"] = True
+            return item
+        if method == "DELETE":
+            items.remove(item)
+            return None
+        if parts[2:] == ["check"]:
+            item["connection_status"] = "connected"
+            return item
+        if parts[2:] == ["secret", "remove"]:
+            item["secretConfigured"] = False
+            item["connection_status"] = "unconfigured"
+            return item
+        return {"status": "ok"}
 
     def handle(route: Route) -> None:
         request = route.request
@@ -241,9 +286,30 @@ def install_settings_api(page: Page, calls: list[dict[str, object]]) -> None:
             return
         body = request.post_data_json if request.post_data else None
         calls.append({"method": request.method, "path": path, "body": body})
+        if path in failures:
+            route.fulfill(status=503, json={"code": "service_unavailable"})
+            return
         if request.method == "PUT" and path.endswith("/settings/main"):
             state["project"].update(body)
-        route.fulfill(status=204 if request.method == "DELETE" else 200, json=None if request.method == "DELETE" else {"status": "ok"})
+            result = state["project"]
+        elif request.method == "PUT" and path.endswith("/settings/configuration"):
+            state["project"]["configuration"].update(body)
+            result = state["project"]
+        elif request.method == "PUT" and path.endswith("/settings/schedule"):
+            for source in body["sources"]:
+                next(item for item in state["sources"] if item["id"] == source["id"])["schedule"] = source["schedule"]
+            for publication_route in body["routes"]:
+                next(item for item in state["routes"] if item["id"] == publication_route["id"])["schedule"] = {
+                    "autopublish": publication_route["autopublish"],
+                    "slots": publication_route["slots"],
+                }
+            result = {"status": "ok"}
+        else:
+            result = save_resource(request.method, path, body)
+        route.fulfill(
+            status=204 if request.method == "DELETE" else 200,
+            json=None if request.method == "DELETE" else result,
+        )
 
     page.route("**/api/v1/**", handle)
 
@@ -419,6 +485,144 @@ def test_settings_validate_shares_slots_url_and_route_references_before_request(
         inspected.close()
 
 
+def test_schedule_save_is_one_section_only_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: schedule save can persist source state before a second route request fails.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="schedule"] > summary').click()
+        form = inspected.locator('[data-settings-form="schedule"]')
+        form.get_by_label("Расписание получения").fill("0 8 * * *")
+        form.get_by_label("Утренний слот").fill("08:30")
+        form.get_by_role("button", name="Сохранить").click()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+
+        assert calls == [{
+            "method": "PUT",
+            "path": f"{PROJECT}/settings/schedule",
+            "body": {
+                "sources": [{"id": 1, "schedule": "0 8 * * *"}],
+                "routes": [{
+                    "id": 1,
+                    "autopublish": True,
+                    "slots": ["08:30", "14:00", "19:00"],
+                }],
+            },
+        }]
+    finally:
+        inspected.close()
+
+
+def test_source_https_constraint_is_provider_driven_and_blocks_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: generic URL validity accepts HTTP although provider metadata/server require HTTPS.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="sources"] > summary').click()
+        source = inspected.locator('[data-resource="sources"][data-resource-id="1"]')
+        source.get_by_label("Адрес API").fill("http://hn.algolia.com")
+        source.get_by_role("button", name="Сохранить").click()
+
+        assert "HTTPS" in source.locator("[data-settings-error]").inner_text()
+        assert calls == []
+    finally:
+        inspected.close()
+
+
+def test_route_references_are_checked_against_rendered_resource_ids_before_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: a stale/tampered route ID passes client validation and is needlessly rejected by the API.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        form = inspected.locator('[data-resource="routes"][data-resource-id="1"]')
+        channel = form.get_by_label("Канал маршрута")
+        channel.evaluate(
+            """select => {
+                const stale = new Option('Удалённый канал', '999', true, true);
+                select.append(stale);
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        form.get_by_role("button", name="Сохранить").click()
+
+        assert "несуществующий" in form.locator("[data-settings-error]").inner_text()
+        assert calls == []
+    finally:
+        inspected.close()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        ("rules", "правило"),
+        ("markers", "маркер"),
+        ("duplicates", "повтор"),
+    ],
+)
+def test_selection_domain_invariants_block_request(
+    browser: Browser, base_url: str, mutate: str, message: str
+) -> None:
+    # Break caught: selection payloads known to fail ProjectConfiguration are still sent over the network.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="selection"] > summary').click()
+        form = inspected.locator('[data-settings-form="selection"]')
+        if mutate == "rules":
+            for rule in form.locator('input[name="selection_rules"]').all():
+                rule.uncheck()
+        elif mutate == "markers":
+            form.get_by_label("Маркеры рекламы").fill("")
+        else:
+            form.get_by_label("Тематические маркеры").fill("AI, ai")
+        form.get_by_role("button", name="Сохранить").click()
+
+        assert message in form.locator("[data-settings-error]").inner_text().casefold()
+        assert calls == []
+    finally:
+        inspected.close()
+
+
+def test_selection_policy_version_is_required_and_persisted(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: policy version remains read-only and never enters the configuration request.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="selection"] > summary').click()
+        form = inspected.locator('[data-settings-form="selection"]')
+        policy = form.get_by_label("Версия политики")
+        policy.fill("")
+        form.get_by_role("button", name="Сохранить").click()
+        assert calls == []
+
+        policy.fill("project-41-v8")
+        form.get_by_role("button", name="Сохранить").click()
+        inspected.locator('[data-settings-section="selection"] .settings-summary-current').filter(has_text="project-41-v8").wait_for()
+        request = next(call for call in calls if call["path"].endswith("/settings/configuration"))
+        assert request["body"]["selection_policy_version"] == "project-41-v8"
+    finally:
+        inspected.close()
+
+
 def test_channel_token_keep_replace_remove_and_real_check_are_distinct_intents(
     browser: Browser, base_url: str
 ) -> None:
@@ -462,6 +666,44 @@ def test_channel_token_keep_replace_remove_and_real_check_are_distinct_intents(
         inspected.close()
 
 
+@pytest.mark.parametrize(
+    ("section", "form_selector", "button_name", "failure_path"),
+    [
+        ("sources", '[data-resource="sources"][data-resource-id="1"]', "Удалить", f"{PROJECT}/sources/1"),
+        ("channels", '[data-resource="channels"][data-resource-id="1"]', "Удалить токен", f"{PROJECT}/channels/1/secret/remove"),
+        ("channels", '[data-resource="channels"][data-resource-id="1"]', "Проверить канал", f"{PROJECT}/channels/1/check"),
+        ("channels", '[data-resource="routes"][data-resource-id="1"]', "Удалить маршрут", f"{PROJECT}/routes/1"),
+    ],
+)
+def test_failed_settings_command_describes_form_and_initiating_button(
+    browser: Browser,
+    base_url: str,
+    section: str,
+    form_selector: str,
+    button_name: str,
+    failure_path: str,
+) -> None:
+    # Break caught: command errors have no stable accessible relation to the button that initiated them.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    install_settings_api(inspected, [], failures={failure_path})
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator(f'[data-settings-section="{section}"] > summary').click()
+        form = inspected.locator(form_selector)
+        button = form.get_by_role("button", name=button_name)
+        button.click()
+
+        error = form.locator("[data-settings-error]")
+        error.filter(has_text="Команда").wait_for()
+        assert "не выполнена" in error.inner_text().casefold()
+        error_id = error.get_attribute("id")
+        assert error_id
+        assert form.get_attribute("aria-describedby") == error_id
+        assert button.get_attribute("aria-describedby") == error_id
+    finally:
+        inspected.close()
+
+
 def test_source_cta_channel_and_route_mutations_use_resource_endpoints(
     browser: Browser, base_url: str
 ) -> None:
@@ -484,6 +726,11 @@ def test_source_cta_channel_and_route_mutations_use_resource_endpoints(
             inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
             inspected.wait_for_timeout(100)
 
+        route_form = inspected.locator('[data-resource="routes"][data-resource-id="1"]')
+        route_form.get_by_label("Маршрут включён").uncheck()
+        route_form.get_by_role("button", name="Сохранить").click()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+
         paths = {call["path"] for call in calls if call["method"] == "PUT"}
         assert paths >= {
             f"{PROJECT}/sources/1",
@@ -496,17 +743,17 @@ def test_source_cta_channel_and_route_mutations_use_resource_endpoints(
             "format_id": 1,
             "channel_id": 1,
             "cta_id": 1,
-            "enabled": True,
+            "enabled": False,
             "schedule": {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
         }
     finally:
         inspected.close()
 
 
-def test_resource_add_and_delete_controls_call_crud_endpoints(
+def test_source_create_and_cta_delete_controls_call_crud_endpoints(
     browser: Browser, base_url: str
 ) -> None:
-    # Break caught: add/delete controls are decorative or routes can only be edited, not managed as resources.
+    # Break caught: add/delete controls are decorative instead of using resource endpoints.
     inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
     calls: list[dict[str, object]] = []
     install_settings_api(inspected, calls)
@@ -529,18 +776,92 @@ def test_resource_add_and_delete_controls_call_crud_endpoints(
         inspected.locator('[data-resource="ctas"][data-resource-mode="update"]').get_by_role("button", name="Удалить").click()
         inspected.wait_for_timeout(100)
 
-        inspected.locator('[data-settings-section="channels"] > summary').click()
-        inspected.get_by_role("button", name="Добавить маршрут").click()
-        route_form = inspected.locator('[data-resource="routes"][data-resource-mode="create"]')
-        route_form.get_by_role("button", name="Сохранить").click()
-        inspected.wait_for_timeout(100)
-        inspected.get_by_role("button", name="Удалить маршрут").click()
-        inspected.wait_for_timeout(100)
-
         assert any(call["method"] == "POST" and call["path"] == f"{PROJECT}/sources" for call in calls)
         assert any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/ctas/1" for call in calls)
+    finally:
+        inspected.close()
+
+
+def test_settings_render_empty_resource_states_without_fake_update_forms(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: empty collections render update/delete controls with blank IDs instead of an actionable empty state.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    settings = json.loads(json.dumps(FIXTURES[f"{PROJECT}/settings"]))
+    for resource in ("sources", "ctas", "channels", "routes"):
+        settings[resource] = []
+    install_settings_api(inspected, [], initial_settings=settings)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="sources"] > summary').click()
+        assert inspected.get_by_text("Источники не настроены", exact=True).is_visible()
+        inspected.locator('[data-settings-section="cta"] > summary').click()
+        assert inspected.get_by_text("CTA не настроены", exact=True).is_visible()
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        assert inspected.get_by_text("Каналы не настроены", exact=True).is_visible()
+        assert inspected.get_by_text("Маршруты не настроены", exact=True).is_visible()
+        assert inspected.locator('[data-resource-mode="update"]').count() == 0
+    finally:
+        inspected.close()
+
+
+def test_settings_render_every_resource_with_its_own_id_and_actual_route_references(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: only index zero is editable, or a route is displayed under the wrong channel.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    settings = json.loads(json.dumps(FIXTURES[f"{PROJECT}/settings"]))
+    settings["sources"].append({
+        **settings["sources"][0], "id": 22, "name": "Второй источник", "configuration": {**settings["sources"][0]["configuration"], "query": "Python"},
+    })
+    settings["ctas"].append({**settings["ctas"][0], "id": 33, "name": "Второй CTA"})
+    settings["channels"].append({
+        **settings["channels"][0], "id": 44, "name": "Второй канал", "configuration": {"chat_id": "-100444"},
+    })
+    settings["routes"].append({
+        **settings["routes"][0], "id": 55, "channel_id": 44, "cta_id": 33,
+    })
+    install_settings_api(inspected, [], initial_settings=settings)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        assert inspected.locator('[data-resource="sources"][data-resource-mode="update"]').count() == 2
+        assert inspected.locator('[data-resource="ctas"][data-resource-mode="update"]').count() == 2
+        assert inspected.locator('[data-resource="channels"][data-resource-mode="update"]').count() == 2
+        assert inspected.locator('[data-resource="routes"][data-resource-mode="update"]').count() == 2
+        second_route = inspected.locator('[data-resource="routes"][data-resource-id="55"]')
+        assert second_route.get_by_label("Канал маршрута").input_value() == "44"
+        assert second_route.get_by_label("CTA маршрута").input_value() == "33"
+    finally:
+        inspected.close()
+
+
+def test_stateful_crud_updates_and_deletes_the_created_route_id(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: fake CRUD leaves state unchanged, so update/delete accidentally target the original route.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        inspected.get_by_role("button", name="Добавить маршрут").click()
+        create = inspected.locator('[data-resource="routes"][data-resource-mode="create"]')
+        create.get_by_role("button", name="Сохранить").click()
+        created = inspected.locator('[data-resource="routes"][data-resource-id="2"]')
+        created.wait_for()
+
+        created.get_by_label("Маршрут включён").uncheck()
+        created.get_by_role("button", name="Сохранить").click()
+        inspected.locator('[data-resource="routes"][data-resource-id="2"]').wait_for()
+        inspected.locator('[data-resource="routes"][data-resource-id="2"]').get_by_role("button", name="Удалить маршрут").click()
+        inspected.locator('[data-resource="routes"][data-resource-id="2"]').wait_for(state="detached")
+
         assert any(call["method"] == "POST" and call["path"] == f"{PROJECT}/routes" for call in calls)
-        assert any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/routes/1" for call in calls)
+        assert any(call["method"] == "PUT" and call["path"] == f"{PROJECT}/routes/2" for call in calls)
+        assert any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/routes/2" for call in calls)
+        assert not any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/routes/1" for call in calls)
     finally:
         inspected.close()
 
