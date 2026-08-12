@@ -152,3 +152,80 @@ def test_operational_details_open_in_the_shared_layer(
 
     assert page.locator("#detail-layer[open]").is_visible()
     assert page.locator("#detail-title").inner_text() == expected
+
+
+@pytest.mark.parametrize("width,height", [(360, 800), (768, 1024), (1440, 1000)])
+@pytest.mark.parametrize(
+    "route",
+    ["overview", "materials", "review", "queue", "publications", "journal"],
+)
+def test_every_screen_has_no_horizontal_overflow(
+    page: Page, base_url: str, width: int, height: int, route: str
+) -> None:
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(f"{base_url}/#{route}")
+
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+
+
+def test_mobile_navigation_and_detail_targets_are_touch_ready(
+    page: Page, base_url: str
+) -> None:
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.goto(f"{base_url}/#review")
+
+    assert page.locator(".sidebar").is_hidden()
+    assert page.locator(".mobile-nav").is_visible()
+    target_heights = page.locator(".mobile-nav a, .mobile-nav button").evaluate_all(
+        "elements => elements.map(element => element.getBoundingClientRect().height)"
+    )
+    assert min(target_heights) >= 44
+
+    page.locator('[data-action="open-package"]').first.click()
+    bounds = page.locator("#detail-layer").bounding_box()
+    assert bounds is not None
+    assert bounds["width"] == pytest.approx(360, abs=1)
+    assert bounds["height"] == pytest.approx(800, abs=1)
+
+
+def test_mobile_review_thumbnail_does_not_cover_copy(
+    page: Page, base_url: str
+) -> None:
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.goto(f"{base_url}/#review")
+    card = page.locator(".content-card").first
+    thumbnail = card.locator(".material-thumb").bounding_box()
+    copy = card.locator(".content-card-copy").bounding_box()
+
+    assert thumbnail is not None and copy is not None
+    assert thumbnail["x"] + thumbnail["width"] <= copy["x"]
+
+
+def test_mobile_package_keeps_both_editorial_actions_visible(
+    page: Page, base_url: str
+) -> None:
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.goto(f"{base_url}/#review")
+    page.locator('[data-action="open-package"]').first.click()
+
+    assert page.locator('[data-action="show-reject-form"]').is_visible()
+    assert page.locator('[data-action="approve-package"]').is_visible()
+
+
+def test_reduced_motion_removes_visible_screen_transition(
+    browser: Browser, base_url: str
+) -> None:
+    reduced_page = browser.new_page(
+        viewport={"width": 1440, "height": 1000},
+        reduced_motion="reduce",
+    )
+    try:
+        reduced_page.goto(f"{base_url}/#overview")
+        duration = reduced_page.locator("[data-screen]").evaluate(
+            "element => getComputedStyle(element).animationDuration"
+        )
+        assert duration in {"0s", "1e-05s"}
+    finally:
+        reduced_page.close()
