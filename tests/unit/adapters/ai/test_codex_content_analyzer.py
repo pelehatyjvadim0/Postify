@@ -505,6 +505,38 @@ def test_codex_prompt_uses_platform_neutral_generation_brief(tmp_path: Path) -> 
     assert "Telegram" not in prompt
 
 
+def test_codex_prompt_uses_brief_language_for_generation(tmp_path: Path) -> None:
+    # Поломка review: brief.language не управляет языком постов из-за hardcode русского.
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    captured: dict[str, object] = {}
+
+    def runner(argv: list[str], **kwargs: object):
+        captured["prompt"] = kwargs["input"]
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(_valid_output()), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(runner, tmp_path / "repo", 600, tmp_path / "work")
+    analyzer.analyze(
+        [_input(AnalysisInput)],
+        package_limit=1,
+        brief=GenerationBrief(
+            topic="Team automation",
+            language="en",
+            audience="Product teams",
+            format_instructions="Useful and concise",
+            cta="Try the next step",
+        ),
+    )
+
+    prompt = str(captured["prompt"])
+    assert "Пиши анализ и выбранные посты на языке en." in prompt
+    assert "на русском" not in prompt.casefold()
+
+
 def test_codex_preserves_selected_and_nonselected_outcomes_from_complete_batch(
     tmp_path: Path,
 ) -> None:

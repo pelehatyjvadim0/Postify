@@ -66,3 +66,25 @@ uv run pytest -q
 исполнения тестов. Обязательный для задачи scoped-набор прошёл полностью.
 Реальная сборка Telegram publisher остаётся явной зависимостью composition root
 и намеренно не скрыта внутри платформенно-нейтрального `PublishRoute`.
+
+## Исправление review
+
+- RED: новый тест с `GenerationBrief(language="en")` ожидал инструкцию
+  генерации на `en` и не находил её: `1 failed, 17 passed`.
+- GREEN: prompt теперь формирует инструкцию из `brief.language`; прежнее
+  требование писать на русском сохранено только для `brief=None`.
+- Проверка после исправления:
+
+```text
+uv run pytest -q tests/unit/adapters/ai/test_codex_content_analyzer.py
+18 passed in 0.04s
+
+uv run pytest -q tests/unit/application/ingestion tests/unit/application/delivery tests/unit/adapters/ai tests/unit/adapters/telegram
+45 passed in 0.12s
+
+uv run ruff check src/postify/adapters/ai/codex_content_analyzer.py tests/unit/adapters/ai/test_codex_content_analyzer.py
+All checks passed!
+
+git diff --check
+Успешно, вывода нет.
+```

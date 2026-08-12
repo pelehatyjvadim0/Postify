@@ -184,16 +184,20 @@ class CodexContentAnalyzer:
             for article in articles
         )
         product_context = ""
+        language_instruction = "Пиши анализ и выбранные посты на русском. "
         if brief is not None:
             product_context = (
                 f"Тема проекта: {brief.topic}. Язык: {brief.language}. "
                 f"Аудитория: {brief.audience}. Формат: {brief.format_instructions}. "
                 f"CTA: {brief.cta}.\n"
             )
+            language_instruction = (
+                f"Пиши анализ и выбранные посты на языке {brief.language}. "
+            )
         return (
             product_context
             + "Проанализируй каждую статью и верни ровно один outcome на каждую попытку. "
-            f"Выбери не более {package_limit}. Пиши анализ и выбранные посты на русском. "
+            f"Выбери не более {package_limit}. {language_instruction}"
             "Не добавляй source URL или URL источника в посты.\n\n" + material
         )
 
