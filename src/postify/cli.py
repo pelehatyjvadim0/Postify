@@ -5,6 +5,7 @@ from datetime import datetime
 from time import monotonic, sleep
 
 import typer
+import uvicorn
 from alembic.util.exc import CommandError
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,6 +34,17 @@ from postify.infrastructure.systemd import (
 app = typer.Typer(no_args_is_help=True)
 content_app = typer.Typer(no_args_is_help=True)
 app.add_typer(content_app, name="content")
+
+
+@app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(8000, min=1, max=65535),
+) -> None:
+    """Запустить локальный HTTP-интерфейс Postify."""
+    from postify.web.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
 
 
 def create_systemd_controller(settings: Settings) -> SystemdController:

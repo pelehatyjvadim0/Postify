@@ -438,10 +438,10 @@ class SqlAlchemyContentRepository:
     def approve(self, id, *, now):
         return self._review(id, "approved", now)
 
-    def reject(self, id, *, now):
-        return self._review(id, "rejected", now)
+    def reject(self, id, *, now, reason="review"):
+        return self._review(id, "rejected", now, reason=reason)
 
-    def _review(self, id, status, now):
+    def _review(self, id, status, now, *, reason="review"):
         with self.sf() as s:
             try:
                 p = s.execute(
@@ -460,9 +460,9 @@ class SqlAlchemyContentRepository:
                 )
                 s.execute(
                     text(
-                        "INSERT INTO content_package_status_history(project_id,package_id,status,reason,created_at) VALUES (:project,:id,:s,'review',:n)"
+                        "INSERT INTO content_package_status_history(project_id,package_id,status,reason,created_at) VALUES (:project,:id,:s,:reason,:n)"
                     ),
-                    {"project": self.project_id, "id": id, "s": status, "n": now},
+                    {"project": self.project_id, "id": id, "s": status, "reason": reason, "n": now},
                 )
                 s.commit()
             except:

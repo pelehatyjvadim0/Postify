@@ -241,6 +241,20 @@ class SqlAlchemyDashboardRepository:
             row.updated_at,
         )
 
+    def package_media_path(self, project_id: int, package_id: int) -> str:
+        with self._session_factory() as session:
+            row = session.execute(
+                text(
+                    """SELECT media_path FROM content_packages
+                    WHERE project_id=:project AND id=:package
+                    AND media_path IS NOT NULL AND media_deleted_at IS NULL"""
+                ),
+                {"project": project_id, "package": package_id},
+            ).mappings().first()
+        if row is None:
+            raise LookupError(package_id)
+        return row.media_path
+
     def queue(self, project_id: int, day: date) -> tuple[QueueSlot, ...]:
         with self._session_factory() as session:
             routes = (
