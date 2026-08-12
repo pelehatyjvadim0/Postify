@@ -20,7 +20,7 @@ dependencies = [
 postify = "postify.cli:app"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["playwright", "pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
