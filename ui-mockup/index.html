@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f3f0e9">
+    <title>Postify — обзор</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#screen-root">Перейти к содержимому</a>
+
+    <div class="app-shell" id="app-shell">
+      <aside class="sidebar" aria-label="Боковая панель">
+        <div class="brand" aria-label="Postify">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="brand-name">Postify</span>
+        </div>
+
+        <button class="farm-switcher" id="farm-switcher" type="button" aria-haspopup="listbox">
+          <span class="farm-avatar" aria-hidden="true">Т</span>
+          <span class="farm-copy">
+            <span class="farm-label">Контентный контур</span>
+            <strong>Технологии просто</strong>
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+
+        <nav class="app-nav" id="app-nav" aria-label="Основная навигация">
+          <p class="nav-label">Работа</p>
+          <a class="nav-link" href="#overview" data-route="overview">
+            <span class="nav-icon" aria-hidden="true">⌂</span><span>Обзор</span>
+          </a>
+          <a class="nav-link" href="#materials" data-route="materials">
+            <span class="nav-icon" aria-hidden="true">⌕</span><span>Материалы</span>
+          </a>
+          <a class="nav-link" href="#review" data-route="review">
+            <span class="nav-icon" aria-hidden="true">✓</span><span>Проверка</span>
+            <span class="nav-count" data-nav-count="review">4</span>
+          </a>
+          <a class="nav-link" href="#queue" data-route="queue">
+            <span class="nav-icon" aria-hidden="true">◷</span><span>Очередь</span>
+          </a>
+          <a class="nav-link" href="#publications" data-route="publications">
+            <span class="nav-icon" aria-hidden="true">↗</span><span>Публикации</span>
+          </a>
+          <a class="nav-link" href="#journal" data-route="journal">
+            <span class="nav-icon" aria-hidden="true">≡</span><span>Журнал</span>
+          </a>
+
+          <p class="nav-label nav-label--future">Развитие</p>
+          <span class="nav-link nav-link--disabled" aria-disabled="true">
+            <span class="nav-icon" aria-hidden="true">⚙</span><span>Настройки фермы</span>
+            <span class="future-dot" title="Следующий этап"></span>
+          </span>
+          <span class="nav-link nav-link--disabled" aria-disabled="true">
+            <span class="nav-icon" aria-hidden="true">⌁</span><span>Аналитика</span>
+            <span class="future-dot" title="Следующий этап"></span>
+          </span>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="system-pulse">
+            <span class="status-dot status-dot--ok"></span>
+            <span><strong>Система работает</strong><small>Обновлено только что</small></span>
+          </div>
+          <button class="button button--quiet button--full" id="demo-reset" type="button">
+            Сбросить демо
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-stage">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="screen-eyebrow">Рабочая панель</p>
+            <h1 id="screen-title">Сегодня</h1>
+          </div>
+          <div class="topbar-actions">
+            <span class="demo-badge"><span></span> Демо-режим</span>
+            <button class="date-control" type="button" aria-label="Выбрать дату">
+              <span aria-hidden="true">▣</span><span>12 августа 2026</span><span aria-hidden="true">⌄</span>
+            </button>
+            <button class="button button--primary" type="button" data-action="new-run">
+              <span aria-hidden="true">＋</span> Новый поиск
+            </button>
+          </div>
+        </header>
+
+        <div class="screen-root" id="screen-root" tabindex="-1"></div>
+      </main>
+
+      <nav class="mobile-nav" aria-label="Мобильная навигация">
+        <a href="#overview" data-route="overview"><span aria-hidden="true">⌂</span><small>Обзор</small></a>
+        <a href="#materials" data-route="materials"><span aria-hidden="true">⌕</span><small>Материалы</small></a>
+        <a href="#review" data-route="review"><span aria-hidden="true">✓</span><small>Проверка</small></a>
+        <a href="#queue" data-route="queue"><span aria-hidden="true">◷</span><small>Очередь</small></a>
+        <button type="button" data-action="open-mobile-menu"><span aria-hidden="true">•••</span><small>Ещё</small></button>
+      </nav>
+    </div>
+
+    <dialog class="detail-layer" id="detail-layer" aria-labelledby="detail-title">
+      <div id="detail-content"></div>
+    </dialog>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
