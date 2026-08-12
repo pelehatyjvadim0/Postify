@@ -229,3 +229,61 @@ def test_reduced_motion_removes_visible_screen_transition(
         assert duration in {"0s", "1e-05s"}
     finally:
         reduced_page.close()
+
+
+def test_journal_starts_with_operational_content_without_status_banner(
+    page: Page, base_url: str
+) -> None:
+    page.goto(f"{base_url}/#journal")
+
+    assert page.locator(".system-banner").count() == 0
+    assert page.locator(".journal-layout").is_visible()
+
+
+@pytest.mark.parametrize("width", [360, 1440])
+@pytest.mark.parametrize("route", ["overview", "queue"])
+def test_timeline_rule_runs_through_marker_centres(
+    page: Page, base_url: str, width: int, route: str
+) -> None:
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.goto(f"{base_url}/#{route}")
+    geometry = page.locator(".timeline").first.evaluate(
+        """element => {
+            const timeline = element.getBoundingClientRect();
+            const marker = element.querySelector('.timeline-marker').getBoundingClientRect();
+            const rule = getComputedStyle(element, '::before');
+            return {
+                ruleX: timeline.x + parseFloat(rule.left),
+                markerX: marker.x + marker.width / 2,
+            };
+        }"""
+    )
+
+    assert geometry["ruleX"] == pytest.approx(geometry["markerX"], abs=1)
+
+
+def test_overview_summary_columns_and_logo_are_optically_aligned(
+    page: Page, base_url: str
+) -> None:
+    page.goto(f"{base_url}/#overview")
+    column_boxes = page.locator(".studio-strip > div").evaluate_all(
+        "elements => elements.map(element => element.getBoundingClientRect().toJSON())"
+    )
+    brand_geometry = page.locator(".brand").evaluate(
+        """element => {
+            const mark = element.querySelector('.brand-mark').getBoundingClientRect();
+            const name = element.querySelector('.brand-name').getBoundingClientRect();
+            return {
+                markCenter: mark.y + mark.height / 2,
+                nameCenter: name.y + name.height / 2,
+            };
+        }"""
+    )
+
+    assert max(box["width"] for box in column_boxes) - min(
+        box["width"] for box in column_boxes
+    ) <= 1
+    assert len({round(box["height"], 1) for box in column_boxes}) == 1
+    assert brand_geometry["markCenter"] == pytest.approx(
+        brand_geometry["nameCenter"], abs=1
+    )

@@ -464,7 +464,6 @@ function renderPublications() {
 function renderJournal() {
   return `
     <section class="screen" data-screen="journal">
-      <div class="system-banner"><div><span class="system-orbit" aria-hidden="true"><i></i></span><span><strong>Все основные процессы работают</strong><small>Импорт и публикация запускаются по расписанию</small></span></div><span class="badge badge--olive">Последняя проверка: сейчас</span></div>
       <div class="journal-layout">
         <section class="panel"><div class="panel-head"><div><p class="section-kicker">Операции</p><h2 class="panel-title">Последние запуски</h2></div><button class="button button--quiet" type="button" data-action="new-run">＋ Запустить поиск</button></div><div class="journal-list panel-body">${state.runs.map((run) => `
           <button class="journal-row" type="button" data-action="open-run" data-id="${run.id}">
