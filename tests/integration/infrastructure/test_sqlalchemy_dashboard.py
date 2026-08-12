@@ -113,23 +113,23 @@ def _package(
     return package_id
 
 
-def _route(connection, project_id: int) -> tuple[int, int]:
+def _route(connection, project_id: int, marker: str = "") -> tuple[int, int]:
     format_id = connection.execute(
         text(
             """INSERT INTO content_formats
             (project_id,name,kind,instructions,enabled,created_at,updated_at)
-            VALUES (:project,'Пост','text','Инструкция',true,:now,:now) RETURNING id"""
+            VALUES (:project,:name,'text','Инструкция',true,:now,:now) RETURNING id"""
         ),
-        {"project": project_id, "now": NOW},
+        {"project": project_id, "name": f"Пост {marker}", "now": NOW},
     ).scalar_one()
     channel_id = connection.execute(
         text(
             """INSERT INTO channel_connections
             (project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-            VALUES (:project,'telegram','Канал',true,'{}'::jsonb,'configured',:now,:now)
+            VALUES (:project,'telegram',:name,true,'{}'::jsonb,'configured',:now,:now)
             RETURNING id"""
         ),
-        {"project": project_id, "now": NOW},
+        {"project": project_id, "name": f"Канал {marker}", "now": NOW},
     ).scalar_one()
     route_id = connection.execute(
         text(
@@ -238,6 +238,35 @@ def test_queue_confirms_legacy_delivery_created_by_delivery_repository(
         assert slots[0].assignment_kind == "confirmed"
         assert slots[0].package_id == package_id
         assert slots[0].delivery_id == claim.delivery_id
+    finally:
+        engine.dispose()
+
+
+def test_queue_does_not_assign_legacy_delivery_with_multiple_active_routes(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: legacy delivery без route_id ошибочно попадает в первый из нескольких routes.
+    from postify.infrastructure.repositories.sqlalchemy_delivery import (
+        SqlAlchemyDeliveryRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    try:
+        with engine.begin() as connection:
+            candidate = _candidate(connection, 1, "ambiguous-legacy")
+            _package(connection, 1, candidate, "ambiguous-legacy")
+            _route(connection, 1, "first")
+            _route(connection, 1, "second")
+
+        delivery_repository = SqlAlchemyDeliveryRepository(sessionmaker(engine))
+        claim = delivery_repository.reserve_next(now=NOW - timedelta(minutes=2))
+        assert claim is not None
+        delivery_repository.confirm_published(claim, message_id=42, now=NOW)
+
+        slots = _repository(engine, 1).queue(1, DAY)
+
+        assert [slot.assignment_kind for slot in slots] == ["empty", "empty", "empty"]
+        assert all(slot.delivery_id is None for slot in slots)
     finally:
         engine.dispose()
 

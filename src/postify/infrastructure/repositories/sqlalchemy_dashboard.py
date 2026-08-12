@@ -250,7 +250,7 @@ class SqlAlchemyDashboardRepository:
                     JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id
                     JOIN content_projects p ON p.id=r.project_id
                     WHERE r.project_id=:project AND r.enabled AND c.enabled
-                    ORDER BY r.id LIMIT 1"""
+                    ORDER BY r.id"""
                     ),
                     {"project": project_id},
                 )

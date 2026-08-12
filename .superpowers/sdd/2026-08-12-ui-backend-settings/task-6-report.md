@@ -66,3 +66,27 @@ git diff --check
 Результат: `9 passed in 1.26s`; `All checks passed!`; `git diff --check` без вывода (успех).
 
 `queue()` включает persisted delivery с `route_id=NULL` только при ровно одном включённом route проекта. При нескольких route такая delivery остаётся не назначенной, чтобы не смешать неоднозначную legacy-запись между маршрутами.
+
+## Исправление re-review (несколько routes)
+
+Добавлен integration regression-тест с двумя включёнными route и delivery, созданной production-путём с `route_id=NULL`.
+
+RED:
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test uv run pytest -q tests/integration/infrastructure/test_sqlalchemy_dashboard.py::test_queue_does_not_assign_legacy_delivery_with_multiple_active_routes
+```
+
+Результат: `1 failed`; первый slot неверно получил `assignment_kind == 'confirmed'`.
+
+GREEN:
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test uv run pytest -q tests/unit/application/dashboard tests/integration/infrastructure/test_sqlalchemy_dashboard.py
+uv run ruff check src/postify/infrastructure/repositories/sqlalchemy_dashboard.py tests/integration/infrastructure/test_sqlalchemy_dashboard.py
+git diff --check
+```
+
+Результат: `10 passed in 1.44s`; `All checks passed!`; `git diff --check` без вывода (успех).
+
+`queue()` читает все active routes проекта, но сохраняет первый по `id` как UI route. Только реальное количество routes определяет, допустим ли `route_id=NULL` в confirmed branch.
