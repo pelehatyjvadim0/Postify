@@ -62,3 +62,21 @@ def test_styles_cover_the_visual_and_accessibility_boundaries() -> None:
     assert ":focus-visible" in css
     assert "prefers-reduced-motion" in css
     assert "@media (max-width: 767px)" in css
+
+
+def test_script_offers_all_screens_without_network_dependencies() -> None:
+    script = (ROOT / "ui-mockup/app.js").read_text()
+
+    for route in (
+        "overview",
+        "materials",
+        "review",
+        "queue",
+        "publications",
+        "journal",
+    ):
+        assert f"{route}:" in script
+    for forbidden in ("fetch(", "XMLHttpRequest", "WebSocket", "EventSource"):
+        assert forbidden not in script
+    assert "INITIAL_STATE" in script
+    assert "resetDemo" in script
