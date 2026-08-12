@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     content_article_max_bytes: int = Field(gt=0)
     content_media_max_bytes: int = Field(gt=0)
     content_codex_timeout_seconds: int = Field(gt=0)
+    postify_secret_key: SecretStr | None = None
 
     @field_validator(
         "selection_rules",

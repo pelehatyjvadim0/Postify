@@ -105,6 +105,26 @@ def test_settings_reads_all_values_from_environment(monkeypatch: pytest.MonkeyPa
     assert settings.postify_timezone == REQUIRED_ENVIRONMENT["POSTIFY_TIMEZONE"]
 
 
+def test_settings_keeps_optional_ui_secret_as_secret_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_required_environment(monkeypatch, POSTIFY_SECRET_KEY="safe-fernet-key")
+
+    settings = Settings()
+
+    assert settings.postify_secret_key.get_secret_value() == "safe-fernet-key"
+    assert "safe-fernet-key" not in repr(settings)
+
+
+def test_settings_allows_read_only_ui_without_secret_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_required_environment(monkeypatch)
+    monkeypatch.delenv("POSTIFY_SECRET_KEY", raising=False)
+
+    assert Settings().postify_secret_key is None
+
+
 def test_environment_has_priority_over_passed_env_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
