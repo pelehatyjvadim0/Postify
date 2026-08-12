@@ -470,6 +470,41 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
     assert captured["argv"][-1] == "-"
 
 
+def test_codex_prompt_uses_platform_neutral_generation_brief(tmp_path: Path) -> None:
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    captured: dict[str, object] = {}
+
+    def runner(argv: list[str], **kwargs: object):
+        captured["prompt"] = kwargs["input"]
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(_valid_output()), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(runner, tmp_path / "repo", 600, tmp_path / "work")
+    analyzer.analyze(
+        [_input(AnalysisInput)],
+        package_limit=1,
+        brief=GenerationBrief(
+            topic="Автоматизация небольших команд",
+            language="ru",
+            audience="Продуктовые команды",
+            format_instructions="Хук, польза и честное ограничение",
+            cta="Покажи полезный следующий шаг без навязчивости",
+        ),
+    )
+
+    prompt = str(captured["prompt"])
+    assert "Автоматизация небольших команд" in prompt
+    assert "Язык: ru" in prompt
+    assert "Продуктовые команды" in prompt
+    assert "Хук, польза и честное ограничение" in prompt
+    assert "Покажи полезный следующий шаг" in prompt
+    assert "Telegram" not in prompt
+
+
 def test_codex_preserves_selected_and_nonselected_outcomes_from_complete_batch(
     tmp_path: Path,
 ) -> None:

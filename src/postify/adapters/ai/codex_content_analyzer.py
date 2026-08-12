@@ -14,6 +14,7 @@ from postify.domain.content.models import (
     BatchAnalysis,
     ContentValidationError,
 )
+from postify.application.ports.content_analyzer import GenerationBrief
 
 
 class CodexAnalysisError(RuntimeError):
@@ -36,7 +37,10 @@ class CodexContentAnalyzer:
         self.work = Path(work_dir)
 
     def analyze(
-        self, articles: Sequence[AnalysisInput], package_limit: int
+        self,
+        articles: Sequence[AnalysisInput],
+        package_limit: int,
+        brief: GenerationBrief | None = None,
     ) -> BatchAnalysis:
         materialized = tuple(articles)
         invocation = self._create_invocation_dir()
@@ -49,7 +53,9 @@ class CodexContentAnalyzer:
                 json.dumps(self._schema(len(materialized)), ensure_ascii=False),
                 encoding="utf-8",
             )
-            done = self._run(invocation, schema, output, materialized, package_limit)
+            done = self._run(
+                invocation, schema, output, materialized, package_limit, brief
+            )
             if done.returncode:
                 raise CodexAnalysisError()
             result = self._parse_output(output, materialized, package_limit)
@@ -84,8 +90,9 @@ class CodexContentAnalyzer:
         output: Path,
         articles: tuple[AnalysisInput, ...],
         package_limit: int,
+        brief: GenerationBrief | None,
     ) -> CompletedProcess[str]:
-        prompt = self._prompt(articles, package_limit)
+        prompt = self._prompt(articles, package_limit, brief)
         argv = [
             "codex",
             "exec",
@@ -167,13 +174,25 @@ class CodexContentAnalyzer:
         }
 
     @staticmethod
-    def _prompt(articles: tuple[AnalysisInput, ...], package_limit: int) -> str:
+    def _prompt(
+        articles: tuple[AnalysisInput, ...],
+        package_limit: int,
+        brief: GenerationBrief | None = None,
+    ) -> str:
         material = "\n\n".join(
             f"Попытка {article.attempt_id}. Заголовок: {article.title}\nПолный текст статьи:\n{article.text}"
             for article in articles
         )
+        product_context = ""
+        if brief is not None:
+            product_context = (
+                f"Тема проекта: {brief.topic}. Язык: {brief.language}. "
+                f"Аудитория: {brief.audience}. Формат: {brief.format_instructions}. "
+                f"CTA: {brief.cta}.\n"
+            )
         return (
-            "Проанализируй каждую статью и верни ровно один outcome на каждую попытку. "
+            product_context
+            + "Проанализируй каждую статью и верни ровно один outcome на каждую попытку. "
             f"Выбери не более {package_limit}. Пиши анализ и выбранные посты на русском. "
             "Не добавляй source URL или URL источника в посты.\n\n" + material
         )
