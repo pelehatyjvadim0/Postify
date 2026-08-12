@@ -209,6 +209,10 @@ const screens = {
 const root = document.querySelector("#screen-root");
 const title = document.querySelector("#screen-title");
 const eyebrow = document.querySelector("#screen-eyebrow");
+const detailLayer = document.querySelector("#detail-layer");
+const detailContent = document.querySelector("#detail-content");
+const toastRegion = document.querySelector("#toast-region");
+let detailOpener = null;
 
 function cloneState(value) {
   return JSON.parse(JSON.stringify(value));
@@ -478,16 +482,170 @@ function renderJournal() {
 function resetDemo() {
   state = cloneState(INITIAL_STATE);
   render();
+  showToast("Демо-данные восстановлены");
+}
+
+function openDetail(markup, opener) {
+  detailOpener = opener;
+  detailContent.innerHTML = markup;
+  detailLayer.showModal();
+  detailLayer.querySelector("button, textarea")?.focus();
+}
+
+function closeDetail() {
+  if (detailLayer.open) detailLayer.close();
+}
+
+function detailShell(titleText, kicker, body, actions = "") {
+  return `
+    <article class="detail-sheet">
+      <header class="detail-head">
+        <div><p class="section-kicker">${escapeHtml(kicker)}</p><h2 id="detail-title">${escapeHtml(titleText)}</h2></div>
+        <button class="icon-button" type="button" data-action="close-detail" aria-label="Закрыть">×</button>
+      </header>
+      <div class="detail-body">${body}</div>
+      ${actions ? `<footer class="detail-actions">${actions}</footer>` : ""}
+    </article>`;
+}
+
+function openPackageDetail(id, opener) {
+  const pkg = packageById(id);
+  if (!pkg) return;
+  const material = materialById(pkg.materialId);
+  const body = `
+    <div class="detail-visual detail-visual--${material.accent}"><span>${escapeHtml(material.category)}</span><strong>${escapeHtml(pkg.format)}</strong></div>
+    <div class="detail-section"><span class="detail-label">Текст публикации</span><h3>${escapeHtml(pkg.title)}</h3><p class="post-lead">${escapeHtml(pkg.excerpt)}</p><p>Главная идея — начать с небольших повторяемых задач, измерить результат и только затем расширять автоматизацию. Такой подход сохраняет контроль и не заставляет команду менять весь процесс сразу.</p><ul><li>выберите один понятный сценарий;</li><li>зафиксируйте критерий полезного результата;</li><li>оставьте человеку финальное решение.</li></ul></div>
+    <div class="source-card"><span>Источник</span><strong>${escapeHtml(material.title)}</strong><small>${escapeHtml(material.domain)} · оценка ${material.score}/100</small></div>
+    <div id="reject-form-slot"></div>`;
+  const actions = pkg.status === "needs_review" ? `
+    <button class="button button--danger" type="button" data-action="show-reject-form" data-id="${pkg.id}">Отклонить</button>
+    <button class="button button--primary" type="button" data-action="approve-package" data-id="${pkg.id}">✓ Одобрить пост</button>` : `<span class="detail-state">${statusBadge(pkg.status)} Решение уже принято</span>`;
+  openDetail(detailShell(pkg.title, "Контентный пакет", body, actions), opener);
+}
+
+function openMaterialDetail(id, opener) {
+  const material = materialById(id);
+  if (!material) return;
+  const body = `
+    <div class="detail-visual detail-visual--${material.accent}"><span>${escapeHtml(material.category)}</span><strong>${material.score}<small>/100</small></strong></div>
+    <div class="detail-facts"><div><span>Источник</span><strong>${escapeHtml(material.source)}</strong></div><div><span>Найден</span><strong>${escapeHtml(material.found)}</strong></div><div><span>Статус</span>${statusBadge(material.status)}</div></div>
+    <div class="detail-section"><span class="detail-label">Почему принято такое решение</span><p class="decision-copy">${escapeHtml(material.reason)}</p></div>
+    <div class="source-card"><span>Исходный материал</span><strong>${escapeHtml(material.domain)}</strong><small>Ссылка откроется после подключения реального backend</small></div>`;
+  openDetail(detailShell(material.title, "Найденный материал", body), opener);
+}
+
+function openDeliveryDetail(id, opener) {
+  const delivery = state.deliveries.find((item) => item.id === id);
+  if (!delivery) return;
+  const body = `
+    <div class="detail-status-line">${statusBadge(delivery.status)}<span>${escapeHtml(delivery.date)} · ${escapeHtml(delivery.time)}</span></div>
+    <div class="detail-section"><span class="detail-label">Публикация</span><h3>${escapeHtml(delivery.title)}</h3><p>${escapeHtml(delivery.detail)}</p></div>
+    <div class="detail-facts"><div><span>Площадка</span><strong>Telegram</strong></div><div><span>Message ID</span><strong class="utility">${escapeHtml(delivery.messageId)}</strong></div><div><span>Попыток</span><strong>${delivery.attempts}</strong></div></div>
+    <div class="attempt-history"><span class="detail-label">История</span><div><span class="attempt-dot attempt-dot--${delivery.status}"></span><span><strong>${delivery.status === "published" ? "Доставка подтверждена" : "Доставка завершилась ошибкой"}</strong><small>${escapeHtml(delivery.date)}, ${escapeHtml(delivery.time)}</small></span></div></div>`;
+  openDetail(detailShell("История попыток", "Доставка контента", body), opener);
+}
+
+function openRunDetail(id, opener) {
+  const run = state.runs.find((item) => item.id === id);
+  if (!run) return;
+  const body = `
+    <div class="detail-status-line">${statusBadge(run.status)}<span>${escapeHtml(run.started)}</span></div>
+    <div class="detail-section"><span class="detail-label">${escapeHtml(run.kind)}</span><h3>${escapeHtml(run.result)}</h3><p>${escapeHtml(run.detail)}</p></div>
+    <div class="detail-facts"><div><span>Идентификатор</span><strong class="utility">run-${run.id}</strong></div><div><span>Длительность</span><strong>${escapeHtml(run.duration)}</strong></div><div><span>Среда</span><strong>Production</strong></div></div>
+    <div class="log-fragment"><span>07:30:00</span> Запуск создан<br><span>07:30:01</span> Источник доступен<br><span>07:30:42</span> ${escapeHtml(run.result)}<br><span>07:30:42</span> Состояние сохранено</div>`;
+  openDetail(detailShell("Подробности запуска", "Журнал системы", body), opener);
+}
+
+function showRejectForm(id) {
+  const slot = document.querySelector("#reject-form-slot");
+  if (!slot) return;
+  slot.innerHTML = `
+    <div class="reject-form">
+      <label for="reject-reason">Почему пост не подходит?</label>
+      <textarea id="reject-reason" rows="3" placeholder="Например: слишком общий текст без конкретного примера"></textarea>
+      <p class="field-error" id="reject-error" role="alert"></p>
+      <button class="button button--danger button--full" type="button" data-action="reject-package" data-id="${id}">Подтвердить отклонение</button>
+    </div>`;
+  document.querySelector("#reject-reason").focus();
+}
+
+function approvePackage(id) {
+  const pkg = packageById(id);
+  if (!pkg || pkg.status !== "needs_review") return;
+  pkg.status = "approved";
+  const freeSlot = state.slots.find((slot) => slot.packageId === null);
+  if (freeSlot) freeSlot.packageId = pkg.id;
+  closeDetail();
+  render();
+  showToast("Пост одобрен");
+}
+
+function rejectPackage(id) {
+  const reasonField = document.querySelector("#reject-reason");
+  const error = document.querySelector("#reject-error");
+  const reason = reasonField?.value.trim() || "";
+  if (!reason) {
+    error.textContent = "Укажите причину отклонения";
+    reasonField?.focus();
+    return;
+  }
+  const pkg = packageById(id);
+  if (!pkg || pkg.status !== "needs_review") return;
+  pkg.status = "rejected";
+  pkg.rejectReason = reason;
+  closeDetail();
+  render();
+  showToast("Пост отклонён");
+}
+
+function showToast(message) {
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  toastRegion.replaceChildren(toast);
+  window.setTimeout(() => toast.remove(), 3200);
+}
+
+function handleAction(actionNode) {
+  const id = Number(actionNode.dataset.id);
+  const actions = {
+    "open-package": () => openPackageDetail(id, actionNode),
+    "open-material": () => openMaterialDetail(id, actionNode),
+    "open-delivery": () => openDeliveryDetail(id, actionNode),
+    "open-run": () => openRunDetail(id, actionNode),
+    "close-detail": closeDetail,
+    "show-reject-form": () => showRejectForm(id),
+    "approve-package": () => approvePackage(id),
+    "reject-package": () => rejectPackage(id),
+    "new-run": () => showToast("Демонстрационный запуск создан"),
+    "open-mobile-menu": () => openDetail(detailShell("Ещё", "Навигация", `<div class="mobile-menu-sheet"><a href="#publications" data-route="publications">Публикации</a><a href="#journal" data-route="journal">Журнал работы</a><span>Настройки фермы <small>Следующий этап</small></span><span>Аналитика <small>Следующий этап</small></span></div>`), actionNode),
+  };
+  actions[actionNode.dataset.action]?.();
 }
 
 window.addEventListener("hashchange", render);
 document.addEventListener("click", (event) => {
   const routeLink = event.target.closest("a[data-route]");
-  if (!routeLink) return;
-  event.preventDefault();
-  navigate(routeLink.dataset.route);
+  if (routeLink) {
+    event.preventDefault();
+    closeDetail();
+    navigate(routeLink.dataset.route);
+    return;
+  }
+  const filter = event.target.closest("[data-filter]");
+  if (filter) {
+    state.ui.materialFilter = filter.dataset.filter;
+    render();
+    return;
+  }
+  const actionNode = event.target.closest("[data-action]");
+  if (actionNode) handleAction(actionNode);
 });
 document.querySelector("#demo-reset").addEventListener("click", resetDemo);
+detailLayer.addEventListener("close", () => {
+  detailOpener?.focus();
+  detailOpener = null;
+});
 
 if (!window.location.hash || !Object.hasOwn(routes, window.location.hash.slice(1))) {
   navigate("overview");

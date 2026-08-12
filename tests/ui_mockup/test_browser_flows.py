@@ -83,3 +83,72 @@ def test_unknown_hash_returns_to_overview(page: Page, base_url: str) -> None:
 
     assert page.locator("h1").inner_text() == "Сегодня"
     assert page.url.endswith("#overview")
+
+
+def test_approve_updates_review_queue_and_overview(
+    page: Page, base_url: str
+) -> None:
+    page.goto(f"{base_url}/#review")
+    before = int(page.locator('[data-metric="needs-review"]').inner_text())
+
+    page.locator('[data-action="open-package"]').first.click()
+    page.locator('[data-action="approve-package"]').click()
+
+    assert page.get_by_text("Пост одобрен", exact=True).is_visible()
+    page.locator('.app-nav [href="#overview"]').click()
+    assert int(page.locator('[data-metric="needs-review"]').inner_text()) == before - 1
+    assert page.locator(".timeline-slot .slot-package").count() == 2
+
+
+def test_material_filter_detail_escape_and_reset(page: Page, base_url: str) -> None:
+    page.goto(f"{base_url}/#materials")
+    page.locator('[data-filter="rejected"]').click()
+
+    assert page.locator('[data-material-status="rejected"]').count() == 2
+    assert page.locator('[data-material-status="selected"]').count() == 0
+
+    opener = page.locator('[data-action="open-material"]').first
+    opener.click()
+    assert page.locator("#detail-layer[open]").is_visible()
+    assert page.locator("#detail-layer").get_attribute("aria-modal") == "true"
+    page.keyboard.press("Escape")
+    assert not page.locator("#detail-layer").is_visible()
+    assert opener.evaluate("element => element === document.activeElement")
+
+    page.locator("#demo-reset").click()
+    assert page.get_by_text("Демо-данные восстановлены", exact=True).is_visible()
+    assert page.locator('[data-material-status="selected"]').count() == 4
+
+
+def test_reject_requires_a_reason_and_removes_package_from_queue(
+    page: Page, base_url: str
+) -> None:
+    page.goto(f"{base_url}/#review")
+    before = int(page.locator('[data-metric="needs-review"]').inner_text())
+    page.locator('[data-action="open-package"]').first.click()
+    page.locator('[data-action="show-reject-form"]').click()
+
+    page.locator('[data-action="reject-package"]').click()
+    assert page.get_by_text("Укажите причину отклонения", exact=True).is_visible()
+    page.locator("#reject-reason").fill("Слишком общий текст без конкретного примера")
+    page.locator('[data-action="reject-package"]').click()
+
+    assert page.get_by_text("Пост отклонён", exact=True).is_visible()
+    assert int(page.locator('[data-metric="needs-review"]').inner_text()) == before - 1
+
+
+@pytest.mark.parametrize(
+    ("route", "action", "expected"),
+    [
+        ("publications", "open-delivery", "История попыток"),
+        ("journal", "open-run", "Подробности запуска"),
+    ],
+)
+def test_operational_details_open_in_the_shared_layer(
+    page: Page, base_url: str, route: str, action: str, expected: str
+) -> None:
+    page.goto(f"{base_url}/#{route}")
+    page.locator(f'[data-action="{action}"]').first.click()
+
+    assert page.locator("#detail-layer[open]").is_visible()
+    assert page.locator("#detail-title").inner_text() == expected
