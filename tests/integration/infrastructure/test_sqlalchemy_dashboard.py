@@ -212,6 +212,36 @@ def test_queue_marks_approved_package_as_forecast_without_delivery(
         engine.dispose()
 
 
+def test_queue_confirms_legacy_delivery_created_by_delivery_repository(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: production delivery без route_id не видна в confirmed slot единственного route.
+    from postify.infrastructure.repositories.sqlalchemy_delivery import (
+        SqlAlchemyDeliveryRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    try:
+        with engine.begin() as connection:
+            candidate = _candidate(connection, 1, "legacy-confirmed")
+            package_id = _package(connection, 1, candidate, "legacy-confirmed")
+            _route(connection, 1)
+
+        delivery_repository = SqlAlchemyDeliveryRepository(sessionmaker(engine))
+        claim = delivery_repository.reserve_next(now=NOW - timedelta(minutes=2))
+        assert claim is not None
+        assert claim.package_id == package_id
+        delivery_repository.confirm_published(claim, message_id=42, now=NOW)
+
+        slots = _repository(engine, 1).queue(1, DAY)
+
+        assert slots[0].assignment_kind == "confirmed"
+        assert slots[0].package_id == package_id
+        assert slots[0].delivery_id == claim.delivery_id
+    finally:
+        engine.dispose()
+
+
 def test_dashboard_reads_persisted_package_publication_and_operation_fields(
     migrated_database_url: str,
 ) -> None:

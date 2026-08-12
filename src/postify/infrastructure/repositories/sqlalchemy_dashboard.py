@@ -243,7 +243,7 @@ class SqlAlchemyDashboardRepository:
 
     def queue(self, project_id: int, day: date) -> tuple[QueueSlot, ...]:
         with self._session_factory() as session:
-            route = (
+            routes = (
                 session.execute(
                     text(
                         """SELECT r.id AS route_id,c.provider,r.schedule,p.timezone FROM publication_routes r
@@ -255,10 +255,11 @@ class SqlAlchemyDashboardRepository:
                     {"project": project_id},
                 )
                 .mappings()
-                .first()
+                .all()
             )
-            if route is None:
+            if not routes:
                 return ()
+            route = routes[0]
             day_start = datetime.combine(day, time.min, tzinfo=ZoneInfo(route.timezone))
             day_end = day_start + timedelta(days=1)
             slots = (
@@ -271,13 +272,15 @@ class SqlAlchemyDashboardRepository:
                 session.execute(
                     text(
                         """SELECT id,package_id FROM deliveries WHERE project_id=:project
-                    AND route_id=:route AND status='published'
+                    AND (route_id=:route OR (:include_legacy AND route_id IS NULL))
+                    AND status='published'
                     AND confirmed_at >= :day_start AND confirmed_at < :day_end
                     ORDER BY confirmed_at,id"""
                     ),
                     {
                         "project": project_id,
                         "route": route.route_id,
+                        "include_legacy": len(routes) == 1,
                         "day_start": day_start,
                         "day_end": day_end,
                     },
