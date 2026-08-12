@@ -90,11 +90,11 @@ img { display: block; max-width: 100%; }
 
 .brand { display: flex; align-items: center; gap: 11px; padding: 3px 8px 23px; }
 .brand-name { font-size: 23px; font-weight: 760; line-height: 1; letter-spacing: -0.04em; }
-.brand-mark { position: relative; display: grid; width: 31px; height: 31px; flex: 0 0 31px; transform: translateY(-1px); }
-.brand-mark span { position: absolute; width: 16px; height: 21px; border-radius: 100% 0 100% 0; background: var(--forest); }
-.brand-mark span:nth-child(1) { left: 1px; top: 8px; transform: rotate(-12deg); }
-.brand-mark span:nth-child(2) { right: 0; top: 0; background: var(--olive); transform: rotate(28deg); }
-.brand-mark span:nth-child(3) { right: 2px; bottom: 1px; width: 19px; height: 13px; background: #93a76e; transform: rotate(78deg); }
+.brand-mark { display: block; width: 31px; height: 31px; flex: 0 0 31px; overflow: visible; }
+.brand-leaf { fill: #72835a; }
+.brand-leaf-top { fill: #697952; }
+.brand-leaf-bottom { fill: #75865e; }
+.brand-cut { fill: none; stroke: var(--surface); stroke-width: 2.2px; stroke-linecap: round; }
 
 .farm-switcher {
   display: grid;

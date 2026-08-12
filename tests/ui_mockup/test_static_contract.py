@@ -12,6 +12,8 @@ class ShellCollector(HTMLParser):
         self.assets: list[str] = []
         self.language: str | None = None
         self.has_polite_region = False
+        self.brand_mark_tag: str | None = None
+        self.brand_leaf_count = 0
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -27,6 +29,11 @@ class ShellCollector(HTMLParser):
             self.assets.append(values.get("href") or "")
         if values.get("aria-live") == "polite":
             self.has_polite_region = True
+        classes = (values.get("class") or "").split()
+        if "brand-mark" in classes:
+            self.brand_mark_tag = tag
+        if tag == "path" and "brand-leaf" in classes:
+            self.brand_leaf_count += 1
 
 
 def test_mockup_exposes_the_application_shell_offline() -> None:
@@ -45,6 +52,8 @@ def test_mockup_exposes_the_application_shell_offline() -> None:
     } <= parser.ids
     assert parser.has_polite_region
     assert parser.assets == ["styles.css", "app.js"]
+    assert parser.brand_mark_tag == "svg"
+    assert parser.brand_leaf_count == 3
 
 
 def test_styles_cover_the_visual_and_accessibility_boundaries() -> None:
