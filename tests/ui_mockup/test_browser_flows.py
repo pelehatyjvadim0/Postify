@@ -50,7 +50,7 @@ FIXTURES = {
             "source_url": "https://example.test/material-9001",
             "post_text": "Пакет 9001: полезный разбор",
             "media_available": False,
-            "media_status": "missing",
+            "media_status": "unavailable",
             "created_at": "2026-08-12T09:00:00Z",
             "updated_at": "2026-08-12T09:00:00Z",
         }],
@@ -70,11 +70,11 @@ FIXTURES = {
             "delivery_id": 9001,
             "package_id": 8001,
             "provider": "telegram",
-            "status": "failed",
+            "status": "uncertain",
             "attempts": 2,
             "message_id": None,
-            "failure_code": "network_error",
-            "failure_reason": "Сеть недоступна",
+            "failure_code": "telegram_transport_uncertain",
+            "failure_reason": "Ответ канала не подтверждён",
             "sending_started_at": "2026-08-12T10:00:00Z",
             "confirmed_at": None,
             "created_at": "2026-08-12T10:00:00Z",
@@ -85,8 +85,8 @@ FIXTURES = {
         "items": [{
             "run_id": 9001,
             "kind": "run_once",
-            "status": "completed",
-            "outcome": "succeeded",
+            "status": "succeeded",
+            "outcome": "completed",
             "failure_code": None,
             "started_at": "2026-08-12T07:00:00Z",
             "finished_at": "2026-08-12T07:00:12Z",
@@ -187,23 +187,34 @@ def test_selected_route_fetches_only_bootstrap_and_its_resource(browser: Browser
 def test_loading_error_retry_and_empty_are_explicit(browser: Browser, base_url: str) -> None:
     # Break caught: an unavailable API leaks demo cards or retry cannot recover the selected screen.
     inspected = browser.new_page()
-    calls = 0
+    held_routes: list[Route] = []
+    released = False
 
     def handle(route: Route) -> None:
-        nonlocal calls
+        nonlocal released
         if route.request.url.endswith("/bootstrap"):
             route.fulfill(json=FIXTURES["/api/v1/bootstrap"])
-        elif calls == 0:
-            calls += 1
-            route.fulfill(status=503, json={"code": "service_unavailable"})
+        elif not released:
+            held_routes.append(route)
         else:
             route.fulfill(json={"items": []})
 
     inspected.route("**/api/v1/**", handle)
     try:
-        inspected.goto(f"{base_url}/#materials")
-        assert inspected.locator("[data-loading]").count() or inspected.get_by_text("Не удалось загрузить", exact=False).is_visible()
-        assert inspected.get_by_text("Не удалось загрузить", exact=False).is_visible()
+        inspected.goto(f"{base_url}/#materials", wait_until="domcontentloaded")
+        loading = inspected.locator('[data-screen="materials"][data-loading]')
+        loading.wait_for()
+        assert loading.is_visible()
+        assert loading.get_attribute("aria-busy") == "true"
+        assert len(held_routes) == 1
+
+        released = True
+        held_routes.pop().fulfill(
+            status=503,
+            content_type="application/json",
+            body='{"code":"service_unavailable"}',
+        )
+        inspected.get_by_text("Не удалось загрузить", exact=False).wait_for()
         assert inspected.get_by_text("Материал 9001", exact=False).count() == 0
         inspected.get_by_role("button", name="Повторить").click()
         inspected.get_by_text("Материалов пока нет", exact=False).wait_for()
@@ -244,6 +255,99 @@ def test_api_text_is_escaped_instead_of_inserted_as_markup(page: Page, base_url:
     page.get_by_text("Материал 9001", exact=False).wait_for()
     assert page.evaluate("window.__unsafe") is None
     assert page.locator("#screen-root img").count() == 0
+
+
+@pytest.mark.parametrize(
+    ("source_url", "expected_href"),
+    [
+        ("https://example.test/source", "https://example.test/source"),
+        ("http://example.test/source", "http://example.test/source"),
+        ("javascript:window.__unsafeUrl=1", None),
+    ],
+)
+def test_package_source_url_allows_only_http_and_https(
+    browser: Browser,
+    base_url: str,
+    source_url: str,
+    expected_href: str | None,
+) -> None:
+    # Break caught: escaping quotes still leaves a javascript: URL executable in href.
+    inspected = browser.new_page()
+
+    def handle(route: Route) -> None:
+        path = "/" + route.request.url.split("/", 3)[-1]
+        if path == f"{PROJECT}/packages":
+            payload = json.loads(json.dumps(FIXTURES[path]))
+            payload["items"][0]["source_url"] = source_url
+            route.fulfill(json=payload)
+            return
+        route.fulfill(json=FIXTURES[path])
+
+    inspected.route("**/api/v1/**", handle)
+    try:
+        inspected.goto(f"{base_url}/#review")
+        inspected.locator('[data-action="open-package"]').click()
+        source = inspected.locator("#detail-content dd").filter(has_text=source_url)
+        assert source.is_visible()
+        if expected_href is None:
+            assert source.locator("a").count() == 0
+        else:
+            assert source.locator("a").get_attribute("href") == expected_href
+        assert inspected.evaluate("window.__unsafeUrl") is None
+    finally:
+        inspected.close()
+
+
+def test_all_emitted_domain_codes_have_explicit_russian_labels(page: Page, base_url: str) -> None:
+    # Break caught: a backend enum reaches the UI as an English snake_case fallback.
+    expected = {
+        "selected": "Выбран",
+        "rejected": "Отклонён",
+        "eligible_for_ai": "Подходит для анализа",
+        "advertising": "Реклама",
+        "out_of_scope": "Вне темы",
+        "hiring": "Вакансия",
+        "technical_without_use": "Технический релиз без практической пользы",
+        "not_started": "Не начат",
+        "processing": "Обрабатывается",
+        "awaiting_review": "Ждёт проверки",
+        "approved": "Одобрен",
+        "failed": "Ошибка",
+        "published": "Опубликовано",
+        "available": "Доступно",
+        "unavailable": "Недоступно",
+        "deleted": "Удалено",
+        "confirmed": "Подтверждён",
+        "forecast": "Прогноз",
+        "empty": "Свободно",
+        "sending": "Отправляется",
+        "retryable": "Можно повторить",
+        "uncertain": "Результат не подтверждён",
+        "run_once": "Поиск и подготовка",
+        "publish_once": "Публикация",
+        "running": "Выполняется",
+        "succeeded": "Успешно",
+        "completed": "Завершено",
+        "cleanup_completed": "Медиа очищено",
+        "cleanup_pending": "Ожидает очистки медиа",
+        "run_once_failed": "Поиск завершился ошибкой",
+        "publish_once_failed": "Публикация завершилась ошибкой",
+        "media_unavailable": "Медиа недоступно",
+        "telegram_transport_uncertain": "Ответ канала не подтверждён",
+        "telegram_invalid_response": "Некорректный ответ канала",
+        "telegram_retryable": "Канал временно недоступен",
+        "telegram_rejected": "Канал отклонил публикацию",
+        "stale_sending": "Отправка не завершена",
+    }
+    page.goto(f"{base_url}/#overview")
+    actual = page.evaluate(
+        """async codes => {
+            const {label} = await import('/screens.js');
+            return Object.fromEntries(codes.map(code => [code, label(code)]));
+        }""",
+        list(expected),
+    )
+    assert actual == expected
 
 
 @pytest.mark.parametrize(("action", "method", "suffix", "toast"), [
@@ -336,7 +440,7 @@ def test_reduced_motion_removes_visible_screen_transition(browser: Browser, base
         inspected.close()
 
 
-def test_timeline_and_logo_keep_approved_optical_alignment(page: Page, base_url: str) -> None:
+def test_overview_summary_and_logo_keep_approved_optical_alignment(page: Page, base_url: str) -> None:
     page.goto(f"{base_url}/#overview")
     columns = page.locator(".studio-strip > div").evaluate_all(
         "elements => elements.map(element => element.getBoundingClientRect().toJSON())"
@@ -350,14 +454,26 @@ def test_timeline_and_logo_keep_approved_optical_alignment(page: Page, base_url:
     assert len({round(column["height"], 1) for column in columns}) == 1
     assert brand["mark"] == pytest.approx(brand["name"], abs=1)
 
+
+@pytest.mark.parametrize("width", [360, 768, 1440])
+def test_queue_timeline_rule_runs_through_marker_centres(
+    page: Page, base_url: str, width: int
+) -> None:
+    # Break caught: a responsive grid offset separates the day rhythm rule from its markers.
+    page.set_viewport_size({"width": width, "height": 1000})
     page.goto(f"{base_url}/#queue")
+    assert page.locator('[data-screen="queue"]').is_visible()
+    assert page.locator("h1").inner_text() == "Очередь публикаций"
     geometry = page.locator(".timeline").evaluate("""element => {
         const timeline = element.getBoundingClientRect();
         const marker = element.querySelector('.timeline-marker').getBoundingClientRect();
         const rule = getComputedStyle(element, '::before');
-        return {ruleX: timeline.x + parseFloat(rule.left), markerX: marker.x + marker.width / 2};
+        return {
+            ruleX: timeline.x + parseFloat(rule.left) + parseFloat(rule.width) / 2,
+            markerX: marker.x + marker.width / 2,
+        };
     }""")
-    assert geometry["ruleX"] == pytest.approx(geometry["markerX"], abs=1)
+    assert geometry["ruleX"] == pytest.approx(geometry["markerX"], abs=0.5)
 
 
 def test_mobile_review_keeps_thumbnail_copy_and_both_actions_visible(page: Page, base_url: str) -> None:

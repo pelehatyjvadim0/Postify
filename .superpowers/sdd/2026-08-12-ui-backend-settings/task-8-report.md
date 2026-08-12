@@ -79,3 +79,54 @@ git diff --check
 
 Полноценное чтение и редактирование настроек, source/channel/CTA/route forms и
 валидация относятся к Task 9 и в эту задачу не включались.
+
+## Fix после review
+
+### RED
+
+- Hostile browser fixture `javascript:window.__unsafeUrl=1` оставалась
+  кликабельным `<a href>` после одного HTML escaping.
+- Focused scan domain/repository codes показал английский fallback для 22
+  реально эмитируемых значений и нереальные fixture-коды `missing`,
+  `network_error`, `status=completed`.
+- Loading test отвечал 503 немедленно и допускал eventual error вместо
+  наблюдения skeleton.
+- Timeline regression запускался только на viewport 1440.
+
+RED/mutation evidence:
+
+```text
+uv run pytest -q tests/ui_mockup/test_browser_flows.py -k hostile_package -x
+# 1 failed: javascript: source содержал anchor
+
+uv run pytest -q tests/ui_mockup/test_browser_flows.py -k emitted_domain_codes -x
+# 1 failed: 22 значения вышли английским fallback или неправильной формой
+
+# mutation: aria-busy="true" -> "false"
+uv run pytest -q tests/ui_mockup/test_browser_flows.py -k loading_error_retry -x
+# 1 failed: expected 'true', got 'false'
+
+# mutation: mobile timeline left 24px -> 20px
+uv run pytest -q tests/ui_mockup/test_browser_flows.py -k queue_timeline_rule -x
+# 1 failed на width=360: ruleX 37, markerX 41
+```
+
+### GREEN
+
+- `externalLink` принимает только абсолютные `http:`/`https:` URL через
+  `URL`; остальные значения остаются видимым неинтерактивным текстом.
+- Русский словарь покрывает decision/package/media/queue/delivery/operation
+  codes и стабильные Telegram failure codes; неизвестный код не раскрывает
+  английский snake_case. Fixtures приведены к фактическим DTO Task 7.
+- Loading flow удерживает intercepted resource route, проверяет видимый
+  skeleton и `aria-busy=true`, затем явно освобождает 503 и проверяет
+  error/retry/empty.
+- Геометрия центра timeline rule/marker проверяется на 360, 768 и 1440 px с
+  явными assertions экрана очереди; отдельные overview/logo checks сохранены.
+
+Fix verification:
+
+```text
+uv run pytest -q tests/ui_mockup
+# 51 passed
+```

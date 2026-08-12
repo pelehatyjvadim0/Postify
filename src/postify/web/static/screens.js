@@ -1,17 +1,42 @@
 const LABELS = {
   awaiting_review: "Ждёт проверки", approved: "Одобрен", rejected: "Отклонён",
-  selected: "Выбран", eligible_for_ai: "Подходит для анализа", irrelevant: "Не по теме",
+  selected: "Выбран", eligible_for_ai: "Подходит для анализа",
+  advertising: "Реклама", out_of_scope: "Вне темы", hiring: "Вакансия",
+  technical_without_use: "Технический релиз без практической пользы",
+  not_started: "Не начат", processing: "Обрабатывается",
   forecast: "Прогноз", confirmed: "Подтверждён", empty: "Свободно",
-  pending: "Ожидает", sending: "Отправляется", published: "Опубликовано", failed: "Ошибка",
+  sending: "Отправляется", published: "Опубликовано", failed: "Ошибка",
+  retryable: "Можно повторить", uncertain: "Результат не подтверждён",
+  available: "Доступно", unavailable: "Недоступно", deleted: "Удалено",
   run_once: "Поиск и подготовка", publish_once: "Публикация", running: "Выполняется",
-  completed: "Завершён", succeeded: "Успешно", network_error: "Ошибка сети",
+  succeeded: "Успешно", completed: "Завершено",
+  cleanup_completed: "Медиа очищено", cleanup_pending: "Ожидает очистки медиа",
+  run_once_failed: "Поиск завершился ошибкой",
+  publish_once_failed: "Публикация завершилась ошибкой",
+  media_unavailable: "Медиа недоступно",
+  telegram_transport_uncertain: "Ответ канала не подтверждён",
+  telegram_invalid_response: "Некорректный ответ канала",
+  telegram_retryable: "Канал временно недоступен",
+  telegram_rejected: "Канал отклонил публикацию",
+  stale_sending: "Отправка не завершена",
 };
 
 export const escapeHtml = (value) => String(value ?? "")
   .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 
-const label = (code) => LABELS[code] || String(code || "—").replaceAll("_", " ");
+export function externalLink(value) {
+  const text = escapeHtml(value);
+  try {
+    const url = new URL(String(value));
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+    }
+  } catch (_) { /* invalid API URL stays non-clickable */ }
+  return `<span>${text}</span>`;
+}
+
+const label = (code) => code ? (LABELS[code] || "Неизвестное состояние") : "—";
 const dateTime = (value) => value ? new Intl.DateTimeFormat("ru-RU", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}).format(new Date(value)) : "—";
 const statusBadge = (code) => `<span class="status-badge status-badge--${escapeHtml(code || "neutral")}">${escapeHtml(label(code))}</span>`;
 const empty = (text) => `<section class="empty-state"><span aria-hidden="true">◇</span><h2>${escapeHtml(text)}</h2><p>Новые данные появятся после следующей операции.</p></section>`;

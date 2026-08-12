@@ -2,7 +2,7 @@ import {
   approvePackage, getBootstrap, getDashboard, getMaterials, getOperations,
   getPackages, getPublications, getQueue, publishOnce, rejectPackage, runOnce,
 } from "./api.js";
-import {dateTime, escapeHtml, label, renderSettingsPlaceholder, screens, statusBadge} from "./screens.js";
+import {dateTime, escapeHtml, externalLink, label, renderSettingsPlaceholder, screens, statusBadge} from "./screens.js";
 
 const ROUTES = {
   overview: {title: "Сегодня", eyebrow: "Рабочая панель", load: getDashboard},
@@ -114,7 +114,7 @@ function openPackage(node) {
   const item = itemBy("package", node.dataset.id);
   if (!item) return;
   const actions = item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="show-reject-form" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : "";
-  openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose"><p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source_url)}</a></dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl></article>`, actions, node);
+  openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose"><p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd>${externalLink(item.source_url)}</dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl></article>`, actions, node);
 }
 
 function openMaterial(node) {
