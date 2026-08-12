@@ -28,7 +28,7 @@ def test_candidates_migration_creates_jsonb_and_named_unique_constraint(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     command.upgrade(alembic_config, "base")
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260801_01")
 
     engine = create_engine(isolated_database_url)
     try:
@@ -53,7 +53,7 @@ def test_candidates_migration_creates_jsonb_and_named_unique_constraint(
     finally:
         engine.dispose()
 
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260801_01")
     engine = create_engine(isolated_database_url)
     try:
         assert "candidates" in inspect(engine).get_table_names()
@@ -66,7 +66,7 @@ def test_candidate_decisions_migration_creates_exact_schema_and_named_constraint
 ) -> None:
     # Поломка: журнал теряет JSONB, обязательное поле или именованный инвариант.
     command.upgrade(alembic_config, "base")
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260802_02")
 
     engine = create_engine(isolated_database_url)
     try:
@@ -116,7 +116,7 @@ def test_candidate_decisions_migration_downgrades_to_wave_one_and_upgrades_again
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка: downgrade удаляет candidates либо повторный upgrade не восстанавливает журнал.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260802_02")
 
     engine = create_engine(isolated_database_url)
     try:
@@ -133,7 +133,7 @@ def test_candidate_decisions_migration_downgrades_to_wave_one_and_upgrades_again
     finally:
         engine.dispose()
 
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260802_02")
     engine = create_engine(isolated_database_url)
     try:
         assert "candidate_decisions" in inspect(engine).get_table_names()
@@ -145,7 +145,7 @@ def test_content_migration_creates_complete_schema_and_downgrades_to_wave_two(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка (gate 11/12): нет таблицы/поля или downgrade трогает Wave 2.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260808_03")
     engine = create_engine(isolated_database_url)
     expected_columns = {
         "content_quota_state": {"id", "fresh_credit", "reserve_credit", "updated_at"},
@@ -215,7 +215,7 @@ def test_content_migration_creates_complete_schema_and_downgrades_to_wave_two(
     finally:
         engine.dispose()
 
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260808_03")
 
 
 def test_telegram_delivery_migration_has_exact_named_schema(
@@ -223,7 +223,7 @@ def test_telegram_delivery_migration_has_exact_named_schema(
 ) -> None:
     # Поломка: delivery schema теряет nullable/timezone или named invariant.
     command.upgrade(alembic_config, "20260808_03")
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260809_04")
     engine = create_engine(isolated_database_url)
     try:
         inspector = inspect(engine)
@@ -327,7 +327,7 @@ def test_telegram_delivery_migration_downgrades_to_wave_three_and_upgrades_again
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка: rollback оставляет Wave 4 или удаляет Wave 3.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260809_04")
     command.downgrade(alembic_config, "20260808_03")
     engine = create_engine(isolated_database_url)
     try:
@@ -339,7 +339,7 @@ def test_telegram_delivery_migration_downgrades_to_wave_three_and_upgrades_again
     finally:
         engine.dispose()
 
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260809_04")
     engine = create_engine(isolated_database_url)
     try:
         assert {"telegram_deliveries", "telegram_delivery_attempts"} <= set(
@@ -353,7 +353,7 @@ def test_operation_runs_migration_has_exact_named_schema(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка: Wave 5 таблица теряет column, timezone или именованный invariant.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260809_05")
     engine = create_engine(isolated_database_url)
     try:
         inspector = inspect(engine)
@@ -503,7 +503,7 @@ def test_operation_runs_constraint_rejects_failure_code_for_other_operation(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка: raw SQL caller сохраняет publish failure code для run-once.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260809_05")
     engine = create_engine(isolated_database_url)
     try:
         with pytest.raises(IntegrityError):
@@ -515,5 +515,92 @@ def test_operation_runs_constraint_rejects_failure_code_for_other_operation(
                     ),
                     {"now": datetime(2026, 8, 9, 9, tzinfo=UTC)},
                 )
+    finally:
+        engine.dispose()
+
+
+def test_project_migration_scopes_existing_rows_and_generalises_connections(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    command.upgrade(alembic_config, "20260809_05")
+    engine = create_engine(isolated_database_url)
+    now = datetime(2026, 8, 12, 9, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO candidates "
+                    "(id,source_name,source_id,title,url,discovered_at,raw_payload) "
+                    "VALUES (1,'hn_algolia','legacy','Legacy','https://example.test/1',:now,'{}'::jsonb)"
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO operation_runs "
+                    "(id,operation,status,outcome,started_at,finished_at) "
+                    "VALUES (1,'run_once','succeeded','completed',:now,:now)"
+                ),
+                {"now": now},
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(alembic_config, "20260812_06")
+    engine = create_engine(isolated_database_url)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {
+            "content_projects",
+            "source_connections",
+            "content_formats",
+            "calls_to_action",
+            "channel_connections",
+            "publication_routes",
+            "deliveries",
+            "delivery_attempts",
+        } <= tables
+        assert "telegram_deliveries" not in tables
+        assert "telegram_delivery_attempts" not in tables
+        for table in (
+            "candidates",
+            "candidate_decisions",
+            "content_quota_state",
+            "content_daily_usage",
+            "content_attempts",
+            "content_packages",
+            "content_package_status_history",
+            "deliveries",
+            "delivery_attempts",
+            "operation_runs",
+        ):
+            assert "project_id" in {
+                column["name"] for column in inspector.get_columns(table)
+            }
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT project_id FROM candidates WHERE id=1")
+            ).scalar_one() == 1
+            assert connection.execute(
+                text("SELECT project_id FROM operation_runs WHERE id=1")
+            ).scalar_one() == 1
+            assert connection.execute(
+                text("SELECT count(*) FROM content_projects")
+            ).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "20260809_05")
+    engine = create_engine(isolated_database_url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+        assert "telegram_deliveries" in tables
+        assert "telegram_delivery_attempts" in tables
+        assert "content_projects" not in tables
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT count(*) FROM candidates WHERE id=1")
+            ).scalar_one() == 1
     finally:
         engine.dispose()

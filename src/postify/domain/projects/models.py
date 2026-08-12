@@ -70,11 +70,13 @@ class ProjectConfiguration:
             "hiring",
             "technical_without_use",
         }
-        if not self.selection_rules or any(
-            rule not in allowed for rule in self.selection_rules
+        rules = tuple(self.selection_rules)
+        object.__setattr__(self, "selection_rules", rules)
+        if not rules or any(
+            rule not in allowed for rule in rules
         ):
             raise ValueError("Неизвестное или пустое правило отбора")
-        if len(set(self.selection_rules)) != len(self.selection_rules):
+        if len(set(rules)) != len(rules):
             raise ValueError("Правила отбора не должны повторяться")
         for name in (
             "topic_terms",
@@ -256,4 +258,3 @@ class PublicationRoute:
             _positive(self.cta_id, "cta_id")
         if type(self.enabled) is not bool:
             raise ValueError("enabled должен быть boolean")
-
