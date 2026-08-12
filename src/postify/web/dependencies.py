@@ -53,6 +53,10 @@ class WebApi(Protocol):
 
     def check_channel(self, project_id: int, channel_id: int) -> dict[str, Any]: ...
 
+    def remove_channel_secret(
+        self, project_id: int, channel_id: int
+    ) -> dict[str, Any]: ...
+
     def package_media(self, project_id: int, package_id: int) -> tuple[bytes, str]: ...
 
 

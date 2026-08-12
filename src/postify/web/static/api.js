@@ -33,6 +33,13 @@ export const getPackages = (projectId, signal) => request(projectPath(projectId,
 export const getQueue = (projectId, signal) => request(projectPath(projectId, "queue"), {signal});
 export const getPublications = (projectId, signal) => request(projectPath(projectId, "publications"), {signal});
 export const getOperations = (projectId, signal) => request(projectPath(projectId, "operations"), {signal});
+export const getSettings = (projectId, signal) => request(projectPath(projectId, "settings"), {signal});
+export const updateSettings = (projectId, section, payload) => request(projectPath(projectId, `settings/${section}`), {method: "PUT", body: JSON.stringify(payload)});
+export const createResource = (projectId, resource, payload) => request(projectPath(projectId, resource), {method: "POST", body: JSON.stringify(payload)});
+export const updateResource = (projectId, resource, resourceId, payload) => request(projectPath(projectId, `${resource}/${resourceId}`), {method: "PUT", body: JSON.stringify(payload)});
+export const deleteResource = (projectId, resource, resourceId) => request(projectPath(projectId, `${resource}/${resourceId}`), {method: "DELETE"});
+export const checkChannel = (projectId, channelId) => request(projectPath(projectId, `channels/${channelId}/check`), {method: "POST"});
+export const removeChannelSecret = (projectId, channelId) => request(projectPath(projectId, `channels/${channelId}/secret/remove`), {method: "POST"});
 export const approvePackage = (projectId, packageId) => request(`${projectPath(projectId, `packages/${packageId}`)}/approve`, {method: "POST"});
 export const rejectPackage = (projectId, packageId, reason) => request(`${projectPath(projectId, `packages/${packageId}`)}/reject`, {method: "POST", body: JSON.stringify({reason})});
 export const runOnce = (projectId) => request(projectPath(projectId, "operations/run-once"), {method: "POST"});

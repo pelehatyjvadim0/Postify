@@ -19,7 +19,10 @@ class ApiStub:
     def bootstrap(self):
         return {
             "activeProject": {"id": 1, "name": "Редакция"},
-            "providers": {"sources": ["hn_algolia"], "channels": ["telegram"]},
+            "providers": {
+                "sources": [{"code": "hn_algolia", "label": "HN Algolia", "fields": []}],
+                "channels": [{"code": "telegram", "label": "Telegram", "fields": []}],
+            },
         }
 
     def dashboard(self, project_id: int):
@@ -97,6 +100,10 @@ class ApiStub:
         self.calls.append(("check_channel", (project_id, channel_id)))
         return {"id": channel_id, "connectionStatus": "ok"}
 
+    def remove_channel_secret(self, project_id: int, channel_id: int):
+        self.calls.append(("remove_channel_secret", (project_id, channel_id)))
+        return {"id": channel_id, "secretConfigured": False}
+
     def package_media(self, project_id: int, package_id: int):
         self.calls.append(("package_media", (project_id, package_id)))
         return b"image", "image/jpeg"
@@ -142,7 +149,63 @@ def test_bootstrap_returns_active_project_and_registered_providers() -> None:
 
     assert response.status_code == 200
     assert response.json()["activeProject"]["id"] == 1
-    assert response.json()["providers"]["channels"] == ["telegram"]
+    assert response.json()["providers"]["channels"] == [
+        {"code": "telegram", "label": "Telegram", "fields": []}
+    ]
+
+
+def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> None:
+    # Break caught: publication slots are dropped by the route schema, or clearing a token deletes the channel itself.
+    stub = ApiStub()
+    client = client_for(stub)
+    route = client.put(
+        "/api/v1/projects/1/routes/10",
+        json={
+            "format_id": 1,
+            "channel_id": 2,
+            "cta_id": 3,
+            "enabled": True,
+            "schedule": {
+                "autopublish": True,
+                "slots": ["09:00", "14:30", "19:15"],
+            },
+        },
+    )
+    removed = client.post("/api/v1/projects/1/channels/2/secret/remove")
+    invalid = client.put(
+        "/api/v1/projects/1/routes/10",
+        json={
+            "format_id": 1,
+            "channel_id": 2,
+            "enabled": True,
+            "schedule": {"autopublish": True, "slots": ["09:00", "99:00"]},
+        },
+    )
+
+    assert route.status_code == 200
+    assert removed.status_code == 200
+    assert invalid.status_code == 422
+    assert stub.calls == [
+        (
+            "update_resource",
+            (
+                1,
+                "routes",
+                10,
+                {
+                    "format_id": 1,
+                    "channel_id": 2,
+                    "cta_id": 3,
+                    "enabled": True,
+                    "schedule": {
+                        "autopublish": True,
+                        "slots": ["09:00", "14:30", "19:15"],
+                    },
+                },
+            ),
+        ),
+        ("remove_channel_secret", (1, 2)),
+    ]
 
 
 def test_settings_never_serializes_channel_secret_and_forbids_unknown_request_fields() -> None:

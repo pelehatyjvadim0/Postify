@@ -37,6 +37,7 @@ postify = [
     "web/static/app.js",
     "web/static/api.js",
     "web/static/screens.js",
+    "web/static/settings.js",
 ]
 
 [tool.pytest.ini_options]

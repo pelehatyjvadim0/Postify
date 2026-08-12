@@ -4,6 +4,25 @@ from postify.domain.projects.models import UnsupportedProvider
 
 
 class SourceProviderRegistry:
+    def catalog(self) -> tuple[dict[str, object], ...]:
+        return ({
+            "code": "hn_algolia",
+            "label": "HN Algolia",
+            "fields": (
+                {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+                {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
+                {"name": "tags", "label": "Теги", "type": "text", "required": True},
+                {
+                    "name": "hits",
+                    "label": "Материалов за запрос",
+                    "type": "number",
+                    "required": True,
+                    "min": 1,
+                    "max": 1000,
+                },
+            ),
+        },)
+
     def validate(self, provider: str, configuration: object) -> dict[str, object]:
         if provider != "hn_algolia":
             raise UnsupportedProvider(f"Источник {provider} не поддерживается")
@@ -24,4 +43,3 @@ class SourceProviderRegistry:
         if type(hits) is not int or not 1 <= hits <= 1000:
             raise ValueError("hits должен быть от 1 до 1000")
         return {"url": url, "query": query, "tags": tags, "hits": hits}
-

@@ -41,3 +41,28 @@ def test_channel_registry_validates_telegram_without_exposing_token_field() -> N
 def test_channel_registry_rejects_blank_chat_id() -> None:
     with pytest.raises(ValueError, match="chat_id"):
         ChannelProviderRegistry().validate("telegram", {"chat_id": "  "})
+
+
+def test_provider_catalog_describes_configuration_without_leaking_common_model_details() -> None:
+    # Break caught: frontend must hard-code provider-specific fields because bootstrap only returns provider codes.
+    sources = SourceProviderRegistry().catalog()
+    channels = ChannelProviderRegistry().catalog()
+
+    assert sources == ({
+        "code": "hn_algolia",
+        "label": "HN Algolia",
+        "fields": (
+            {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+            {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
+            {"name": "tags", "label": "Теги", "type": "text", "required": True},
+            {"name": "hits", "label": "Материалов за запрос", "type": "number", "required": True, "min": 1, "max": 1000},
+        ),
+    },)
+    assert channels == ({
+        "code": "telegram",
+        "label": "Telegram",
+        "fields": (
+            {"name": "chat_id", "label": "ID чата", "type": "text", "required": True},
+        ),
+        "secret": {"name": "token", "label": "Токен бота"},
+    },)

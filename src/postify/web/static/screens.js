@@ -104,9 +104,5 @@ export function renderJournal(data) {
   return `<section class="screen" data-screen="journal"><div class="journal-toolbar"><div><p class="section-kicker">Операции</p><h2>Последние запуски</h2></div><div><button class="button button--quiet" type="button" data-action="publish-once">Опубликовать один</button><button class="button button--primary" type="button" data-action="new-run">＋ Запустить поиск</button></div></div><div class="journal-list">${items.map((item) => `<button class="journal-row" type="button" data-action="open-run" data-id="${escapeHtml(item.run_id)}"><span class="run-icon">↻</span><span><strong>№ ${escapeHtml(item.run_id)} · ${escapeHtml(label(item.kind))}</strong><small>${escapeHtml(dateTime(item.started_at))}</small></span>${statusBadge(item.status)}<span>${escapeHtml(item.duration ?? "—")} сек.</span><span>→</span></button>`).join("")}</div></section>`;
 }
 
-export function renderSettingsPlaceholder() {
-  return `<section class="screen" data-screen="settings"><section class="empty-state settings-placeholder"><span aria-hidden="true">⚙</span><h2>Настройки проекта</h2><p>Редактирование настроек появится на следующем этапе. Раздел уже доступен по постоянному адресу.</p></section></section>`;
-}
-
 export const screens = {overview: renderOverview, materials: renderMaterials, review: renderReview, queue: renderQueue, publications: renderPublications, journal: renderJournal};
 export {dateTime, label, statusBadge};

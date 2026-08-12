@@ -1,16 +1,21 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from alembic import command
+from cryptography.fernet import Fernet
+from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
 )
+from postify.infrastructure.security.secrets import SecretCipher
 from postify.adapters.channels.registry import ChannelProviderRegistry
 from postify.adapters.sources.registry import SourceProviderRegistry
 from postify.application.projects.bootstrap_project import BootstrapProject
+from tests.unit.application.projects.test_bootstrap_project import settings
 from tests.unit.domain.projects.test_models import configuration
 
 
@@ -75,8 +80,6 @@ def test_bootstrap_repository_creates_full_graph_once(
     command.upgrade(alembic_config, "head")
     engine = create_engine(isolated_database_url)
     repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    from tests.unit.application.projects.test_bootstrap_project import settings
-
     action = BootstrapProject(
         repository,
         SourceProviderRegistry(),
@@ -100,5 +103,39 @@ def test_bootstrap_repository_creates_full_graph_once(
             assert connection.exec_driver_sql(
                 "SELECT count(*) FROM calls_to_action"
             ).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+def test_repository_removes_only_channel_secret_and_keeps_connection(
+    alembic_config, isolated_database_url
+) -> None:
+    # Break caught: explicit credential removal deletes the channel or leaves encrypted material readable.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
+    cipher = SecretCipher(Fernet.generate_key().decode())
+    telegram = SimpleNamespace(
+        telegram_chat_id="-100123",
+        telegram_bot_token=SecretStr("123:token"),
+    )
+    try:
+        BootstrapProject(
+            repository,
+            SourceProviderRegistry(),
+            ChannelProviderRegistry(),
+            cipher=cipher,
+            clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
+        ).execute(settings(), telegram)
+
+        result = repository.remove_channel_secret(
+            1, 1, datetime(2026, 8, 12, 10, tzinfo=UTC)
+        )
+        stored = repository.get_resource(1, "channels", 1)
+
+        assert result["secretConfigured"] is False
+        assert result["connection_status"] == "unconfigured"
+        assert stored["encrypted_secret"] is None
+        assert stored["configuration"] == {"chat_id": "-100123"}
     finally:
         engine.dispose()

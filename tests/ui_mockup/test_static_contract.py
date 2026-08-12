@@ -64,6 +64,7 @@ def test_frontend_uses_api_without_demo_state() -> None:
 
     assert "INITIAL_STATE" not in app
     assert "Демо-данные" not in app
+    assert "renderSettingsPlaceholder" not in screens
     assert 'from "./api.js"' in app
     assert 'from "./screens.js"' in app
     assert "AbortController" in app
@@ -91,5 +92,5 @@ def test_wheel_configuration_includes_all_static_assets() -> None:
     # Break caught: the UI works from checkout but disappears from an installed wheel.
     pyproject = ROOT.joinpath("pyproject.toml").read_text()
 
-    for asset in ("web/static/index.html", "web/static/styles.css", "web/static/app.js", "web/static/api.js", "web/static/screens.js"):
+    for asset in ("web/static/index.html", "web/static/styles.css", "web/static/app.js", "web/static/api.js", "web/static/screens.js", "web/static/settings.js"):
         assert asset in pyproject

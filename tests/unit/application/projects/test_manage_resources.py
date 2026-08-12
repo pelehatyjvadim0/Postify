@@ -11,6 +11,7 @@ NOW = datetime(2026, 8, 12, 10, tzinfo=UTC)
 class Repository:
     def __init__(self) -> None:
         self.created: tuple[object, ...] | None = None
+        self.removed_secret: tuple[object, ...] | None = None
 
     def get(self, project_id: int):
         if project_id != 1:
@@ -20,6 +21,10 @@ class Repository:
     def create_resource(self, project_id: int, resource: str, payload: dict[str, object], now):
         self.created = (project_id, resource, payload, now)
         return {"id": 7, **payload}
+
+    def remove_channel_secret(self, project_id: int, channel_id: int, now):
+        self.removed_secret = (project_id, channel_id, now)
+        return {"id": channel_id, "secretConfigured": False}
 
 
 class Sources:
@@ -58,3 +63,16 @@ def test_create_source_validates_provider_before_persisting() -> None:
         },
         NOW,
     )
+
+
+def test_remove_channel_secret_is_an_explicit_action() -> None:
+    # Break caught: an empty edit silently removes credentials or secret removal deletes the channel.
+    repository = Repository()
+    action = ManageProjectResources(
+        repository, Sources(), object(), cipher=None, clock=lambda: NOW
+    )
+
+    result = action.remove_channel_secret(1, 7)
+
+    assert result == {"id": 7, "secretConfigured": False}
+    assert repository.removed_secret == (1, 7, NOW)

@@ -324,6 +324,31 @@ class SqlAlchemyProjectRepository:
                 raise
 
 
+    def remove_channel_secret(
+        self, project_id: int, channel_id: int, now: datetime
+    ) -> dict[str, object]:
+        with self._session_factory() as session:
+            try:
+                item = session.scalar(
+                    select(ChannelConnectionModel).where(
+                        ChannelConnectionModel.project_id == project_id,
+                        ChannelConnectionModel.id == channel_id,
+                    )
+                )
+                if item is None:
+                    raise LookupError(channel_id)
+                item.encrypted_secret = None
+                item.connection_status = "unconfigured"
+                item.last_checked_at = None
+                item.updated_at = now
+                session.commit()
+                session.refresh(item)
+                return _resource_values("channels", item)
+            except BaseException:
+                session.rollback()
+                raise
+
+
 def _project(model: ContentProjectModel) -> ContentProject:
     return ContentProject(
         model.id,
@@ -369,7 +394,10 @@ def _resource_persistence_values(resource: str, payload: dict[str, object]) -> d
         return {
             **{name: payload[name] for name in ("format_id", "channel_id", "enabled")},
             "cta_id": payload.get("cta_id"),
-            "schedule": {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
+            "schedule": payload.get(
+                "schedule",
+                {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
+            ),
         }
     raise ValueError("unknown_resource")
 

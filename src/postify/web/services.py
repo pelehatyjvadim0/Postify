@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy.orm import sessionmaker
 
 from postify.adapters.channels.registry import ChannelProviderRegistry
+from postify.adapters.sources.registry import SourceProviderRegistry
 from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
 from postify.adapters.media.local_media_provider import LocalMediaProvider
 from postify.application.content.review_content import ReviewContent
@@ -69,12 +70,12 @@ class WebApplication:
             if settings.postify_secret_key is not None
             else None
         )
-        from postify.adapters.sources.registry import SourceProviderRegistry
-
+        self._source_providers = SourceProviderRegistry()
+        self._channel_providers = ChannelProviderRegistry()
         self._resources = ManageProjectResources(
             self._projects,
-            SourceProviderRegistry(),
-            ChannelProviderRegistry(),
+            self._source_providers,
+            self._channel_providers,
             cipher=self._cipher,
             clock=lambda: datetime.now(UTC),
         )
@@ -85,7 +86,10 @@ class WebApplication:
             raise LookupError(1)
         return {
             "activeProject": _project(project),
-            "providers": {"sources": ["hn_algolia"], "channels": ["telegram"]},
+            "providers": {
+                "sources": self._source_providers.catalog(),
+                "channels": self._channel_providers.catalog(),
+            },
         }
 
     def dashboard(self, project_id: int) -> dict[str, object]:
@@ -175,6 +179,11 @@ class WebApplication:
                 TelegramChannelChecker(client),
                 clock=lambda: datetime.now(UTC),
             ).execute(project_id, channel_id)
+
+    def remove_channel_secret(
+        self, project_id: int, channel_id: int
+    ) -> dict[str, object]:
+        return self._resources.remove_channel_secret(project_id, channel_id)
 
     def package_media(self, project_id: int, package_id: int) -> tuple[bytes, str]:
         media_path = self._dashboard.package_media_path(project_id, package_id)

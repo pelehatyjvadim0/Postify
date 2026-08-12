@@ -46,6 +46,12 @@ class ManageProjectResources:
         self._project(project_id)
         self._repository.delete_resource(project_id, resource, resource_id)
 
+    def remove_channel_secret(self, project_id: int, channel_id: int):
+        self._project(project_id)
+        return self._repository.remove_channel_secret(
+            project_id, channel_id, self._clock()
+        )
+
     def _project(self, project_id: int) -> None:
         self._repository.get(project_id)
 

@@ -272,6 +272,11 @@ def check_channel(project_id: int, channel_id: int, container: Container):
     return _response(container.api.check_channel(project_id, channel_id))
 
 
+@router.post("/projects/{project_id}/channels/{channel_id}/secret/remove")
+def remove_channel_secret(project_id: int, channel_id: int, container: Container):
+    return _response(container.api.remove_channel_secret(project_id, channel_id))
+
+
 @router.get("/projects/{project_id}/media/packages/{package_id}")
 def package_media(project_id: int, package_id: int, container: Container) -> Response:
     body, media_type = container.api.package_media(project_id, package_id)

@@ -17,7 +17,26 @@ PROJECT = "/api/v1/projects/41"
 FIXTURES = {
     "/api/v1/bootstrap": {
         "activeProject": {"id": 41, "name": "Технологии просто"},
-        "providers": {"sources": ["hn_algolia"], "channels": ["telegram"]},
+        "providers": {
+            "sources": [{
+                "code": "hn_algolia",
+                "label": "HN Algolia",
+                "fields": [
+                    {"name": "url", "label": "Адрес API", "type": "url", "required": True},
+                    {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
+                    {"name": "tags", "label": "Теги", "type": "text", "required": True},
+                    {"name": "hits", "label": "Материалов за запрос", "type": "number", "required": True, "min": 1, "max": 1000},
+                ],
+            }],
+            "channels": [{
+                "code": "telegram",
+                "label": "Telegram",
+                "fields": [
+                    {"name": "chat_id", "label": "ID чата", "type": "text", "required": True},
+                ],
+                "secret": {"name": "token", "label": "Токен бота"},
+            }],
+        },
     },
     f"{PROJECT}/dashboard": {
         "candidate_total": 9001,
@@ -93,6 +112,76 @@ FIXTURES = {
             "duration": 12,
         }],
     },
+    f"{PROJECT}/settings": {
+        "project": {
+            "id": 41,
+            "name": "Технологии просто",
+            "topic": "Практичные AI-инструменты",
+            "language": "ru",
+            "audience": "Продуктовые команды",
+            "timezone": "Europe/Moscow",
+            "configuration": {
+                "selection_policy_version": "project-41-v7",
+                "selection_rules": ["advertising", "out_of_scope", "hiring", "technical_without_use"],
+                "topic_terms": ["ai", "автоматизация"],
+                "topic_exclusion_terms": ["лотерея"],
+                "advertising_terms": ["реклама"],
+                "hiring_terms": ["вакансия"],
+                "technical_release_terms": ["release notes"],
+                "practical_terms": ["кейс"],
+                "selection_freshness_days": 30,
+                "daily_analysis_limit": 12,
+                "daily_package_limit": 3,
+                "priority_freshness_days": 14,
+                "fresh_share_percent": 90,
+                "reserve_share_percent": 10,
+                "review_required": True,
+                "article_max_bytes": 2000000,
+                "media_max_bytes": 10000000,
+                "analysis_timeout_seconds": 600,
+            },
+        },
+        "sources": [{
+            "id": 1,
+            "provider": "hn_algolia",
+            "name": "Новости разработчиков",
+            "enabled": True,
+            "configuration": {"url": "https://hn.algolia.com", "query": "AI", "tags": "story", "hits": 50},
+            "schedule": "0 7 * * *",
+        }],
+        "formats": [{
+            "id": 1,
+            "name": "Практический разбор B",
+            "kind": "text",
+            "instructions": "Хук, польза, ограничение и следующий шаг.",
+            "enabled": True,
+        }],
+        "ctas": [{
+            "id": 1,
+            "name": "Полезный источник",
+            "text": "Открыть источник",
+            "link_mode": "source",
+            "custom_url": None,
+            "enabled": True,
+        }],
+        "channels": [{
+            "id": 1,
+            "provider": "telegram",
+            "name": "Основной канал",
+            "enabled": True,
+            "configuration": {"chat_id": "-100123"},
+            "connection_status": "configured",
+            "secretConfigured": True,
+        }],
+        "routes": [{
+            "id": 1,
+            "format_id": 1,
+            "channel_id": 1,
+            "cta_id": 1,
+            "enabled": True,
+            "schedule": {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
+        }],
+    },
 }
 
 
@@ -127,7 +216,7 @@ def install_api(page: Page, requests: list[tuple[str, str]] | None = None) -> No
         path = "/" + path.split("/", 1)[1]
         if requests is not None:
             requests.append((request.method, path))
-        if request.method == "POST":
+        if request.method in {"POST", "PUT", "DELETE"}:
             route.fulfill(status=202 if path.endswith("run-once") else 200, content_type="application/json", body='{"status":"accepted"}')
             return
         payload = FIXTURES.get(path)
@@ -136,6 +225,25 @@ def install_api(page: Page, requests: list[tuple[str, str]] | None = None) -> No
             content_type="application/json",
             body=json.dumps(payload or {"code": "not_found"}),
         )
+
+    page.route("**/api/v1/**", handle)
+
+
+def install_settings_api(page: Page, calls: list[dict[str, object]]) -> None:
+    state = json.loads(json.dumps(FIXTURES[f"{PROJECT}/settings"]))
+
+    def handle(route: Route) -> None:
+        request = route.request
+        path = "/" + request.url.split("/", 3)[-1].split("?", 1)[0]
+        if request.method == "GET":
+            payload = FIXTURES["/api/v1/bootstrap"] if path.endswith("/bootstrap") else state
+            route.fulfill(json=payload)
+            return
+        body = request.post_data_json if request.post_data else None
+        calls.append({"method": request.method, "path": path, "body": body})
+        if request.method == "PUT" and path.endswith("/settings/main"):
+            state["project"].update(body)
+        route.fulfill(status=204 if request.method == "DELETE" else 200, json=None if request.method == "DELETE" else {"status": "ok"})
 
     page.route("**/api/v1/**", handle)
 
@@ -180,6 +288,259 @@ def test_selected_route_fetches_only_bootstrap_and_its_resource(browser: Browser
         inspected.goto(f"{base_url}/#materials")
         inspected.get_by_text("Материал 9001", exact=False).wait_for()
         assert requests == [("GET", "/api/v1/bootstrap"), ("GET", f"{PROJECT}/materials")]
+    finally:
+        inspected.close()
+
+
+@pytest.mark.parametrize("width", [360, 768, 1440])
+def test_settings_render_eight_compact_provider_driven_sections_without_overflow(
+    browser: Browser, base_url: str, width: int
+) -> None:
+    # Break caught: settings stay a placeholder, expose infrastructure, or hard-code provider fields outside the bootstrap catalog.
+    inspected = browser.new_page(viewport={"width": width, "height": 1000})
+    install_api(inspected)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        sections = inspected.locator("[data-settings-section]")
+        sections.first.wait_for()
+        assert sections.count() == 8
+        assert inspected.locator("[data-settings-section][open]").count() == 1
+        source_form = inspected.locator('[data-settings-form="sources"]').first
+        channel_form = inspected.locator('[data-settings-form="channels"]').first
+        assert source_form.get_by_label("Провайдер источника").input_value() == "hn_algolia"
+        assert source_form.get_by_label("Поисковый запрос").input_value() == "AI"
+        assert channel_form.get_by_label("ID чата").input_value() == "-100123"
+        page_text = inspected.locator("#screen-root").inner_text().casefold()
+        for forbidden in ("dsn", "media dir", "encryption key", "systemd"):
+            assert forbidden not in page_text
+        assert inspected.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+        for section in ("sources", "selection", "generation", "cta", "channels", "schedule", "advanced"):
+            inspected.locator(f'[data-settings-section="{section}"] > summary').click()
+            assert inspected.locator(f'[data-settings-section="{section}"]').get_attribute("open") == ""
+            assert inspected.locator("[data-settings-section][open]").count() == 1
+            assert inspected.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    finally:
+        inspected.close()
+
+
+def test_settings_save_is_section_scoped_dirty_busy_and_refreshes_summary(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: save sends the whole settings graph, stays clickable while busy, or leaves the server summary stale.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    inspected.set_default_timeout(3000)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        form = inspected.locator('[data-settings-form="main"]')
+        savebar = form.locator(".settings-savebar")
+        assert savebar.is_hidden()
+        inspected.get_by_label("Название проекта").fill("Новая редакция")
+        assert savebar.is_visible()
+        save = form.get_by_role("button", name="Сохранить")
+        save.click()
+        assert save.is_disabled()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+        assert calls == [{
+            "method": "PUT",
+            "path": f"{PROJECT}/settings/main",
+            "body": {
+                "name": "Новая редакция",
+                "topic": "Практичные AI-инструменты",
+                "language": "ru",
+                "audience": "Продуктовые команды",
+                "timezone": "Europe/Moscow",
+            },
+        }]
+        assert inspected.locator('[data-settings-section="main"] .settings-summary-current').inner_text() == "Новая редакция · ru"
+        assert savebar.is_hidden()
+    finally:
+        inspected.close()
+
+
+def test_serialize_settings_section_is_pure_and_keeps_nested_provider_values(
+    page: Page, base_url: str
+) -> None:
+    # Break caught: serialization reads global screen state or flattens provider configuration into the common connection model.
+    page.goto(f"{base_url}/#overview")
+    result = page.evaluate(
+        """async () => {
+            const {serializeSettingsSection} = await import('/settings.js');
+            const host = document.createElement('div');
+            host.innerHTML = `<form data-settings-form="sources">
+              <input name="name" value="Источник">
+              <input name="enabled" type="checkbox" checked>
+              <input name="configuration.query" value="AI">
+              <input name="configuration.hits" type="number" value="25">
+            </form>`;
+            return serializeSettingsSection(host.querySelector('form'));
+        }"""
+    )
+    assert result == {
+        "name": "Источник",
+        "enabled": True,
+        "configuration": {"query": "AI", "hits": 25},
+    }
+
+
+def test_settings_validate_shares_slots_url_and_route_references_before_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: invalid cross-field settings reach an API that is forced to reject them after a network request.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="generation"] > summary').click()
+        generation = inspected.locator('[data-settings-form="generation"]')
+        generation.get_by_label("Доля свежих, %").fill("80")
+        generation.get_by_role("button", name="Сохранить").click()
+        error = generation.locator("[data-settings-error]")
+        assert "100" in error.inner_text()
+        assert generation.get_by_label("Доля свежих, %").get_attribute("aria-describedby") == error.get_attribute("id")
+
+        inspected.locator('[data-settings-section="schedule"] > summary').click()
+        schedule = inspected.locator('[data-settings-form="schedule"]')
+        schedule.get_by_label("Дневной слот").fill("09:00")
+        schedule.get_by_role("button", name="Сохранить").click()
+        assert "разными" in schedule.locator("[data-settings-error]").inner_text()
+
+        inspected.locator('[data-settings-section="cta"] > summary').click()
+        cta = inspected.locator('[data-settings-form="cta"]').first
+        cta.get_by_label("Режим ссылки").select_option("custom")
+        cta.get_by_label("Адрес ссылки").fill("javascript:alert(1)")
+        cta.get_by_role("button", name="Сохранить").click()
+        assert "HTTP" in cta.locator("[data-settings-error]").inner_text()
+        assert calls == []
+    finally:
+        inspected.close()
+
+
+def test_channel_token_keep_replace_remove_and_real_check_are_distinct_intents(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: a masked placeholder becomes a token value, blank save clears it, or remove/check remain decorative controls.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        form = inspected.locator('[data-settings-form="channels"]').first
+        token = form.get_by_label("Токен бота")
+        assert token.input_value() == ""
+        assert token.get_attribute("placeholder") == "Токен сохранён"
+        assert form.get_by_role("button", name="Показать токен").is_disabled()
+
+        form.get_by_label("ID чата").fill("-100456")
+        form.get_by_role("button", name="Сохранить").click()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+        keep = next(call for call in calls if call["path"] == f"{PROJECT}/channels/1")
+        assert "token" not in keep["body"]
+
+        form = inspected.locator('[data-settings-form="channels"]').first
+        token = form.get_by_label("Токен бота")
+        token.fill("new-secret")
+        reveal = form.get_by_role("button", name="Показать токен")
+        assert reveal.is_enabled()
+        reveal.click()
+        assert token.get_attribute("type") == "text"
+        inspected.locator('[data-settings-form="channels"]').first.get_by_role("button", name="Сохранить").click()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+        replacements = [call for call in calls if call["path"] == f"{PROJECT}/channels/1"]
+        assert replacements[-1]["body"]["token"] == "new-secret"
+
+        inspected.get_by_role("button", name="Удалить токен").click()
+        inspected.get_by_role("button", name="Проверить канал").click()
+        assert any(call["path"] == f"{PROJECT}/channels/1/secret/remove" for call in calls)
+        assert any(call["path"] == f"{PROJECT}/channels/1/check" for call in calls)
+        assert not any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/channels/1" for call in calls)
+    finally:
+        inspected.close()
+
+
+def test_source_cta_channel_and_route_mutations_use_resource_endpoints(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: resource controls mutate an in-memory demo model instead of Task 7 CRUD endpoints.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        changes = {
+            "sources": ("Название источника", "Новости AI"),
+            "cta": ("Название CTA", "Ссылка на материал"),
+            "channels": ("Название канала", "Канал редакции"),
+        }
+        for section, (label, value) in changes.items():
+            inspected.locator(f'[data-settings-section="{section}"] > summary').click()
+            form = inspected.locator(f'[data-settings-form="{section}"]').first
+            form.get_by_label(label).fill(value)
+            form.get_by_role("button", name="Сохранить").click()
+            inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
+            inspected.wait_for_timeout(100)
+
+        paths = {call["path"] for call in calls if call["method"] == "PUT"}
+        assert paths >= {
+            f"{PROJECT}/sources/1",
+            f"{PROJECT}/ctas/1",
+            f"{PROJECT}/channels/1",
+            f"{PROJECT}/routes/1",
+        }
+        route = next(call for call in calls if call["path"] == f"{PROJECT}/routes/1")
+        assert route["body"] | {"schedule": route["body"].get("schedule")} == {
+            "format_id": 1,
+            "channel_id": 1,
+            "cta_id": 1,
+            "enabled": True,
+            "schedule": {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
+        }
+    finally:
+        inspected.close()
+
+
+def test_resource_add_and_delete_controls_call_crud_endpoints(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: add/delete controls are decorative or routes can only be edited, not managed as resources.
+    inspected = browser.new_page(viewport={"width": 1440, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    inspected.set_default_timeout(3000)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="sources"] > summary').click()
+        inspected.get_by_role("button", name="Добавить источник").click()
+        source = inspected.locator('[data-resource="sources"][data-resource-mode="create"]')
+        source.get_by_label("Название источника").fill("Второй источник")
+        source.get_by_label("Адрес API").fill("https://hn.algolia.com")
+        source.get_by_label("Поисковый запрос").fill("Python")
+        source.get_by_label("Теги").fill("story")
+        source.get_by_label("Материалов за запрос").fill("20")
+        source.get_by_label("Расписание получения").fill("0 8 * * *")
+        source.get_by_role("button", name="Сохранить").click()
+        inspected.wait_for_timeout(100)
+
+        inspected.locator('[data-settings-section="cta"] > summary').click()
+        inspected.locator('[data-resource="ctas"][data-resource-mode="update"]').get_by_role("button", name="Удалить").click()
+        inspected.wait_for_timeout(100)
+
+        inspected.locator('[data-settings-section="channels"] > summary').click()
+        inspected.get_by_role("button", name="Добавить маршрут").click()
+        route_form = inspected.locator('[data-resource="routes"][data-resource-mode="create"]')
+        route_form.get_by_role("button", name="Сохранить").click()
+        inspected.wait_for_timeout(100)
+        inspected.get_by_role("button", name="Удалить маршрут").click()
+        inspected.wait_for_timeout(100)
+
+        assert any(call["method"] == "POST" and call["path"] == f"{PROJECT}/sources" for call in calls)
+        assert any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/ctas/1" for call in calls)
+        assert any(call["method"] == "POST" and call["path"] == f"{PROJECT}/routes" for call in calls)
+        assert any(call["method"] == "DELETE" and call["path"] == f"{PROJECT}/routes/1" for call in calls)
     finally:
         inspected.close()
 
@@ -434,7 +795,9 @@ def test_reduced_motion_removes_visible_screen_transition(browser: Browser, base
     install_api(inspected)
     try:
         inspected.goto(f"{base_url}/#overview")
-        duration = inspected.locator("[data-screen]").evaluate("element => getComputedStyle(element).animationDuration")
+        screen = inspected.locator('[data-screen="overview"]:not([data-loading])')
+        screen.wait_for()
+        duration = screen.evaluate("element => getComputedStyle(element).animationDuration")
         assert duration in {"0s", "1e-05s"}
     finally:
         inspected.close()
@@ -442,6 +805,7 @@ def test_reduced_motion_removes_visible_screen_transition(browser: Browser, base
 
 def test_overview_summary_and_logo_keep_approved_optical_alignment(page: Page, base_url: str) -> None:
     page.goto(f"{base_url}/#overview")
+    page.locator(".studio-strip").wait_for()
     columns = page.locator(".studio-strip > div").evaluate_all(
         "elements => elements.map(element => element.getBoundingClientRect().toJSON())"
     )
