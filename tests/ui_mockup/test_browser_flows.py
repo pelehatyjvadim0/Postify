@@ -537,6 +537,84 @@ def test_source_https_constraint_is_provider_driven_and_blocks_request(
         inspected.close()
 
 
+def test_required_provider_text_is_not_empty_after_normalization(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: whitespace-only provider text passes HTML required and is sent empty after serialization.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="sources"] > summary').click()
+        form = inspected.locator('[data-resource="sources"][data-resource-id="1"]')
+        control = form.get_by_label("Поисковый запрос")
+        control.fill("   ")
+        form.get_by_role("button", name="Сохранить").click()
+
+        error = form.locator("[data-settings-error]")
+        error_id = error.get_attribute("id")
+        assert "пуст" in error.inner_text().casefold()
+        assert calls == []
+        assert error_id
+        assert form.get_attribute("aria-describedby") == error_id
+        assert control.get_attribute("aria-describedby") == error_id
+    finally:
+        inspected.close()
+
+
+def test_https_provider_url_requires_explicit_authority_before_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: Chromium normalizes https:foo to a URL with host although server urlsplit sees no netloc.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="sources"] > summary').click()
+        form = inspected.locator('[data-resource="sources"][data-resource-id="1"]')
+        control = form.get_by_label("Адрес API")
+        control.fill("https:foo")
+        form.get_by_role("button", name="Сохранить").click()
+
+        error = form.locator("[data-settings-error]")
+        error_id = error.get_attribute("id")
+        assert "HTTPS" in error.inner_text()
+        assert calls == []
+        assert error_id
+        assert form.get_attribute("aria-describedby") == error_id
+        assert control.get_attribute("aria-describedby") == error_id
+    finally:
+        inspected.close()
+
+
+def test_marker_duplicates_collapse_internal_whitespace_before_request(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: terms equal after server whitespace normalization still reach the API as distinct strings.
+    inspected = browser.new_page(viewport={"width": 768, "height": 1000})
+    calls: list[dict[str, object]] = []
+    install_settings_api(inspected, calls)
+    try:
+        inspected.goto(f"{base_url}/#settings")
+        inspected.locator('[data-settings-section="selection"] > summary').click()
+        form = inspected.locator('[data-settings-form="selection"]')
+        control = form.get_by_label("Тематические маркеры")
+        control.fill("foo  bar, foo bar")
+        form.get_by_role("button", name="Сохранить").click()
+
+        error = form.locator("[data-settings-error]")
+        error_id = error.get_attribute("id")
+        assert "повтор" in error.inner_text().casefold()
+        assert calls == []
+        assert error_id
+        assert form.get_attribute("aria-describedby") == error_id
+        assert control.get_attribute("aria-describedby") == error_id
+    finally:
+        inspected.close()
+
+
 def test_route_references_are_checked_against_rendered_resource_ids_before_request(
     browser: Browser, base_url: str
 ) -> None:

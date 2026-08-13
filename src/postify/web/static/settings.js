@@ -3,6 +3,7 @@ import {escapeHtml} from "./screens.js";
 const joinTerms = (values) => (values || []).join(", ");
 const checked = (value) => value ? " checked" : "";
 const selected = (value, current) => String(value) === String(current) ? " selected" : "";
+const normalizeText = (value) => value.trim().replace(/\s+/g, " ");
 
 function input(label, name, value, options = {}) {
   const type = options.type || "text";
@@ -210,9 +211,16 @@ export function validateSettingsSection(form, payload) {
   form.removeAttribute("aria-describedby");
   form.querySelectorAll("[aria-describedby^='settings-error-']").forEach((node) => node.removeAttribute("aria-describedby"));
   if (!form.checkValidity()) return showSettingsError(form, "Заполните все обязательные поля.", form.querySelector(":invalid"));
+  for (const control of form.querySelectorAll('.provider-fields input[type="text"][required]')) {
+    if (!normalizeText(control.value)) return showSettingsError(form, "Обязательное поле не может быть пустым.", control);
+  }
   for (const control of form.querySelectorAll("[data-protocol]")) {
     try {
-      if (new URL(control.value).protocol !== `${control.dataset.protocol}:`) throw new Error();
+      const value = control.value.trim();
+      const prefix = `${control.dataset.protocol}://`;
+      const authority = value.slice(prefix.length).split(/[/?#]/, 1)[0];
+      const url = new URL(value);
+      if (!value.toLocaleLowerCase("en-US").startsWith(prefix) || !authority || url.protocol !== `${control.dataset.protocol}:` || !url.host) throw new Error();
     } catch (_) { return showSettingsError(form, `Нужен абсолютный ${control.dataset.protocol.toUpperCase()} URL.`, control); }
   }
   if (form.dataset.settingsForm === "main") {
@@ -238,7 +246,7 @@ export function validateSettingsSection(form, payload) {
       }
     }
     for (const field of ["topic_terms", "topic_exclusion_terms", "advertising_terms", "hiring_terms", "technical_release_terms", "practical_terms"]) {
-      const terms = (payload[field] || []).map((term) => term.toLocaleLowerCase("ru"));
+      const terms = (payload[field] || []).map((term) => normalizeText(term).toLocaleLowerCase("ru"));
       if (new Set(terms).size !== terms.length) return showSettingsError(form, "Маркеры не должны повторяться.", form.elements[field]);
     }
   }

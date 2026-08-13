@@ -195,3 +195,52 @@ PostgreSQL 16 тот же набор прошёл 6/6.
 `bootstrap_project.py`, `test_sqlalchemy_content.py` и
 `test_process_content.py`. Эти файлы не изменены Task 9; исправление оставлено вне
 scope. Scoped Ruff по всем затронутым Task 9 Python-файлам прошёл.
+
+## Исправление validation parity после scoped re-review
+
+- required text в provider configuration проверяется после trim и
+  collapse internal whitespace; пробельное значение не доходит до API;
+- provider URL должен содержать явный `${protocol}://`, непустую
+  authority в исходной строке и host после разбора; `https:foo` блокируется;
+- marker duplicates сравниваются после trim, collapse internal whitespace и
+  lowercase, как на server domain boundary;
+- все три границы покрыты browser tests с no-request assertion и
+  `aria-describedby` для form и конкретного control.
+
+### RED
+
+```text
+uv run pytest -q \
+  tests/ui_mockup/test_browser_flows.py::test_required_provider_text_is_not_empty_after_normalization -x
+# 1 failed: inline error пуст, mutation request не заблокирован
+
+uv run pytest -q \
+  tests/ui_mockup/test_browser_flows.py::test_https_provider_url_requires_explicit_authority_before_request \
+  tests/ui_mockup/test_browser_flows.py::test_marker_duplicates_collapse_internal_whitespace_before_request
+# 2 failed: обе inline errors пусты, mutation requests не заблокированы
+```
+
+### GREEN
+
+```text
+uv run pytest -q \
+  tests/ui_mockup/test_browser_flows.py::test_required_provider_text_is_not_empty_after_normalization \
+  tests/ui_mockup/test_browser_flows.py::test_https_provider_url_requires_explicit_authority_before_request \
+  tests/ui_mockup/test_browser_flows.py::test_marker_duplicates_collapse_internal_whitespace_before_request
+# 3 passed in 1.89s
+
+uv run pytest -q tests/ui_mockup/test_browser_flows.py
+# 73 passed in 28.46s
+
+node --check src/postify/web/static/api.js
+node --check src/postify/web/static/screens.js
+node --check src/postify/web/static/settings.js
+node --check src/postify/web/static/app.js
+# exit 0
+
+git diff --check
+# без вывода
+```
+
+Production Python/API не изменялись, поэтому backend suites в этом
+validation-only fix round не перезапускались.
