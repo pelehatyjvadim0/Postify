@@ -101,7 +101,8 @@ function routeForm(route, settings, mode = "update") {
   const channels = settings.channels.map((item) => ({value: item.id, label: item.name}));
   const ctas = [{value: "", label: "Без CTA"}, ...settings.ctas.map((item) => ({value: item.id, label: item.name}))];
   const schedule = route.schedule || {autopublish: true, slots: ["09:00", "14:00", "19:00"]};
-  return `<form class="settings-form resource-form" data-settings-form="route" data-resource="routes" data-resource-id="${escapeHtml(route.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый маршрут" : `Маршрут № ${escapeHtml(route.id)}`}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить маршрут</button>` : ""}</div><div class="settings-grid">${selectField("Формат", "format_id", route.format_id || formats[0]?.value || "", formats, "required")}${selectField("Канал маршрута", "channel_id", route.channel_id || channels[0]?.value || "", channels, "required")}${selectField("CTA маршрута", "cta_id", route.cta_id || "", ctas, "data-null-empty")}</div>${checkbox("Маршрут включён", "enabled", route.enabled ?? true)}<input type="hidden" name="schedule.autopublish" value="${escapeHtml(schedule.autopublish)}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[0])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[1])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[2])}">${savebar()}</form>`;
+  const referenceIds = (options) => escapeHtml(options.map((item) => item.value).filter(String).join(","));
+  return `<form class="settings-form resource-form" data-settings-form="route" data-resource="routes" data-resource-id="${escapeHtml(route.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый маршрут" : `Маршрут № ${escapeHtml(route.id)}`}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить маршрут</button>` : ""}</div><div class="settings-grid">${selectField("Формат", "format_id", route.format_id || formats[0]?.value || "", formats, `required data-reference-ids="${referenceIds(formats)}"`)}${selectField("Канал маршрута", "channel_id", route.channel_id || channels[0]?.value || "", channels, `required data-reference-ids="${referenceIds(channels)}"`)}${selectField("CTA маршрута", "cta_id", route.cta_id || "", ctas, `data-null-empty data-reference-ids="${referenceIds(ctas)}"`)}</div>${checkbox("Маршрут включён", "enabled", route.enabled ?? true)}<input type="hidden" name="schedule.autopublish" value="${escapeHtml(schedule.autopublish)}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[0])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[1])}"><input type="hidden" name="schedule.slots" data-multi value="${escapeHtml(schedule.slots[2])}">${savebar()}</form>`;
 }
 
 function scheduleForm(settings) {
@@ -256,14 +257,12 @@ export function validateSettingsSection(form, payload) {
       if (new Set(route.slots).size !== 3) return showSettingsError(form, "Три слота публикации должны быть разными.", control);
     }
   }
-  if (form.dataset.settingsForm === "channels" && payload.route) {
-    for (const field of ["format_id", "channel_id"]) {
-      const select = form.elements[`route.${field}`];
-      if (!select || ![...select.options].some((option) => option.value === String(payload.route[field]))) return showSettingsError(form, "Маршрут ссылается на несуществующий объект.", select);
-    }
-    if (payload.route.cta_id !== null) {
-      const cta = form.elements["route.cta_id"];
-      if (![...cta.options].some((option) => option.value === String(payload.route.cta_id))) return showSettingsError(form, "Маршрут ссылается на несуществующий CTA.", cta);
+  if (form.dataset.settingsForm === "route") {
+    for (const field of ["format_id", "channel_id", "cta_id"]) {
+      const select = form.elements[field];
+      if (field === "cta_id" && payload[field] === null) continue;
+      const referenceIds = new Set((select?.dataset.referenceIds || "").split(",").filter(Boolean));
+      if (!referenceIds.has(String(payload[field]))) return showSettingsError(form, "Маршрут ссылается на несуществующий объект.", select);
     }
   }
   return true;

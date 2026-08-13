@@ -118,12 +118,7 @@ pytest-процессами: session Playwright держит event loop, нес�
 с существующим sync `ApiClient`, который вызывает `asyncio.run`.
 Предписанные Task 9 команды также являются раздельными.
 
-## CHECKPOINT: review fixes в работе
-
-Сессия остановлена по внешнему запросу; это WIP checkpoint, а не заявление о
-завершении Task 9.
-
-Готово на момент остановки:
+## Исправления после review
 
 - resource settings рендерят 0, 1 и 2+ sources/CTA/channels/routes отдельными
   формами с собственными IDs и empty states;
@@ -137,43 +132,66 @@ pytest-процессами: session Playwright держит event loop, нес�
   ломает commit и подтверждает rollback source и route schedule;
 - общий `showSettingsError` связывает inline error через стабильный `id` и
   `aria-describedby` с формой и инициирующей кнопкой; покрыты source delete,
-  token remove, channel check и route delete failures.
+  token remove, channel check и route delete failures;
+- route form хранит допустимые format/channel/CTA IDs из settings DTO в
+  rendered metadata. Валидация сверяет payload с этими IDs, поэтому
+  stale/tampered `<option>` блокируется до request.
 
-Фактически пройдено после этих изменений:
+### RED для stale route reference
 
 ```text
+uv run pytest -q \
+  tests/ui_mockup/test_browser_flows.py::test_route_references_are_checked_against_rendered_resource_ids_before_request -x
+# 1 failed: ожидалась inline-ошибка «несуществующий», получена пустая строка
+```
+
+### GREEN после review fixes
+
+```text
+uv run pytest -q \
+  tests/ui_mockup/test_browser_flows.py::test_route_references_are_checked_against_rendered_resource_ids_before_request -x
+# 1 passed in 0.95s
+
 uv run pytest -q tests/ui_mockup/test_browser_flows.py
-# 69 passed in 25.42s
+# 70 passed in 26.58s
 
 uv run pytest -q tests/ui_mockup/test_static_contract.py tests/unit/web \
   tests/unit/application/projects/test_manage_resources.py \
   tests/unit/application/projects/test_manage_schedule.py \
   tests/unit/adapters/test_provider_registries.py
-# 25 passed in 0.70s
+# 25 passed in 0.76s
 
 TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
   uv run pytest -q tests/integration/infrastructure/test_sqlalchemy_projects.py \
   tests/integration/test_web_component.py
-# 6 passed in 1.42s
+# 6 passed in 1.31s
 
-uv run ruff check <текущие затронутые Python-файлы>
+node --check src/postify/web/static/api.js
+node --check src/postify/web/static/screens.js
 node --check src/postify/web/static/settings.js
 node --check src/postify/web/static/app.js
+# exit 0
+
+uv run ruff check <12 затронутых Python-файлов review-fix>
+# All checks passed!
+
+uv run python -m compileall -q src
+# exit 0
+
 git diff --check
-# успешно
+# без вывода
+
+uv build --wheel --out-dir <temp>
+unzip -Z1 <wheel> | rg \
+  '^postify/web/static/(index.html|styles.css|app.js|api.js|screens.js|settings.js)$'
+# wheel собран; все 6 production assets включены
 ```
 
-Важно: после полного browser run добавлен ещё один RED browser test для stale/
-tampered route reference. Он намеренно оставлен незапущенным и без реализации
-при остановке сессии. Поэтому приведённые `69 passed` не включают этот тест.
+Первая попытка PostgreSQL gate получила 6 setup errors из-за
+`connection refused` на остановленной test DB. После запуска изолированного
+PostgreSQL 16 тот же набор прошёл 6/6.
 
-Осталось:
-
-1. Запустить новый `test_route_references_are_checked_against_rendered_resource_ids_before_request`,
-   зафиксировать RED и добавить route-form validation по IDs из исходного DTO,
-   а не только по присутствующим `<option>`.
-2. Повторить полный browser suite на 360/768/1440 после последней правки.
-3. Повторить unit/API/application и PostgreSQL integration gates.
-4. Запустить все node checks, ruff, compileall, diff-check и wheel asset check.
-5. После GREEN обновить этот отчёт финальными результатами и сделать отдельный
-   завершённый fix commit; текущий commit оставить как WIP checkpoint.
+Полный `uv run ruff check src tests` отдельно нашёл 11 давних F401 в
+`bootstrap_project.py`, `test_sqlalchemy_content.py` и
+`test_process_content.py`. Эти файлы не изменены Task 9; исправление оставлено вне
+scope. Scoped Ruff по всем затронутым Task 9 Python-файлам прошёл.
