@@ -61,6 +61,7 @@ def _seed_candidates(session_factory, source_ids: tuple[str, ...]) -> list[int]:
     with session_factory() as session:
         models = [
             CandidateModel(
+                project_id=1,
                 source_name="generic_feed",
                 source_id=source_id,
                 title=f"Материал {source_id}",

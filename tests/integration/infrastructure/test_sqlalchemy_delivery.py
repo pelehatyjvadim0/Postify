@@ -29,8 +29,8 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         candidate_id = connection.execute(
             text(
                 "INSERT INTO candidates "
-                "(source_name, source_id, title, url, discovered_at, raw_payload) "
-                "VALUES ('hn', :source_id, :title, :url, :now, '{}'::jsonb) RETURNING id"
+                "(project_id, source_name, source_id, title, url, discovered_at, raw_payload) "
+                "VALUES (1, 'hn', :source_id, :title, :url, :now, '{}'::jsonb) RETURNING id"
             ),
             {
                 "source_id": marker,
@@ -42,8 +42,8 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         connection.execute(
             text(
                 "INSERT INTO candidate_decisions "
-                "(candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
-                "VALUES (:candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
+                "(project_id, candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
+                "VALUES (1, :candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
                 "'{}'::jsonb, 'v1', :now)"
             ),
             {"candidate_id": candidate_id, "now": NOW},
@@ -51,9 +51,9 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id, attempt_no, tier, status, source_url, article_title, "
+                "(project_id, candidate_id, attempt_no, tier, status, source_url, article_title, "
                 "article_text, analysis, started_at, finished_at) "
-                "VALUES (:candidate_id, 1, 'fresh', 'packaged', :url, 'title', "
+                "VALUES (1, :candidate_id, 1, 'fresh', 'packaged', :url, 'title', "
                 "'article', 'analysis', :now, :now) RETURNING id"
             ),
             {"candidate_id": candidate_id, "url": f"https://source.test/{marker}", "now": NOW},
@@ -61,9 +61,9 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         return connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
+                "(project_id, attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
                 "media_source_type, media_source_url, review_required, status, created_at, updated_at) "
-                "VALUES (:attempt_id, :url, 'context', 'analysis', :post_text, :media_path, "
+                "VALUES (1, :attempt_id, :url, 'context', 'analysis', :post_text, :media_path, "
                 "'image/png', 'og', :media_url, true, :status, :now, :now) RETURNING id"
             ),
             {
@@ -155,8 +155,8 @@ def test_delivery_has_one_row_per_package(migrated_database_url: str) -> None:
                 connection.execute(
                     text(
                         "INSERT INTO telegram_deliveries "
-                        "(package_id, status, attempt_no, sending_started_at, created_at, updated_at) "
-                        "VALUES (:package_id, 'sending', 1, :now, :now, :now)"
+                        "(project_id, package_id, status, attempt_no, sending_started_at, created_at, updated_at) "
+                        "VALUES (1, :package_id, 'sending', 1, :now, :now, :now)"
                     ),
                     {"package_id": package_id, "now": NOW},
                 )
