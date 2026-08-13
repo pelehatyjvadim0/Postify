@@ -19,7 +19,7 @@ class SchedulerApi:
         await self.release.wait()
 
 
-def test_lifespan_starts_one_scheduler_task_and_cancels_it_on_shutdown() -> None:
+def test_lifespan_starts_one_scheduler_task_and_stops_it_on_shutdown() -> None:
     # Поломка: startup создаёт 0/2 pollers или shutdown оставляет task живой.
     async def exercise() -> tuple[int, bool, bool]:
         api = SchedulerApi()
@@ -28,6 +28,7 @@ def test_lifespan_starts_one_scheduler_task_and_cancels_it_on_shutdown() -> None
             await asyncio.wait_for(api.started.wait(), timeout=0.5)
             task = app.state.scheduler_task
             during = not task.done()
+            api.release.set()
         return api.ticks, during, task.done()
 
     ticks, during, stopped = asyncio.run(exercise())
@@ -82,8 +83,8 @@ def test_polling_continues_after_infrastructure_failure() -> None:
     assert asyncio.run(exercise()) >= 2
 
 
-def test_blocking_sync_tick_keeps_loop_responsive_and_shutdown_bounded() -> None:
-    # Поломка: production sync tick блокирует event loop, а shutdown ждёт worker.
+def test_lifespan_waits_for_blocking_sync_tick_without_blocking_loop() -> None:
+    # Поломка: lifespan завершается, пока sync tick ещё может durable claim/command.
     class BlockingApi:
         def __init__(self) -> None:
             self.started = Event()
@@ -95,35 +96,29 @@ def test_blocking_sync_tick_keeps_loop_responsive_and_shutdown_bounded() -> None
             self.release.wait(timeout=1.0)
             self.finished.set()
 
-    async def exercise() -> tuple[float, bool, float, bool]:
+    async def exercise() -> tuple[bool, int, bool, bool]:
         api = BlockingApi()
         app = create_app(WebContainer(api=api))
-        loop = asyncio.get_running_loop()
-        responsive_started = loop.time()
-        shutdown_elapsed = 99.0
-        task = None
-        try:
-            async with app.router.lifespan_context(app):
-                await asyncio.sleep(0.05)
-                responsive_elapsed = loop.time() - responsive_started
-                task = app.state.scheduler_task
-                running_during_shutdown = (
-                    api.started.is_set() and not api.finished.is_set()
-                )
-                shutdown_started = loop.time()
-            shutdown_elapsed = loop.time() - shutdown_started
-        finally:
-            api.release.set()
-        return (
-            responsive_elapsed,
-            running_during_shutdown,
-            shutdown_elapsed,
-            task.done(),
-        )
+        context = app.router.lifespan_context(app)
+        await context.__aenter__()
+        for _ in range(50):
+            if api.started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        task = app.state.scheduler_task
+        exit_task = asyncio.create_task(context.__aexit__(None, None, None))
+        heartbeat = 0
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+            heartbeat += 1
+        exit_waited_for_worker = not exit_task.done()
+        api.release.set()
+        await asyncio.wait_for(exit_task, timeout=0.5)
+        return exit_waited_for_worker, heartbeat, api.finished.is_set(), task.done()
 
-    responsive, worker_was_running, shutdown, task_stopped = asyncio.run(exercise())
+    exit_waited, heartbeats, tick_finished, task_stopped = asyncio.run(exercise())
 
-    assert responsive < 0.2
-    assert worker_was_running is True
-    assert shutdown < 0.2
+    assert exit_waited is True
+    assert heartbeats == 5
+    assert tick_finished is True
     assert task_stopped is True

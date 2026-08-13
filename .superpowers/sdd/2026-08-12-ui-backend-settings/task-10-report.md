@@ -144,3 +144,53 @@ TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432
   tests/unit/infrastructure/test_database_engine.py
 # 34 passed in 3.55s
 ```
+
+## Владение worker после повторного review
+
+### RED
+
+```text
+uv run pytest -q \
+  tests/unit/web/test_scheduler_lifespan.py::test_lifespan_waits_for_blocking_sync_tick_without_blocking_loop
+# 1 failed: lifespan вернулся, пока blocking sync tick ещё выполнялся
+```
+
+### GREEN
+
+- Shutdown теперь сначала устанавливает stop event. Poller не начинает
+  новый tick, но дожидается уже запущенного. Поэтому durable claim
+  и command submission не могут произойти после возврата lifespan.
+- Ожидание polling task и worker асинхронное: event loop остаётся
+  отзывчивым. После tick lifespan вызывает executor
+  `shutdown(wait=True, cancel_futures=True)` через `asyncio.to_thread`, не оставляя
+  detached thread.
+- Если shutdown coroutine получает cancellation, `shield` всё равно
+  дожидается owned poller/worker, затем возобновляет cancellation.
+- Жёсткая верхняя граница реального DB failure по-прежнему
+  задаётся connect/pool/lock/statement timeout’ами и проверяется
+  PostgreSQL 16 integration-тестами.
+
+```text
+uv run pytest -q tests/unit/web/test_scheduler_lifespan.py
+# 4 passed in 0.86s
+
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q tests/unit/application/scheduling \
+  tests/integration/infrastructure/test_sqlalchemy_schedule.py \
+  tests/unit/web/test_scheduler_lifespan.py
+# 19 passed in 2.97s
+
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q tests/integration/test_migrations.py \
+  tests/integration/test_web_component.py tests/integration/test_web_run_once_scope.py \
+  tests/unit/web tests/unit/bootstrap/test_open_publish_once.py \
+  tests/unit/infrastructure/test_database_engine.py
+# 34 passed in 3.50s
+
+uv run ruff check src/postify/web/app.py tests/unit/web/test_scheduler_lifespan.py
+# All checks passed!
+
+uv run python -m compileall -q src/postify/web/app.py
+git diff --check
+# exit 0, без вывода
+```

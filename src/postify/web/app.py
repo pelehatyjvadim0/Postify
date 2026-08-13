@@ -31,18 +31,29 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
         scheduler_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="postify-scheduler"
         )
+        scheduler_stop = asyncio.Event()
         task = asyncio.create_task(
-            _poll_scheduler(selected_container.api, scheduler_executor),
+            _poll_scheduler(
+                selected_container.api, scheduler_executor, scheduler_stop
+            ),
             name="postify-project-scheduler",
         )
         app.state.scheduler_task = task
         try:
             yield
         finally:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            scheduler_executor.shutdown(wait=False, cancel_futures=True)
+            scheduler_stop.set()
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await asyncio.shield(task)
+                raise
+            finally:
+                await asyncio.to_thread(
+                    scheduler_executor.shutdown,
+                    wait=True,
+                    cancel_futures=True,
+                )
 
     app = FastAPI(lifespan=lifespan)
     app.state.container = selected_container
@@ -112,16 +123,21 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     return app
 
 
-async def _poll_scheduler(api, executor: ThreadPoolExecutor) -> None:
+async def _poll_scheduler(
+    api, executor: ThreadPoolExecutor, stop: asyncio.Event
+) -> None:
     loop = asyncio.get_running_loop()
-    while True:
+    while not stop.is_set():
         try:
             result = await loop.run_in_executor(executor, api.scheduler_tick)
             if isawaitable(result):
                 await result
         except Exception:
             LOGGER.exception("Project scheduler tick failed")
-        await asyncio.sleep(0.1)
+        if stop.is_set():
+            return
+        with suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=0.1)
 
 
 def _static_directory() -> Path:
