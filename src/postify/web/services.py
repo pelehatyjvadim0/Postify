@@ -20,12 +20,19 @@ from postify.application.projects.manage_project import ManageProject
 from postify.application.projects.manage_resources import ManageProjectResources
 from postify.application.projects.manage_schedule import ManageProjectSchedule
 from postify.application.projects.check_channel import CheckChannel
+from postify.application.scheduling.project_scheduler import (
+    ProjectScheduler,
+    ScheduledCommand,
+)
 from postify.bootstrap import open_publish_once, open_run_once
 from postify.config import Settings, TelegramSettings
 from postify.infrastructure.database.engine import create_engine_from_settings
 from postify.infrastructure.repositories.sqlalchemy_content import SqlAlchemyContentRepository
 from postify.infrastructure.repositories.sqlalchemy_dashboard import SqlAlchemyDashboardRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import SqlAlchemyProjectRepository
+from postify.infrastructure.repositories.sqlalchemy_schedule import (
+    SqlAlchemyScheduleRepository,
+)
 from postify.infrastructure.security.secrets import SecretCipher
 
 
@@ -66,6 +73,9 @@ class WebApplication:
         self._projects = SqlAlchemyProjectRepository(self._sessions)
         self._dashboard = SqlAlchemyDashboardRepository(self._sessions)
         self._operations = BoundedOperations()
+        self._scheduler = ProjectScheduler(
+            SqlAlchemyScheduleRepository(self._sessions), self._submit_scheduled
+        )
         self._cipher = (
             SecretCipher(settings.postify_secret_key.get_secret_value())
             if settings.postify_secret_key is not None
@@ -92,6 +102,9 @@ class WebApplication:
                 "channels": self._channel_providers.catalog(),
             },
         }
+
+    def scheduler_tick(self) -> tuple[ScheduledCommand, ...]:
+        return self._scheduler.tick(datetime.now(UTC))
 
     def dashboard(self, project_id: int) -> dict[str, object]:
         project = self._projects.get(project_id)
@@ -133,17 +146,15 @@ class WebApplication:
 
     def run_once(self, project_id: int) -> dict[str, object]:
         self._projects.get(project_id)
-        self._operations.submit(
-            project_id, "run_once", lambda: self._run_once(project_id)
-        )
+        self._submit_operation(project_id, "run_once")
         return {"status": "accepted"}
 
     def publish_once(self, project_id: int) -> dict[str, object]:
         self._projects.get(project_id)
         if self._telegram is None:
             raise RuntimeError("service_unavailable")
-        with open_publish_once(self._settings, self._telegram) as action:
-            return _values(action.execute())
+        self._submit_operation(project_id, "publish_once")
+        return {"status": "accepted"}
 
     def settings(self, project_id: int) -> dict[str, object]:
         return {
@@ -222,6 +233,27 @@ class WebApplication:
     def _run_once(self, project_id: int) -> None:
         with open_run_once(self._settings, project_id=project_id) as action:
             action.execute()
+
+    def _publish_once(self, project_id: int) -> None:
+        if self._telegram is None:
+            raise RuntimeError("service_unavailable")
+        with open_publish_once(
+            self._settings, self._telegram, project_id=project_id
+        ) as action:
+            action.execute()
+
+    def _submit_scheduled(self, command: ScheduledCommand) -> None:
+        {
+            "run_once": self.run_once,
+            "publish_once": self.publish_once,
+        }[command.kind](command.project_id)
+
+    def _submit_operation(self, project_id: int, kind: str) -> None:
+        operation = {
+            "run_once": lambda: self._run_once(project_id),
+            "publish_once": lambda: self._publish_once(project_id),
+        }[kind]
+        self._operations.submit(project_id, kind, operation)
 
 
 def build_web_api() -> WebApplication:

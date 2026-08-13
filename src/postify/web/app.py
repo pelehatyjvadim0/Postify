@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from inspect import isawaitable
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,9 +19,27 @@ from postify.web.errors import ApiError, error_response
 from postify.web.routes.api import router
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 def create_app(container: WebContainer | None = None) -> FastAPI:
-    app = FastAPI()
-    app.state.container = container or build_default_container()
+    selected_container = container or build_default_container()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        task = asyncio.create_task(
+            _poll_scheduler(selected_container.api), name="postify-project-scheduler"
+        )
+        app.state.scheduler_task = task
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(lifespan=lifespan)
+    app.state.container = selected_container
 
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next):
@@ -82,6 +104,17 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     if static.is_dir():
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
+
+
+async def _poll_scheduler(api) -> None:
+    while True:
+        try:
+            result = api.scheduler_tick()
+            if isawaitable(result):
+                await result
+        except Exception:
+            LOGGER.exception("Project scheduler tick failed")
+        await asyncio.sleep(0.1)
 
 
 def _static_directory() -> Path:

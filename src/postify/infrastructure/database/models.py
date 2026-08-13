@@ -170,3 +170,26 @@ class PublicationRouteModel(Base):
     schedule: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ScheduleSlotClaimModel(Base):
+    __tablename__ = "schedule_slot_claims"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('run_once','publish_once')",
+            name="ck_schedule_slot_claims_kind",
+        ),
+    )
+
+    project_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("content_projects.id"),
+        primary_key=True,
+    )
+    kind: Mapped[str] = mapped_column(String, primary_key=True)
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

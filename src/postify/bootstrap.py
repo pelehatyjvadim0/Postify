@@ -68,7 +68,9 @@ def open_content_review(settings: Settings):
 
 
 @contextmanager
-def open_publish_once(settings: Settings, telegram: TelegramSettings):
+def open_publish_once(
+    settings: Settings, telegram: TelegramSettings, *, project_id: int = 1
+):
     from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.adapters.telegram.bot_api import TelegramBotApiPublisher
@@ -84,7 +86,9 @@ def open_publish_once(settings: Settings, telegram: TelegramSettings):
         client = httpx.Client(timeout=telegram.telegram_timeout_seconds)
         media = LocalMediaProvider(client, settings.content_media_dir, settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy())
         action = PublishContent(
-            SqlAlchemyDeliveryRepository(sessionmaker(engine)),
+            _for_project(
+                SqlAlchemyDeliveryRepository, sessionmaker(engine), project_id
+            ),
             TelegramBotApiPublisher(client, bot_token=telegram.telegram_bot_token.get_secret_value(), chat_id=telegram.telegram_chat_id),
             media,
             timeout_seconds=telegram.telegram_timeout_seconds,
@@ -92,7 +96,9 @@ def open_publish_once(settings: Settings, telegram: TelegramSettings):
         )
         yield RecordedAction(
             action,
-            SqlAlchemyOperationRunRepository(sessionmaker(engine)),
+            _for_project(
+                SqlAlchemyOperationRunRepository, sessionmaker(engine), project_id
+            ),
             operation=OperationKind.PUBLISH_ONCE,
             success_outcome=lambda result: result.outcome,
             failure_code="publish_once_failed",
