@@ -314,3 +314,99 @@ def test_api_mutation_changes_next_real_project_run(
             engine.dispose()
     finally:
         api.close()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("missing_key", "secret_storage_unavailable"),
+        ("missing_secret", "publication_secret_unavailable"),
+        ("disabled_route", "publication_route_unavailable"),
+    ],
+)
+def test_project_publish_fails_closed_before_any_provider_request(
+    migrated_database_url: str,
+    tmp_path: Path,
+    failure: str,
+    expected: str,
+) -> None:
+    # Поломка final review: publish откатывается к env token при неполном graph.
+    from postify.bootstrap import open_project_publish_once
+
+    secret_key = Fernet.generate_key().decode("ascii")
+    settings = configured_settings(migrated_database_url).model_copy(
+        update={
+            "content_media_dir": tmp_path,
+            "postify_secret_key": SecretStr(secret_key),
+        }
+    )
+    api = WebApplication(settings, None)
+    client = ApiClient(create_app(WebContainer(api=api)))
+    try:
+        channel = client.post(
+            "/api/v1/projects/1/channels",
+            json={
+                "provider": "telegram",
+                "name": "Fail closed channel",
+                "enabled": True,
+                "configuration": {"chat_id": "-100-fail-closed"},
+                "token": "must-never-reach-provider",
+            },
+        )
+        assert channel.status_code == 201
+        route = client.post(
+            "/api/v1/projects/1/routes",
+            json={
+                "format_id": 1,
+                "channel_id": channel.json()["id"],
+                "cta_id": 1,
+                "enabled": True,
+            },
+        )
+        assert route.status_code == 201
+
+        publish_settings = settings
+        if failure == "missing_key":
+            publish_settings = settings.model_copy(update={"postify_secret_key": None})
+        elif failure == "missing_secret":
+            removed = client.post(
+                f"/api/v1/projects/1/channels/{channel.json()['id']}/secret/remove"
+            )
+            assert removed.status_code == 200
+        else:
+            disabled = client.put(
+                f"/api/v1/projects/1/routes/{route.json()['id']}",
+                json={
+                    "format_id": 1,
+                    "channel_id": channel.json()["id"],
+                    "cta_id": 1,
+                    "enabled": False,
+                },
+            )
+            assert disabled.status_code == 200
+
+        provider_requests: list[str] = []
+
+        def reject_provider_request(request: httpx.Request) -> httpx.Response:
+            provider_requests.append(str(request.url))
+            return httpx.Response(500)
+
+        with pytest.raises(RuntimeError, match=expected):
+            with open_project_publish_once(
+                publish_settings,
+                project_id=1,
+                transport=httpx.MockTransport(reject_provider_request),
+            ):
+                pass
+
+        assert provider_requests == []
+        engine = create_engine(migrated_database_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text("SELECT count(*) FROM deliveries WHERE project_id=1")
+                ).scalar_one() == 0
+        finally:
+            engine.dispose()
+    finally:
+        api.close()

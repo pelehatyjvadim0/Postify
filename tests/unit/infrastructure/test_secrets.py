@@ -30,4 +30,3 @@ def test_secret_cipher_rejects_tampered_value_with_safe_error() -> None:
         cipher.decrypt("not-a-fernet-value")
 
     assert "not-a-fernet-value" not in str(captured.value)
-

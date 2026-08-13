@@ -132,4 +132,3 @@ def test_call_to_action_accepts_supported_link_modes(link_mode: str) -> None:
 def test_custom_call_to_action_requires_absolute_http_url() -> None:
     with pytest.raises(ValueError, match="URL"):
         CallToAction(1, 1, "CTA", "Действие", "custom", "/relative", True)
-

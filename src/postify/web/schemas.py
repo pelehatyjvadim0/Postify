@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
@@ -9,6 +10,60 @@ from postify.domain.projects.cron import normalize_cron
 
 class RequestSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class ResponseSchema(BaseModel):
+    """Явный allowlist для outbound-контрактов."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+
+class BootstrapProjectResponse(ResponseSchema):
+    id: int
+    name: str
+    topic: str | None = None
+    language: str | None = None
+    audience: str | None = None
+    timezone: str | None = None
+    configuration: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ProviderFieldResponse(ResponseSchema):
+    name: str
+    label: str
+    input_type: str = Field(alias="type", serialization_alias="type")
+    required: bool
+    protocol: str | None = None
+    minimum: int | None = Field(default=None, alias="min", serialization_alias="min")
+    maximum: int | None = Field(default=None, alias="max", serialization_alias="max")
+
+
+class CredentialDescriptorResponse(ResponseSchema):
+    name: str
+    label: str
+    input_type: str
+
+
+class ProviderCatalogEntryResponse(ResponseSchema):
+    code: str
+    label: str
+    fields: tuple[ProviderFieldResponse, ...]
+    credential: CredentialDescriptorResponse | None = None
+
+
+class ProviderCatalogResponse(ResponseSchema):
+    sources: tuple[ProviderCatalogEntryResponse, ...]
+    channels: tuple[ProviderCatalogEntryResponse, ...]
+
+
+class BootstrapResponse(ResponseSchema):
+    csrf_token: str = Field(alias="csrfToken", serialization_alias="csrfToken")
+    active_project: BootstrapProjectResponse = Field(
+        alias="activeProject", serialization_alias="activeProject"
+    )
+    providers: ProviderCatalogResponse
 
 
 class RejectRequest(RequestSchema):

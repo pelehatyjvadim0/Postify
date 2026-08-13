@@ -170,6 +170,54 @@ def test_bootstrap_returns_active_project_and_registered_providers() -> None:
     ]
 
 
+def test_bootstrap_response_schema_keeps_descriptor_and_drops_unknown_values() -> None:
+    # Поломка final review: recursive key heuristic пропускает value
+    # внутри безопасно названного credential descriptor.
+    class LeakyCatalog(ApiStub):
+        def bootstrap(self):
+            return {
+                "activeProject": {
+                    "id": 1,
+                    "name": "Редакция",
+                    "encrypted_secret": "project-leak",
+                },
+                "providers": {
+                    "sources": [],
+                    "channels": [
+                        {
+                            "code": "telegram",
+                            "label": "Telegram",
+                            "fields": [],
+                            "credential": {
+                                "name": "token",
+                                "label": "Токен бота",
+                                "input_type": "password",
+                                "value": "descriptor-leak",
+                            },
+                            "token": "provider-leak",
+                        }
+                    ],
+                },
+            }
+
+    response = client_for(LeakyCatalog()).get("/api/v1/bootstrap")
+
+    assert response.status_code == 200
+    assert response.json()["providers"]["channels"] == [
+        {
+            "code": "telegram",
+            "label": "Telegram",
+            "fields": [],
+            "credential": {
+                "name": "token",
+                "label": "Токен бота",
+                "input_type": "password",
+            },
+        }
+    ]
+    assert "leak" not in response.text
+
+
 def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> None:
     # Break caught: publication slots are dropped by the route schema, or clearing a token deletes the channel itself.
     stub = ApiStub()

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
@@ -52,6 +55,95 @@ def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
         assert dashboard.status_code == 200
         assert dashboard.json()["candidate_total"] == 0
     finally:
+        engine.dispose()
+
+
+def test_real_bootstrap_drives_channel_secret_create_replace_and_remove(
+    migrated_database_url: str,
+) -> None:
+    # Поломка final review: fixture и production bootstrap расходятся,
+    # из-за чего UI не может создать, заменить и удалить token.
+    settings = configured_settings(migrated_database_url).model_copy(
+        update={
+            "postify_secret_key": SecretStr(
+                Fernet.generate_key().decode("ascii")
+            )
+        }
+    )
+    engine = create_engine_from_settings(settings)
+    api = WebApplication(settings, None)
+    client = ApiClient(create_app(WebContainer(api=api)))
+    first_token = "component-first-secret"
+    replacement_token = "component-replacement-secret"
+    try:
+        bootstrap = client.get("/api/v1/bootstrap")
+        provider = bootstrap.json()["providers"]["channels"][0]
+        assert provider["credential"] == {
+            "name": "token",
+            "label": "Токен бота",
+            "input_type": "password",
+        }
+        assert "secret" not in provider
+
+        created = client.post(
+            "/api/v1/projects/1/channels",
+            json={
+                "provider": provider["code"],
+                "name": "Component lifecycle",
+                "enabled": True,
+                "configuration": {"chat_id": "-100-component"},
+                provider["credential"]["name"]: first_token,
+            },
+        )
+        assert created.status_code == 201
+        channel_id = created.json()["id"]
+        assert created.json()["secretConfigured"] is True
+
+        replaced = client.put(
+            f"/api/v1/projects/1/channels/{channel_id}",
+            json={
+                "provider": provider["code"],
+                "name": "Component lifecycle",
+                "enabled": True,
+                "configuration": {"chat_id": "-100-component"},
+                provider["credential"]["name"]: replacement_token,
+            },
+        )
+        listed = client.get("/api/v1/projects/1/channels")
+        removed = client.post(
+            f"/api/v1/projects/1/channels/{channel_id}/secret/remove"
+        )
+        listed_after = client.get("/api/v1/projects/1/channels")
+
+        assert replaced.status_code == 200
+        assert replaced.json()["secretConfigured"] is True
+        assert listed.json()["items"][0]["secretConfigured"] is True
+        assert removed.status_code == 200
+        assert removed.json()["secretConfigured"] is False
+        assert listed_after.json()["items"][0]["secretConfigured"] is False
+        outbound = json.dumps(
+            [
+                bootstrap.json(),
+                created.json(),
+                replaced.json(),
+                listed.json(),
+                removed.json(),
+                listed_after.json(),
+            ]
+        )
+        assert first_token not in outbound
+        assert replacement_token not in outbound
+
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT encrypted_secret FROM channel_connections "
+                    "WHERE project_id=1 AND id=:id"
+                ),
+                {"id": channel_id},
+            ).scalar_one_or_none() is None
+    finally:
+        api.close()
         engine.dispose()
 
 

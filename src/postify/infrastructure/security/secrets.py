@@ -18,4 +18,3 @@ class SecretCipher:
             return self._fernet.decrypt(value.encode("ascii")).decode("utf-8")
         except (InvalidToken, ValueError, TypeError, UnicodeError):
             raise ValueError("Не удалось расшифровать секрет") from None
-

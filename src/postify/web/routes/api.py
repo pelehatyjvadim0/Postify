@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response
 
 from postify.web.dependencies import WebContainer
 from postify.web.schemas import (
+    BootstrapResponse,
     ChannelRequest,
     ConfigurationSettingsRequest,
     CtaRequest,
@@ -54,7 +55,12 @@ def bootstrap(request: Request, container: Container):
         session = new_session()
     payload = dict(container.api.bootstrap())
     payload["csrfToken"] = capability(request.app.state.csrf_secret, session)
-    response = _response(payload)
+    safe_payload = BootstrapResponse.model_validate(payload).model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_none=True,
+    )
+    response = JSONResponse(content=safe_payload)
     response.set_cookie(
         SESSION_COOKIE,
         session,
