@@ -7,7 +7,7 @@
 
 ## Трассировка и мутации
 
-Nodes `W6-R1`–`W6-R10` описаны в `2026-08-12-wave-6-red.md`.
+Nodes `W6-R1`–`W6-R11` описаны в `2026-08-12-wave-6-red.md`.
 Проверены нагрузочные мутации: потеря `/static` mount,
 пропуск bootstrap, reliance on checkout, session-scoped Playwright, глубокая
 сериализация `mappingproxy`, untyped `NULL` status и потеря wheel assets.
@@ -19,6 +19,7 @@ Nodes `W6-R1`–`W6-R10` описаны в `2026-08-12-wave-6-red.md`.
 | --- | --- | --- |
 | Full PostgreSQL 16 pytest | `707 passed in 61.70s` | Нет |
 | Installed-wheel e2e | `1 passed in 3.14s` | Нет |
+| Hostile ambient review fix | RED `1 failed in 3.26s` → initial GREEN `1 passed in 3.32s`; final `1 passed in 3.24s` | Нет в GREEN |
 | Component regressions | RED `2 failed` → GREEN `2 passed` | Нет |
 | Browser-order regression | RED `1 failed, 73 passed` → GREEN `74 passed` | RED имел expected unawaited warning; GREEN чист |
 | `compileall` | exit `0` | Нет |
@@ -26,6 +27,11 @@ Nodes `W6-R1`–`W6-R10` описаны в `2026-08-12-wave-6-red.md`.
 | Full Ruff | RED `11 errors` → `All checks passed!` | Нет в финале |
 | `uv lock --check` | `Resolved 43 packages` | Нет |
 | `git diff --check` | exit `0` | Нет |
+
+Review fix изменил только installed-wheel e2e и evidence. Production
+не менялся, поэтому full `707 passed` не повторялся. Повторены
+целевой wheel e2e, compileall, full/scoped Ruff, lock и diff-check.
+Visual acceptance не повторялась, так как production UI не менялся.
 
 ## Визуальная приёмка
 

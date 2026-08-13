@@ -20,6 +20,15 @@ ROOT = Path(__file__).parents[2]
 pytestmark = pytest.mark.integration
 
 
+def _subprocess_environment(temporary_directory: Path) -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TMPDIR": str(temporary_directory),
+    }
+
+
 def _schema_url(database_url: str, schema_name: str) -> str:
     parts = urlsplit(database_url)
     query = parse_qs(parts.query)
@@ -37,9 +46,7 @@ def _free_port() -> int:
 
 
 def _runtime_environment(database_url: str, media_dir: Path) -> dict[str, str]:
-    environment = os.environ.copy()
-    environment.pop("PYTHONPATH", None)
-    environment.pop("VIRTUAL_ENV", None)
+    environment = _subprocess_environment(media_dir.parent)
     environment.update(
         {
             "DATABASE_URL": database_url,
@@ -118,12 +125,25 @@ def _wait_for_response(url: str, process: subprocess.Popen[str]) -> httpx.Respon
 
 def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Break caught: wheel UI works only from the checkout, misses an asset/migration,
-    # or starts without creating the configured project.
+    # starts without creating the configured project, or consumes caller secrets.
     database_url = os.environ.get("TEST_DATABASE_URL")
     if database_url is None:
         raise RuntimeError("Для wheel e2e требуется TEST_DATABASE_URL")
+
+    ambient_token = "ambient-token-must-not-be-persisted"
+    ambient_query = "ambient-query-must-not-bootstrap"
+    monkeypatch.setenv(
+        "POSTIFY_SECRET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", ambient_token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "ambient-chat-must-not-bootstrap")
+    monkeypatch.setenv("TELEGRAM_TIMEOUT_SECONDS", "99")
+    monkeypatch.setenv("HN_QUERY", ambient_query)
+    monkeypatch.setenv("HN_ALGOLIA_URL", "https://ambient.example.invalid/search")
+    monkeypatch.setenv("POSTIFY_TIMEZONE", "UTC")
 
     schema_name = f"postify_wheel_{os.urandom(8).hex()}"
     admin_engine = create_engine(database_url)
@@ -132,9 +152,14 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
 
     try:
         wheelhouse = tmp_path / "wheelhouse"
+        tool_environment = {
+            **_subprocess_environment(tmp_path),
+            "UV_NO_CONFIG": "1",
+        }
         subprocess.run(
             ["uv", "build", "--offline", "--wheel", "--out-dir", str(wheelhouse)],
             cwd=ROOT,
+            env=tool_environment,
             check=True,
             capture_output=True,
             text=True,
@@ -159,13 +184,23 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
         virtualenv = tmp_path / "installed"
         subprocess.run(
             ["uv", "venv", "--python", sys.executable, str(virtualenv)],
+            env=tool_environment,
             check=True,
             capture_output=True,
             text=True,
         )
         python = virtualenv / "bin/python"
         subprocess.run(
-            ["uv", "pip", "install", "--python", str(python), str(wheel)],
+            [
+                "uv",
+                "pip",
+                "install",
+                "--offline",
+                "--python",
+                str(python),
+                str(wheel),
+            ],
+            env=tool_environment,
             check=True,
             capture_output=True,
             text=True,
@@ -207,13 +242,30 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
                 bootstrap = httpx.get(
                     f"http://127.0.0.1:{port}/api/v1/bootstrap", timeout=2
                 )
+                settings = httpx.get(
+                    f"http://127.0.0.1:{port}/api/v1/projects/1/settings",
+                    timeout=2,
+                )
 
                 assert root.status_code == 200
                 assert "Postify" in root.text
                 assert styles.status_code == 200
                 assert "--forest" in styles.text
                 assert bootstrap.status_code == 200
-                assert bootstrap.json()["activeProject"]["id"] == 1
+                active_project = bootstrap.json()["activeProject"]
+                assert active_project["id"] == 1
+                assert active_project["topic"] == "python"
+                assert active_project["timezone"] == "Europe/Moscow"
+                assert ambient_query not in bootstrap.text
+                assert ambient_token not in bootstrap.text
+                assert settings.status_code == 200
+                stored_settings = settings.json()
+                assert stored_settings["channels"] == []
+                assert stored_settings["routes"] == []
+                assert stored_settings["sources"][0]["configuration"]["query"] == "python"
+                assert ambient_query not in settings.text
+                assert ambient_token not in settings.text
+                assert "secretConfigured" not in settings.text
             finally:
                 process.send_signal(signal.SIGINT)
                 try:
@@ -223,6 +275,19 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
                     process.wait(timeout=5)
 
         assert process.returncode == 0, log_path.read_text()
+        with admin_engine.connect() as connection:
+            assert connection.execute(
+                text(f'SELECT count(*) FROM "{schema_name}".channel_connections')
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(f'SELECT count(*) FROM "{schema_name}".publication_routes')
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    f'SELECT count(*) FROM "{schema_name}".channel_connections '
+                    "WHERE encrypted_secret IS NOT NULL"
+                )
+            ).scalar_one() == 0
     finally:
         with admin_engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))

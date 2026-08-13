@@ -49,8 +49,14 @@ Task 11 закрывает поставку локального UI: wheel пр�
 4. Первый full Ruff вернул `11` F401. Два import были ненужными;
    девять использовались через dynamic `locals()`. Namespace в тесте
    сделан явным; full и scoped Ruff дали `All checks passed!`.
+5. Important review нашёл наследование caller environment. В RED тест
+   внутри caller были введены hostile `POSTIFY_SECRET_KEY`,
+   `TELEGRAM_*`, `HN_*` и `POSTIFY_TIMEZONE`; installed UI сохранил
+   ambient Telegram channel/route: `1 failed in 3.26s`. После OS allowlist
+   и детерминированных app values тот же тест дал `1 passed in
+   3.32s`; channel/route и encrypted secret в temporary schema отсутствуют.
 
-Полная карта nodes `W6-R1`–`W6-R10` и ловимых мутаций находится
+Полная карта nodes `W6-R1`–`W6-R11` и ловимых мутаций находится
 в `docs/development-loop/evidence/2026-08-12-wave-6-red.md`.
 
 ## Installed-wheel e2e
@@ -65,7 +71,11 @@ env -u DATABASE_URL \
 
 Тест выполняет `uv build --offline --wheel`, проверяет ZIP-состав,
 создаёт fresh temp venv, ставит точно собранный `.whl`, первым
-в `PATH` ставит `bin` этого venv, удаляет `PYTHONPATH` и `VIRTUAL_ENV`,
+в `PATH` ставит `bin` этого venv. Build/venv/offline install и runtime
+получают новый environment из OS allowlist (`PATH`, фиксированная locale,
+выделенный `TMPDIR`); runtime дополняется только явными
+детерминированными app/PG values. Ни `PYTHONPATH`/`VIRTUAL_ENV`, ни любые
+внешние `POSTIFY_*`, `TELEGRAM_*`, `HN_*` в subprocess не попадают. Тест
 мигрирует схему через `importlib.resources` и запускает absolute
 `<temp-venv>/bin/postify` с cwd вне checkout. Проверены:
 
@@ -73,12 +83,14 @@ env -u DATABASE_URL \
 - Alembic `env.py` и head migration `20260812_07`;
 - `/`, `/static/styles.css`, `/api/v1/bootstrap` — HTTP `200`;
 - active project ID `1`;
+- hostile ambient credentials/source/timezone не меняют bootstrap/settings;
+- в БД нет configured channel, route и encrypted secret;
 - graceful `SIGINT`, exit code `0`;
 - случайная схема PostgreSQL удаляется в `finally`.
 
 ## Визуальная приёмка
 
-Абсолютный пут к игнорируемым артефактам:
+Абсолютный путь к игнорируемым артефактам:
 
 `/home/user/Рабочий стол/Postify/.worktrees/ui-v1-html-mockup/tmp/task11-visual/`
 
@@ -132,6 +144,14 @@ git diff --check
 - `uv lock --check`: `Resolved 43 packages in 0.70ms`;
 - `git diff --check`: exit `0`, stdout/stderr пусты.
 
+Important review fix затронул только e2e и evidence, не production. Поэтому
+full PostgreSQL gate из коммита `51cfd61` не повторялся. Свежие gates
+для review-fix tree: installed-wheel e2e `1 passed in 3.24s`; full и scoped
+Ruff — `All checks passed!`; compileall — exit `0` без вывода;
+`uv lock --check` — `Resolved 43 packages in 0.75ms`; `git diff --check` —
+exit `0` без вывода. Visual acceptance не повторялась, поскольку
+production UI не менялся.
+
 ## Шум, cleanup и ограничения
 
 - Начальный full baseline был шумным: `16 failed` и warning о
@@ -140,6 +160,9 @@ git diff --check
 - После всех финальных gates одноразовый container
   `postify-task11-pg16` удалён, а port `55432` освобождён. Удалены
   только одноразовые тестовые данные без recovery requirement.
+  Повторный isolated container `postify-task11-review-pg16` после
+  review-fix gates также удалён; перед удалением счётчик temporary
+  schemas был `0`, port `55432` снова освобождён.
 - UI не имеет authentication; public bind не рекомендован без
   отдельного reverse proxy/auth design.
 - Web scheduler и legacy systemd timers нельзя запускать одновременно.
