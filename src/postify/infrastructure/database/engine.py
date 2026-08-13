@@ -6,4 +6,8 @@ from postify.config import Settings
 
 
 def create_engine_from_settings(settings: Settings) -> Engine:
-    return create_engine(str(settings.database_url))
+    return create_engine(
+        str(settings.database_url),
+        connect_args={"connect_timeout": 5},
+        pool_timeout=5,
+    )

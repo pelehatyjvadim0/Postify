@@ -3,10 +3,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier
+from time import monotonic
 
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from postify.application.scheduling.project_scheduler import ScheduledCommand
@@ -159,6 +161,60 @@ def test_new_repository_after_restart_does_not_reclaim_durable_slot(
         assert restarted.claim(command_to_claim) is False
     finally:
         restarted_engine.dispose()
+
+
+def test_advisory_claim_wait_has_database_timeout(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: occupied project advisory lock держит scheduler worker бесконечно.
+    locker_engine = create_engine(migrated_database_url)
+    repository_engine = create_engine(migrated_database_url)
+    locker = locker_engine.connect()
+    repository = SqlAlchemyScheduleRepository(
+        sessionmaker(repository_engine),
+        lock_timeout_ms=100,
+        statement_timeout_ms=1_000,
+    )
+    try:
+        locker.execute(text("SELECT pg_advisory_lock(1)"))
+        started = monotonic()
+        with pytest.raises(DBAPIError):
+            repository.claim(ScheduledCommand(1, "run_once", SLOT))
+        elapsed = monotonic() - started
+    finally:
+        locker.execute(text("SELECT pg_advisory_unlock(1)"))
+        locker.close()
+        locker_engine.dispose()
+        repository_engine.dispose()
+
+    assert elapsed < 0.5
+
+
+def test_schedule_query_wait_has_statement_timeout(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: blocked configuration SELECT держит scheduler worker бесконечно.
+    locker_engine = create_engine(migrated_database_url)
+    repository_engine = create_engine(migrated_database_url)
+    locker = locker_engine.connect()
+    repository = SqlAlchemyScheduleRepository(
+        sessionmaker(repository_engine),
+        lock_timeout_ms=1_000,
+        statement_timeout_ms=100,
+    )
+    try:
+        locker.execute(text("LOCK TABLE content_projects IN ACCESS EXCLUSIVE MODE"))
+        started = monotonic()
+        with pytest.raises(DBAPIError):
+            repository.list_schedules()
+        elapsed = monotonic() - started
+    finally:
+        locker.rollback()
+        locker.close()
+        locker_engine.dispose()
+        repository_engine.dispose()
+
+    assert elapsed < 0.5
 
 
 def test_schedule_claim_migration_downgrades_and_upgrades_again(

@@ -18,11 +18,24 @@ from postify.infrastructure.database.models import (
 
 
 class SqlAlchemyScheduleRepository:
-    def __init__(self, session_factory) -> None:
+    def __init__(
+        self,
+        session_factory,
+        *,
+        lock_timeout_ms: int = 1_000,
+        statement_timeout_ms: int = 5_000,
+    ) -> None:
+        if type(lock_timeout_ms) is not int or lock_timeout_ms <= 0:
+            raise ValueError("lock_timeout_ms must be positive")
+        if type(statement_timeout_ms) is not int or statement_timeout_ms <= 0:
+            raise ValueError("statement_timeout_ms must be positive")
         self._session_factory = session_factory
+        self._lock_timeout = f"{lock_timeout_ms}ms"
+        self._statement_timeout = f"{statement_timeout_ms}ms"
 
     def list_schedules(self) -> tuple[ProjectSchedule, ...]:
         with self._session_factory() as session:
+            self._set_timeouts(session)
             projects = session.execute(
                 select(ContentProjectModel.id, ContentProjectModel.timezone).order_by(
                     ContentProjectModel.id
@@ -71,6 +84,7 @@ class SqlAlchemyScheduleRepository:
     def claim(self, command: ScheduledCommand) -> bool:
         with self._session_factory() as session:
             try:
+                self._set_timeouts(session)
                 session.execute(
                     text("SELECT pg_advisory_xact_lock(:project_id)"),
                     {"project_id": command.project_id},
@@ -96,3 +110,18 @@ class SqlAlchemyScheduleRepository:
             except BaseException:
                 session.rollback()
                 raise
+
+    def _set_timeouts(self, session) -> None:
+        session.execute(
+            text(
+                """
+                SELECT
+                    set_config('lock_timeout', :lock_timeout, true),
+                    set_config('statement_timeout', :statement_timeout, true)
+                """
+            ),
+            {
+                "lock_timeout": self._lock_timeout,
+                "statement_timeout": self._statement_timeout,
+            },
+        )

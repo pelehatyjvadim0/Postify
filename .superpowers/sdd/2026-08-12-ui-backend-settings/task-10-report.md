@@ -90,3 +90,57 @@ git diff --check
 PostgreSQL 16 запущен в отдельном test-контейнере на
 `127.0.0.1:55432`; каждый integration-тест создавал и удалял
 собственную PostgreSQL schema.
+
+## Исправления после review
+
+### RED
+
+```text
+uv run pytest -q \
+  tests/unit/web/test_scheduler_lifespan.py::test_blocking_sync_tick_keeps_loop_responsive_and_shutdown_bounded
+# 1 failed: event loop был заблокирован 1,00 с синхронным tick
+
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q \
+  tests/integration/infrastructure/test_sqlalchemy_schedule.py::test_advisory_claim_wait_has_database_timeout \
+  tests/integration/infrastructure/test_sqlalchemy_schedule.py::test_schedule_query_wait_has_statement_timeout
+# 2 failed: repository не имел lock_timeout/statement_timeout contract
+
+uv run pytest -q tests/unit/infrastructure/test_database_engine.py
+# 1 failed: engine не ограничивал TCP connect и pool acquisition
+```
+
+### GREEN
+
+- Lifespan владеет одним `ThreadPoolExecutor(max_workers=1)` и выполняет
+  sync tick через `run_in_executor`. Ticks остаются последовательными:
+  на каждый polling cycle не создаются новые threads или detached tasks.
+- Shutdown отменяет и дожидается asyncio polling task, затем выполняет
+  `executor.shutdown(wait=False, cancel_futures=True)`. Python не может принудительно
+  остановить уже запущенный thread; поэтому asyncio shutdown имеет жёсткую
+  границу, а DB worker дополнительно ограничен PostgreSQL timeout’ами.
+- Repository устанавливает transaction-local `lock_timeout=1000ms` и
+  `statement_timeout=5000ms` до schedule queries/claim. Advisory lock, durable insert
+  и commit по-прежнему находятся в одной транзакции.
+- Общий PostgreSQL engine ограничивает TCP connect и pool acquisition
+  пятью секундами; timeout policy покрывает всю DB-границу до начала
+  transaction-local PostgreSQL timeout’ов.
+- Lifespan-тест с реально блокирующим sync method подтверждает
+  отзывчивость event loop, bounded shutdown и завершение polling task.
+  PostgreSQL 16 integration-тесты отдельно доказывают timeout
+  occupied advisory lock и blocked configuration query.
+
+```text
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q tests/unit/application/scheduling \
+  tests/integration/infrastructure/test_sqlalchemy_schedule.py \
+  tests/unit/web/test_scheduler_lifespan.py
+# 19 passed in 2.98s
+
+TEST_DATABASE_URL=postgresql+psycopg://postify_test:postify_test@127.0.0.1:55432/postify_test \
+  uv run pytest -q tests/integration/test_migrations.py \
+  tests/integration/test_web_component.py tests/integration/test_web_run_once_scope.py \
+  tests/unit/web tests/unit/bootstrap/test_open_publish_once.py \
+  tests/unit/infrastructure/test_database_engine.py
+# 34 passed in 3.55s
+```

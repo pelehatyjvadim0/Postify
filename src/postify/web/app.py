@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from inspect import isawaitable
 import logging
@@ -27,8 +28,12 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        scheduler_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="postify-scheduler"
+        )
         task = asyncio.create_task(
-            _poll_scheduler(selected_container.api), name="postify-project-scheduler"
+            _poll_scheduler(selected_container.api, scheduler_executor),
+            name="postify-project-scheduler",
         )
         app.state.scheduler_task = task
         try:
@@ -37,6 +42,7 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+            scheduler_executor.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(lifespan=lifespan)
     app.state.container = selected_container
@@ -106,10 +112,11 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     return app
 
 
-async def _poll_scheduler(api) -> None:
+async def _poll_scheduler(api, executor: ThreadPoolExecutor) -> None:
+    loop = asyncio.get_running_loop()
     while True:
         try:
-            result = api.scheduler_tick()
+            result = await loop.run_in_executor(executor, api.scheduler_tick)
             if isawaitable(result):
                 await result
         except Exception:
