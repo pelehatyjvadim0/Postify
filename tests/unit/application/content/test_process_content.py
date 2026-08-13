@@ -22,7 +22,17 @@ def _api():
         StoredMedia,
     )
 
-    return SimpleNamespace(**locals())
+    return SimpleNamespace(
+        ProcessContent=ProcessContent,
+        ArticleExtractionError=ArticleExtractionError,
+        CodexAnalysisError=CodexAnalysisError,
+        MediaAcquireError=MediaAcquireError,
+        AnalyzedTopic=AnalyzedTopic,
+        BatchAnalysis=BatchAnalysis,
+        ContentLimits=ContentLimits,
+        ExtractedArticle=ExtractedArticle,
+        StoredMedia=StoredMedia,
+    )
 
 
 class FakeRepository:

@@ -164,21 +164,25 @@ class SqlAlchemyDashboardRepository:
         offset: int = 0,
     ) -> tuple[PackageSummary, ...]:
         _bounded(limit, offset)
+        clauses = ["project_id=:project"]
+        params: dict[str, object] = {
+            "project": project_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        if status is not None:
+            clauses.append("status=:status")
+            params["status"] = status
         with self._session_factory() as session:
             rows = (
                 session.execute(
                     text(
                         """SELECT id,status,source_url,post_text,media_path,media_deleted_at,created_at,updated_at
-                    FROM content_packages WHERE project_id=:project
-                    AND (:status IS NULL OR status=:status)
-                    ORDER BY created_at DESC,id DESC LIMIT :limit OFFSET :offset"""
+                    FROM content_packages WHERE """
+                        + " AND ".join(clauses)
+                        + " ORDER BY created_at DESC,id DESC LIMIT :limit OFFSET :offset"
                     ),
-                    {
-                        "project": project_id,
-                        "status": status,
-                        "limit": limit,
-                        "offset": offset,
-                    },
+                    params,
                 )
                 .mappings()
                 .all()

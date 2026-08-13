@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
 from postify.adapters.media.local_media_provider import LocalMediaProvider
 from postify.application.content.review_content import ReviewContent
 from postify.application.dashboard.show_dashboard import ShowDashboard
+from postify.application.projects.bootstrap_project import BootstrapProject
 from postify.application.projects.manage_project import ManageProject
 from postify.application.projects.manage_resources import ManageProjectResources
 from postify.application.projects.manage_schedule import ManageProjectSchedule
@@ -83,6 +85,13 @@ class WebApplication:
         )
         self._source_providers = SourceProviderRegistry()
         self._channel_providers = ChannelProviderRegistry()
+        BootstrapProject(
+            self._projects,
+            self._source_providers,
+            self._channel_providers,
+            cipher=self._cipher,
+            clock=lambda: datetime.now(UTC),
+        ).execute(settings, telegram)
         self._resources = ManageProjectResources(
             self._projects,
             self._source_providers,
@@ -267,10 +276,23 @@ def build_web_api() -> WebApplication:
 
 def _values(value: object) -> dict[str, object]:
     if is_dataclass(value):
-        return asdict(value)
+        return {
+            field.name: _plain_value(getattr(value, field.name))
+            for field in fields(value)
+        }
     if isinstance(value, dict):
         return value
     return {"result": value}
+
+
+def _plain_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_value(item) for item in value]
+    if is_dataclass(value):
+        return _values(value)
+    return value
 
 
 def _project(value) -> dict[str, object]:

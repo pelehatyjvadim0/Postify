@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from postify.domain.projects.models import (
     CallToAction,
@@ -151,4 +150,3 @@ class BootstrapProject:
             project, (source,), (content_format,), (cta,), channels, routes
         )
         return self._repository.create_project_graph(graph)
-

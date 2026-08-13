@@ -119,6 +119,7 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
     app.include_router(router)
     static = _static_directory()
     if static.is_dir():
+        app.mount("/static", StaticFiles(directory=static), name="static-assets")
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
 

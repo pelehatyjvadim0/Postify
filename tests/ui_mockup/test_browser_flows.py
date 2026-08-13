@@ -199,7 +199,7 @@ def base_url() -> Iterator[str]:
         thread.join(timeout=2)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def browser() -> Iterator[Browser]:
     with sync_playwright() as playwright:
         yield _launch_browser(playwright)
