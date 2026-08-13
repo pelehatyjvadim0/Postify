@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
+import json
 from sqlalchemy import text
 from postify.domain.content.models import ContentPackage, validate_transition
 from postify.domain.content.quota import QuotaState, choose_tier, consume_tier_credit
@@ -203,7 +204,15 @@ class SqlAlchemyContentRepository:
             )
 
     def save_analysis_and_create_packages(
-        self, batch, *, articles, review_required, now, day, package_limit
+        self,
+        batch,
+        *,
+        articles,
+        review_required,
+        generation_snapshot=None,
+        now,
+        day,
+        package_limit,
     ):
         with self.sf() as s:
             try:
@@ -253,7 +262,7 @@ class SqlAlchemyContentRepository:
                     a = articles[topic.attempt_id]
                     pid = s.execute(
                         text(
-                            "INSERT INTO content_packages(project_id,attempt_id,source_url,context,analysis,post_text,review_required,status,created_at,updated_at) VALUES (:project,:i,:u,:c,:a,:p,:r,'processing',:n,:n) RETURNING id"
+                            "INSERT INTO content_packages(project_id,attempt_id,source_url,context,analysis,post_text,review_required,status,generation_snapshot,created_at,updated_at) VALUES (:project,:i,:u,:c,:a,:p,:r,'processing',CAST(:snapshot AS jsonb),:n,:n) RETURNING id"
                         ),
                         {
                             "i": topic.attempt_id,
@@ -262,6 +271,9 @@ class SqlAlchemyContentRepository:
                             "a": topic.analysis,
                             "p": topic.post_text,
                             "r": review_required,
+                            "snapshot": json.dumps(
+                                generation_snapshot or {}, ensure_ascii=False
+                            ),
                             "n": now,
                             "project": self.project_id,
                         },
@@ -373,9 +385,8 @@ class SqlAlchemyContentRepository:
             return set(
                 s.scalars(
                     text(
-                        "SELECT media_path FROM content_packages WHERE project_id=:project AND status IN ('processing','awaiting_review','approved') AND media_path IS NOT NULL"
+                        "SELECT media_path FROM content_packages WHERE status IN ('processing','awaiting_review','approved') AND media_path IS NOT NULL"
                     ),
-                    {"project": self.project_id},
                 ).all()
             )
 

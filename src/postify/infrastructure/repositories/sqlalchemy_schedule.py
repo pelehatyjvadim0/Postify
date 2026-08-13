@@ -111,6 +111,55 @@ class SqlAlchemyScheduleRepository:
                 session.rollback()
                 raise
 
+    def accept(self, command: ScheduledCommand) -> int | None:
+        """Atomically owns a slot and its durable operation run."""
+        with self._session_factory() as session:
+            try:
+                self._set_timeouts(session)
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(:project_id)"),
+                    {"project_id": command.project_id},
+                )
+                claimed = session.execute(
+                    text(
+                        """
+                        INSERT INTO schedule_slot_claims
+                            (project_id, kind, scheduled_for)
+                        VALUES (:project_id, :kind, :scheduled_for)
+                        ON CONFLICT (project_id, kind, scheduled_for) DO NOTHING
+                        RETURNING true
+                        """
+                    ),
+                    {
+                        "project_id": command.project_id,
+                        "kind": command.kind,
+                        "scheduled_for": command.scheduled_for,
+                    },
+                ).scalar_one_or_none()
+                if claimed is not True:
+                    session.rollback()
+                    return None
+                run_id = session.execute(
+                    text(
+                        """
+                        INSERT INTO operation_runs
+                            (project_id,operation,status,started_at)
+                        VALUES (:project_id,:kind,'running',CURRENT_TIMESTAMP)
+                        ON CONFLICT (project_id,operation) WHERE status='running'
+                        DO NOTHING RETURNING id
+                        """
+                    ),
+                    {"project_id": command.project_id, "kind": command.kind},
+                ).scalar_one_or_none()
+                if run_id is None:
+                    session.rollback()
+                    return None
+                session.commit()
+                return run_id
+            except BaseException:
+                session.rollback()
+                raise
+
     def _set_timeouts(self, session) -> None:
         session.execute(
             text(

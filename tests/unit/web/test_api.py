@@ -112,14 +112,30 @@ class ApiStub:
 class ApiClient:
     def __init__(self, app) -> None:
         self._app = app
+        self._cookies = httpx.Cookies()
+        self._csrf_token: str | None = None
 
     def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         async def send() -> httpx.Response:
             transport = httpx.ASGITransport(app=self._app)
             async with httpx.AsyncClient(
-                transport=transport, base_url="http://testserver"
+                transport=transport,
+                base_url="http://testserver",
+                cookies=self._cookies,
             ) as client:
-                return await client.request(method, path, **kwargs)
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+                    if self._csrf_token is None:
+                        bootstrap = await client.get("/api/v1/bootstrap")
+                        self._csrf_token = bootstrap.json()["csrfToken"]
+                    headers = dict(kwargs.pop("headers", {}) or {})
+                    headers.setdefault("Origin", "http://testserver")
+                    headers.setdefault("X-Postify-CSRF", self._csrf_token)
+                    kwargs["headers"] = headers
+                response = await client.request(method, path, **kwargs)
+                self._cookies.update(client.cookies)
+                if path == "/api/v1/bootstrap" and response.is_success:
+                    self._csrf_token = response.json()["csrfToken"]
+                return response
 
         return asyncio.run(send())
 
@@ -206,6 +222,50 @@ def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> No
         ),
         ("remove_channel_secret", (1, 2)),
     ]
+
+
+def test_optional_route_schedule_is_omitted_and_invalid_source_cron_is_rejected() -> None:
+    # Поломка review: schedule=None перезатирает NOT NULL default; bad cron тихо never-due.
+    stub = ApiStub()
+    client = client_for(stub)
+
+    route = client.post(
+        "/api/v1/projects/1/routes",
+        json={"format_id": 1, "channel_id": 2, "enabled": True},
+    )
+    invalid_source = client.post(
+        "/api/v1/projects/1/sources",
+        json={
+            "provider": "hn_algolia",
+            "name": "Broken cron",
+            "enabled": True,
+            "configuration": {},
+            "schedule": "whenever convenient",
+        },
+    )
+
+    assert route.status_code == 201
+    assert invalid_source.status_code == 422
+    assert stub.calls == [
+        (
+            "create_resource",
+            (
+                1,
+                "routes",
+                {"format_id": 1, "channel_id": 2, "enabled": True},
+            ),
+        )
+    ]
+
+
+def test_selection_policy_version_is_not_a_client_owned_setting() -> None:
+    # Поломка review: client может подменить audit policy version.
+    response = client_for(ApiStub()).put(
+        "/api/v1/projects/1/settings/configuration",
+        json={"selection_policy_version": "user-controlled-v999"},
+    )
+
+    assert response.status_code == 422
 
 
 def test_schedule_section_is_one_strict_atomic_command() -> None:
@@ -317,6 +377,53 @@ def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     assert [call[0] for call in stub.calls] == [
         "approve", "publish_once", "update_settings", "create_resource", "check_channel", "delete_resource"
     ]
+
+
+def test_mutations_require_same_origin_session_capability_and_trusted_host() -> None:
+    # Поломка review: hostile form/cross-origin page может approve/publish/remove secret.
+    from postify.web.app import create_app
+    from postify.web.dependencies import WebContainer
+
+    async def exercise():
+        app = create_app(WebContainer(api=ApiStub()))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            bootstrap = await client.get("/api/v1/bootstrap")
+            token = bootstrap.json()["csrfToken"]
+            missing = await client.post(
+                "/api/v1/projects/1/packages/7/approve",
+                headers={"Origin": "http://testserver"},
+            )
+            foreign = await client.post(
+                "/api/v1/projects/1/packages/7/approve",
+                headers={
+                    "Origin": "https://attacker.example",
+                    "X-Postify-CSRF": token,
+                },
+            )
+            valid = await client.post(
+                "/api/v1/projects/1/packages/7/approve",
+                headers={
+                    "Origin": "http://testserver",
+                    "X-Postify-CSRF": token,
+                },
+            )
+            hostile_host = await client.get(
+                "/api/v1/bootstrap", headers={"Host": "attacker.example"}
+            )
+        return missing, foreign, valid, hostile_host
+
+    missing, foreign, valid, hostile_host = asyncio.run(exercise())
+
+    assert (missing.status_code, missing.json()["code"]) == (403, "csrf_required")
+    assert (foreign.status_code, foreign.json()["code"]) == (403, "origin_rejected")
+    assert valid.status_code == 200
+    assert (hostile_host.status_code, hostile_host.json()["code"]) == (
+        400,
+        "untrusted_host",
+    )
 
 
 def test_unexpected_error_is_safe_service_unavailable_response(monkeypatch) -> None:

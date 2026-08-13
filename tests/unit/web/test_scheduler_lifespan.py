@@ -18,6 +18,9 @@ class SchedulerApi:
         self.started.set()
         await self.release.wait()
 
+    def close(self) -> None:
+        self.closed = True
+
 
 def test_lifespan_starts_one_scheduler_task_and_stops_it_on_shutdown() -> None:
     # Поломка: startup создаёт 0/2 pollers или shutdown оставляет task живой.
@@ -29,13 +32,14 @@ def test_lifespan_starts_one_scheduler_task_and_stops_it_on_shutdown() -> None:
             task = app.state.scheduler_task
             during = not task.done()
             api.release.set()
-        return api.ticks, during, task.done()
+        return api.ticks, during, task.done(), getattr(api, "closed", False)
 
-    ticks, during, stopped = asyncio.run(exercise())
+    ticks, during, stopped, closed = asyncio.run(exercise())
 
     assert ticks == 1
     assert during is True
     assert stopped is True
+    assert closed is True
 
 
 def test_lifespan_poll_wait_is_short_and_does_not_swallow_cancellation() -> None:

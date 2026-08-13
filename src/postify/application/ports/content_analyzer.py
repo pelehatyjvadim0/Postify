@@ -14,6 +14,8 @@ class GenerationBrief:
     audience: str
     format_instructions: str
     cta: str
+    cta_link_mode: str = "none"
+    cta_url: str | None = None
 
 
 class ContentAnalyzer(Protocol):

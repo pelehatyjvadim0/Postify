@@ -9,7 +9,7 @@ const LABELS = {
   retryable: "Можно повторить", uncertain: "Результат не подтверждён",
   available: "Доступно", unavailable: "Недоступно", deleted: "Удалено",
   run_once: "Поиск и подготовка", publish_once: "Публикация", running: "Выполняется",
-  succeeded: "Успешно", completed: "Завершено",
+  succeeded: "Успешно", completed: "Завершено", active: "Активен",
   cleanup_completed: "Медиа очищено", cleanup_pending: "Ожидает очистки медиа",
   run_once_failed: "Поиск завершился ошибкой",
   publish_once_failed: "Публикация завершилась ошибкой",
@@ -42,6 +42,8 @@ const statusBadge = (code) => `<span class="status-badge status-badge--${escapeH
 const empty = (text) => `<section class="empty-state"><span aria-hidden="true">◇</span><h2>${escapeHtml(text)}</h2><p>Новые данные появятся после следующей операции.</p></section>`;
 
 export function renderOverview(data) {
+  const signals = (data.signals || []).map((item) => `<li>${statusBadge(item.severity)} <span>${escapeHtml(label(item.code))}</span><strong>${escapeHtml(item.count)}</strong></li>`).join("") || "<li>Проблем нет</li>";
+  const operations = (data.recent_operations || []).map((item) => `<li><span><strong>${escapeHtml(label(item.operation))}</strong><small>${escapeHtml(dateTime(item.finished_at || item.started_at))}</small></span>${statusBadge(item.status)}</li>`).join("") || "<li>Запусков пока нет</li>";
   return `<section class="screen" data-screen="overview">
     <div class="studio-strip">
       <div><small>Найдено материалов</small><strong data-metric="candidates">${escapeHtml(data.candidate_total)}</strong></div>
@@ -58,9 +60,10 @@ export function renderOverview(data) {
         </div>
       </section>
       <section class="panel"><div class="panel-head"><div><p class="section-kicker">Лимиты</p><h2 class="panel-title">Сегодня</h2></div></div>
-        <div class="panel-body quiet-list"><p><span>Запущено анализов</span><strong>${escapeHtml(data.daily_analyses_started)}</strong></p><p><span>Создано пакетов</span><strong>${escapeHtml(data.daily_packages_created)}</strong></p></div>
+        <div class="panel-body quiet-list"><p><span>Запущено анализов</span><strong>${escapeHtml(data.daily_analyses_started)}</strong></p><p><span>Создано пакетов</span><strong>${escapeHtml(data.daily_packages_created)}</strong></p><p><span>Дефицит</span><strong>${escapeHtml(data.deficit ?? 0)}</strong></p><p><span>Готово к доставке</span><strong>${escapeHtml((data.ready_delivery_ids || []).length)}</strong></p><ul class="signal-list">${signals}</ul></div>
       </section>
     </div>
+    <section class="panel recent-operations"><div class="panel-head"><div><p class="section-kicker">Журнал</p><h2 class="panel-title">Последние операции</h2></div></div><ul class="operation-summary panel-body">${operations}</ul></section>
   </section>`;
 }
 
@@ -101,7 +104,10 @@ export function renderPublications(data) {
 export function renderJournal(data) {
   const items = data.items || [];
   if (!items.length) return `<section class="screen" data-screen="journal">${empty("Запусков пока нет")}</section>`;
-  return `<section class="screen" data-screen="journal"><div class="journal-toolbar"><div><p class="section-kicker">Операции</p><h2>Последние запуски</h2></div><div><button class="button button--quiet" type="button" data-action="publish-once">Опубликовать один</button><button class="button button--primary" type="button" data-action="new-run">＋ Запустить поиск</button></div></div><div class="journal-list">${items.map((item) => `<button class="journal-row" type="button" data-action="open-run" data-id="${escapeHtml(item.run_id)}"><span class="run-icon">↻</span><span><strong>№ ${escapeHtml(item.run_id)} · ${escapeHtml(label(item.kind))}</strong><small>${escapeHtml(dateTime(item.started_at))}</small></span>${statusBadge(item.status)}<span>${escapeHtml(item.duration ?? "—")} сек.</span><span>→</span></button>`).join("")}</div></section>`;
+  const operational = data.operational || {};
+  const runtime = operational.runtime || {};
+  const signalSummary = (operational.signals || []).map((item) => `${label(item.code)}: ${item.count}`).join(" · ") || "Проблем нет";
+  return `<section class="screen" data-screen="journal"><div class="journal-toolbar"><div><p class="section-kicker">Операции</p><h2>Последние запуски</h2><small>Дефицит: ${escapeHtml(operational.deficit ?? 0)} · ${escapeHtml(signalSummary)}</small><div class="runtime-state"><span>База данных: ${escapeHtml(label(runtime.database))}</span><span>Планировщик: ${escapeHtml(label(runtime.scheduler))}</span></div></div><div><button class="button button--quiet" type="button" data-action="publish-once">Опубликовать один</button><button class="button button--primary" type="button" data-action="new-run">＋ Запустить поиск</button></div></div><div class="journal-list">${items.map((item) => `<button class="journal-row" type="button" data-action="open-run" data-id="${escapeHtml(item.run_id)}"><span class="run-icon">↻</span><span><strong>№ ${escapeHtml(item.run_id)} · ${escapeHtml(label(item.kind))}</strong><small>${escapeHtml(dateTime(item.started_at))}</small></span>${statusBadge(item.status)}<span>${escapeHtml(item.duration ?? "—")} сек.</span><span>→</span></button>`).join("")}</div></section>`;
 }
 
 export const screens = {overview: renderOverview, materials: renderMaterials, review: renderReview, queue: renderQueue, publications: renderPublications, journal: renderJournal};

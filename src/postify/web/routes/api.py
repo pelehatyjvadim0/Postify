@@ -17,6 +17,7 @@ from postify.web.schemas import (
     ScheduleSettingsRequest,
     SourceRequest,
 )
+from postify.web.security import SESSION_COOKIE, capability, new_session
 
 
 router = APIRouter(prefix="/api/v1")
@@ -34,7 +35,7 @@ def _safe(value: object) -> object:
         return {
             key: _safe(item)
             for key, item in value.items()
-            if key.casefold() == "secretconfigured"
+            if key.casefold() in {"secretconfigured", "csrftoken"}
             or ("token" not in key.casefold() and "secret" not in key.casefold())
         }
     if isinstance(value, tuple | list):
@@ -47,8 +48,21 @@ def _response(value: object, *, status_code: int = 200):
 
 
 @router.get("/bootstrap")
-def bootstrap(container: Container):
-    return _response(container.api.bootstrap())
+def bootstrap(request: Request, container: Container):
+    session = request.cookies.get(SESSION_COOKIE)
+    if not session or len(session) > 256:
+        session = new_session()
+    payload = dict(container.api.bootstrap())
+    payload["csrfToken"] = capability(request.app.state.csrf_secret, session)
+    response = _response(payload)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 
 @router.get("/projects/{project_id}/dashboard")
@@ -163,7 +177,9 @@ def _resources(project_id: int, resource: str, container: Container):
 
 def _create_resource(project_id: int, resource: str, body, container: Container):
     return _response(
-        container.api.create_resource(project_id, resource, body.model_dump(mode="json")),
+        container.api.create_resource(
+            project_id, resource, body.model_dump(mode="json", exclude_none=True)
+        ),
         status_code=201,
     )
 
@@ -173,7 +189,10 @@ def _update_resource(
 ):
     return _response(
         container.api.update_resource(
-            project_id, resource, resource_id, body.model_dump(mode="json")
+            project_id,
+            resource,
+            resource_id,
+            body.model_dump(mode="json", exclude_none=True),
         )
     )
 

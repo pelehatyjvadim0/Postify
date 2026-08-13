@@ -132,6 +132,49 @@ def test_two_repository_instances_have_exactly_one_concurrent_claim_winner(
     assert sorted(results) == [False, True]
 
 
+def test_schedule_accept_atomically_creates_operation_or_leaves_slot_retryable(
+    migrated_database_url: str,
+) -> None:
+    # Поломка review: slot claim commit происходит до durable acceptance.
+    from postify.domain.observability.models import OperationKind
+    from postify.infrastructure.repositories.sqlalchemy_observability import (
+        SqlAlchemyOperationRunRepository,
+    )
+
+    engine, repository = _repository(migrated_database_url)
+    operations = SqlAlchemyOperationRunRepository(sessionmaker(engine), project_id=1)
+    busy_slot = SLOT
+    retry_slot = SLOT.replace(minute=1)
+    try:
+        active = operations.start(OperationKind.RUN_ONCE, now=SLOT)
+        assert repository.accept(ScheduledCommand(1, "run_once", busy_slot)) is None
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM schedule_slot_claims "
+                    "WHERE project_id=1 AND kind='run_once' AND scheduled_for=:slot"
+                ),
+                {"slot": busy_slot},
+            ).scalar_one() == 0
+
+        operations.fail(
+            active, failure_code="run_once_failed", now=SLOT.replace(second=1)
+        )
+        run_id = repository.accept(ScheduledCommand(1, "run_once", retry_slot))
+        assert type(run_id) is int
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT r.status,c.scheduled_for FROM operation_runs r "
+                    "JOIN schedule_slot_claims c ON c.project_id=r.project_id "
+                    "AND c.kind=r.operation WHERE r.id=:id"
+                ),
+                {"id": run_id},
+            ).one() == ("running", retry_slot)
+    finally:
+        engine.dispose()
+
+
 def test_claims_are_isolated_by_project(migrated_database_url: str) -> None:
     # Поломка: global advisory/unique key блокирует slot другого project.
     _seed_project_two(migrated_database_url)

@@ -64,5 +64,9 @@ def test_provider_catalog_describes_configuration_without_leaking_common_model_d
         "fields": (
             {"name": "chat_id", "label": "ID чата", "type": "text", "required": True},
         ),
-        "secret": {"name": "token", "label": "Токен бота"},
+        "credential": {
+            "name": "token",
+            "label": "Токен бота",
+            "input_type": "password",
+        },
     },)

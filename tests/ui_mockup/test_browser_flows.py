@@ -16,6 +16,7 @@ PROJECT = "/api/v1/projects/41"
 
 FIXTURES = {
     "/api/v1/bootstrap": {
+        "csrfToken": "browser-fixture-capability",
         "activeProject": {"id": 41, "name": "Технологии просто"},
         "providers": {
             "sources": [{
@@ -34,7 +35,7 @@ FIXTURES = {
                 "fields": [
                     {"name": "chat_id", "label": "ID чата", "type": "text", "required": True},
                 ],
-                "secret": {"name": "token", "label": "Токен бота"},
+                "credential": {"name": "token", "label": "Токен бота", "input_type": "password"},
             }],
         },
     },
@@ -47,6 +48,19 @@ FIXTURES = {
         "published_today": 1,
         "daily_analyses_started": 7,
         "daily_packages_created": 4,
+        "deficit": 1,
+        "ready_delivery_ids": [9001],
+        "signals": [],
+        "runtime": {"database": "available", "scheduler": "active"},
+        "recent_operations": [{
+            "run_id": 9001,
+            "operation": "run_once",
+            "status": "succeeded",
+            "outcome": "completed",
+            "failure_code": None,
+            "finished_at": "2026-08-12T07:00:12Z",
+            "started_at": "2026-08-12T07:00:00Z",
+        }],
     },
     f"{PROJECT}/materials": {
         "items": [{
@@ -68,11 +82,26 @@ FIXTURES = {
             "status": "awaiting_review",
             "source_url": "https://example.test/material-9001",
             "post_text": "Пакет 9001: полезный разбор",
-            "media_available": False,
-            "media_status": "unavailable",
+            "media_available": True,
+            "media_status": "available",
             "created_at": "2026-08-12T09:00:00Z",
             "updated_at": "2026-08-12T09:00:00Z",
         }],
+    },
+    f"{PROJECT}/packages/9001": {
+        "package_id": 9001,
+        "status": "awaiting_review",
+        "source_url": "https://example.test/material-9001",
+        "post_text": "Пакет 9001: полезный разбор",
+        "analysis": "Полезен для продуктовой команды",
+        "media_available": True,
+        "media_status": "available",
+        "media_source_type": "og",
+        "media_source_url": "https://media.example.test/9001.png",
+        "history": [{"status": "awaiting_review", "reason": "generated", "created_at": "2026-08-12T09:00:00Z"}],
+        "generation_snapshot": {"format": {"name": "Практический разбор"}},
+        "created_at": "2026-08-12T09:00:00Z",
+        "updated_at": "2026-08-12T09:00:00Z",
     },
     f"{PROJECT}/queue": {
         "items": [{
@@ -89,11 +118,15 @@ FIXTURES = {
             "delivery_id": 9001,
             "package_id": 8001,
             "provider": "telegram",
-            "status": "uncertain",
-            "attempts": 2,
-            "message_id": None,
-            "failure_code": "telegram_transport_uncertain",
-            "failure_reason": "Ответ канала не подтверждён",
+            "status": "published",
+            "attempt_count": 2,
+            "attempts": [
+                {"attempt_no": 1, "outcome": "retryable", "code": "telegram_retryable", "message_id": None, "started_at": "2026-08-12T09:55:00Z", "finished_at": "2026-08-12T09:56:00Z"},
+                {"attempt_no": 2, "outcome": "published", "code": None, "message_id": 42, "started_at": "2026-08-12T10:00:00Z", "finished_at": "2026-08-12T10:01:00Z"},
+            ],
+            "message_id": 42,
+            "failure_code": None,
+            "failure_reason": None,
             "sending_started_at": "2026-08-12T10:00:00Z",
             "confirmed_at": None,
             "created_at": "2026-08-12T10:00:00Z",
@@ -111,6 +144,12 @@ FIXTURES = {
             "finished_at": "2026-08-12T07:00:12Z",
             "duration": 12,
         }],
+        "operational": {
+            "deficit": 1,
+            "signals": [],
+            "ready_delivery_ids": [9001],
+            "runtime": {"database": "available", "scheduler": "active"},
+        },
     },
     f"{PROJECT}/settings": {
         "project": {
@@ -218,6 +257,9 @@ def install_api(page: Page, requests: list[tuple[str, str]] | None = None) -> No
             requests.append((request.method, path))
         if request.method in {"POST", "PUT", "DELETE"}:
             route.fulfill(status=202 if path.endswith("run-once") else 200, content_type="application/json", body='{"status":"accepted"}')
+            return
+        if "/media/packages/" in path:
+            route.fulfill(status=200, content_type="image/png", body=b"fixture-image")
             return
         payload = FIXTURES.get(path)
         route.fulfill(
@@ -676,10 +718,10 @@ def test_selection_domain_invariants_block_request(
         inspected.close()
 
 
-def test_selection_policy_version_is_required_and_persisted(
+def test_selection_policy_version_is_system_owned_and_not_submitted(
     browser: Browser, base_url: str
 ) -> None:
-    # Break caught: policy version remains read-only and never enters the configuration request.
+    # Break caught: audit policy revision becomes a client-controlled form value.
     inspected = browser.new_page(viewport={"width": 768, "height": 1000})
     calls: list[dict[str, object]] = []
     install_settings_api(inspected, calls)
@@ -687,16 +729,13 @@ def test_selection_policy_version_is_required_and_persisted(
         inspected.goto(f"{base_url}/#settings")
         inspected.locator('[data-settings-section="selection"] > summary').click()
         form = inspected.locator('[data-settings-form="selection"]')
-        policy = form.get_by_label("Версия политики")
-        policy.fill("")
+        assert form.get_by_label("Версия политики").count() == 0
+        assert "project-41-v7" in form.inner_text()
+        form.get_by_label("Окно свежести, дней").fill("31")
         form.get_by_role("button", name="Сохранить").click()
-        assert calls == []
-
-        policy.fill("project-41-v8")
-        form.get_by_role("button", name="Сохранить").click()
-        inspected.locator('[data-settings-section="selection"] .settings-summary-current').filter(has_text="project-41-v8").wait_for()
+        inspected.get_by_text("Настройки сохранены", exact=True).wait_for()
         request = next(call for call in calls if call["path"].endswith("/settings/configuration"))
-        assert request["body"]["selection_policy_version"] == "project-41-v8"
+        assert "selection_policy_version" not in request["body"]
     finally:
         inspected.close()
 
@@ -1036,9 +1075,15 @@ def test_package_source_url_allows_only_http_and_https(
 
     def handle(route: Route) -> None:
         path = "/" + route.request.url.split("/", 3)[-1]
-        if path == f"{PROJECT}/packages":
+        if "/media/packages/" in path:
+            route.fulfill(status=200, content_type="image/png", body=b"fixture-image")
+            return
+        if path in {f"{PROJECT}/packages", f"{PROJECT}/packages/9001"}:
             payload = json.loads(json.dumps(FIXTURES[path]))
-            payload["items"][0]["source_url"] = source_url
+            if "items" in payload:
+                payload["items"][0]["source_url"] = source_url
+            else:
+                payload["source_url"] = source_url
             route.fulfill(json=payload)
             return
         route.fulfill(json=FIXTURES[path])
@@ -1048,7 +1093,7 @@ def test_package_source_url_allows_only_http_and_https(
         inspected.goto(f"{base_url}/#review")
         inspected.locator('[data-action="open-package"]').click()
         source = inspected.locator("#detail-content dd").filter(has_text=source_url)
-        assert source.is_visible()
+        source.wait_for()
         if expected_href is None:
             assert source.locator("a").count() == 0
         else:
@@ -1056,6 +1101,44 @@ def test_package_source_url_allows_only_http_and_https(
         assert inspected.evaluate("window.__unsafeUrl") is None
     finally:
         inspected.close()
+
+
+def test_review_detail_loads_real_detail_history_analysis_and_media(
+    browser: Browser, base_url: str
+) -> None:
+    # Break caught: review modal reuses summary and renders a placeholder instead of package endpoints.
+    inspected = browser.new_page()
+    requests: list[tuple[str, str]] = []
+    install_api(inspected, requests)
+    try:
+        inspected.goto(f"{base_url}/#review")
+        inspected.locator('[data-action="open-package"]').click()
+
+        inspected.get_by_text("Полезен для продуктовой команды", exact=True).wait_for()
+        assert inspected.locator(".package-history").get_by_text("generated", exact=True).is_visible()
+        assert inspected.locator(".package-media").get_attribute("src") == f"{PROJECT}/media/packages/9001"
+        assert ("GET", f"{PROJECT}/packages/9001") in requests
+        inspected.locator(".package-media").evaluate("image => image.decode().catch(() => undefined)")
+        assert ("GET", f"{PROJECT}/media/packages/9001") in requests
+    finally:
+        inspected.close()
+
+
+def test_publication_detail_renders_attempt_outcomes_and_external_message_id(
+    page: Page, base_url: str
+) -> None:
+    # Break caught: attempt_no is shown as history count while rows/message ID stay hidden.
+    page.goto(f"{base_url}/#publications")
+    page.locator('[data-action="open-delivery"]').click()
+
+    detail = page.locator("#detail-content")
+    assert detail.get_by_text("message ID: 42", exact=True).is_visible()
+    assert detail.get_by_text("Можно повторить", exact=True).is_visible()
+    assert (
+        detail.locator(".package-history")
+        .get_by_text("Опубликовано", exact=True)
+        .is_visible()
+    )
 
 
 def test_all_emitted_domain_codes_have_explicit_russian_labels(page: Page, base_url: str) -> None:
@@ -1249,6 +1332,7 @@ def test_mobile_review_keeps_thumbnail_copy_and_both_actions_visible(page: Page,
     assert thumbnail["x"] + thumbnail["width"] <= copy["x"]
 
     page.locator('[data-action="open-package"]').click()
+    page.locator('[data-action="show-reject-form"]').wait_for()
     assert page.locator('[data-action="show-reject-form"]').is_visible()
     assert page.locator('[data-action="approve-package"]').is_visible()
 
@@ -1257,3 +1341,20 @@ def test_journal_starts_with_operational_content_without_status_banner(page: Pag
     page.goto(f"{base_url}/#journal")
     assert page.locator(".system-banner").count() == 0
     assert page.locator(".journal-list").is_visible()
+
+
+def test_overview_and_journal_render_runtime_and_recent_operations(
+    page: Page, base_url: str
+) -> None:
+    # Break caught: operational fields exist in JSON but remain invisible on both screens.
+    page.goto(f"{base_url}/#overview")
+    recent = page.locator(".recent-operations")
+    recent.wait_for()
+    assert recent.get_by_text("Поиск и подготовка", exact=True).is_visible()
+    assert recent.get_by_text("Успешно", exact=True).is_visible()
+
+    page.goto(f"{base_url}/#journal")
+    runtime = page.locator(".runtime-state")
+    runtime.wait_for()
+    assert runtime.get_by_text("База данных: Доступно", exact=True).is_visible()
+    assert runtime.get_by_text("Планировщик: Активен", exact=True).is_visible()

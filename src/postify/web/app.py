@@ -7,6 +7,7 @@ from inspect import isawaitable
 import logging
 from pathlib import Path
 from uuid import uuid4
+from secrets import token_bytes
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -18,12 +19,22 @@ from starlette.staticfiles import StaticFiles
 from postify.web.dependencies import WebContainer, build_default_container
 from postify.web.errors import ApiError, error_response
 from postify.web.routes.api import router
+from postify.web.security import (
+    MUTATION_METHODS,
+    same_origin,
+    trusted_host,
+    valid_capability,
+)
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-def create_app(container: WebContainer | None = None) -> FastAPI:
+def create_app(
+    container: WebContainer | None = None,
+    *,
+    trusted_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "::1", "testserver"),
+) -> FastAPI:
     selected_container = container or build_default_container()
 
     @asynccontextmanager
@@ -54,13 +65,25 @@ def create_app(container: WebContainer | None = None) -> FastAPI:
                     wait=True,
                     cancel_futures=True,
                 )
+                close = getattr(selected_container.api, "close", None)
+                if callable(close):
+                    await asyncio.to_thread(close)
 
     app = FastAPI(lifespan=lifespan)
     app.state.container = selected_container
+    app.state.csrf_secret = token_bytes(32)
+    app.state.trusted_hosts = frozenset(host.casefold() for host in trusted_hosts)
 
     @app.middleware("http")
     async def assign_request_id(request: Request, call_next):
         request.state.request_id = uuid4().hex
+        if not trusted_host(request):
+            return error_response(request, 400, "untrusted_host")
+        if request.url.path.startswith("/api/v1/") and request.method in MUTATION_METHODS:
+            if not same_origin(request):
+                return error_response(request, 403, "origin_rejected")
+            if not valid_capability(request):
+                return error_response(request, 403, "csrf_required")
         try:
             return await call_next(request)
         except Exception:

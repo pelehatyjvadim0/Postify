@@ -6,6 +6,8 @@ from alembic import command
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import create_engine
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from postify.infrastructure.repositories.sqlalchemy_projects import (
@@ -184,5 +186,80 @@ def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
             "autopublish": True,
             "slots": ["09:00", "14:00", "19:00"],
         }
+    finally:
+        engine.dispose()
+
+
+def test_route_references_are_project_scoped_in_repository_and_database(
+    alembic_config, isolated_database_url
+) -> None:
+    # Поломка review: global FK разрешает route project 1 -> resources project 2.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
+    now = datetime(2026, 8, 12, 9, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO content_projects
+                    (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
+                    VALUES (2,'P2','Topic','ru','Audience','UTC','{}',:now,:now)"""
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO content_formats
+                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                    VALUES (202,2,'P2 format','text','Text',true,:now,:now)"""
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO channel_connections
+                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                    VALUES (302,2,'telegram','P2 channel',true,
+                            '{\"chat_id\":\"2\"}','configured',:now,:now)"""
+                ),
+                {"now": now},
+            )
+
+        with pytest.raises(LookupError):
+            repository.validate_route_references(1, 202, 302, None)
+
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """INSERT INTO publication_routes
+                        (project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
+                        VALUES (1,202,302,true,'{}',:now,:now)"""
+                    ),
+                    {"now": now},
+                )
+    finally:
+        engine.dispose()
+
+
+def test_operational_write_without_project_id_fails_closed(
+    alembic_config, isolated_database_url
+) -> None:
+    # Поломка review: temporary default=1 скрывает потерю scope.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """INSERT INTO candidates
+                        (source_name,source_id,title,url,discovered_at,raw_payload)
+                        VALUES ('source','missing-scope','Title','https://example.test',
+                                :now,'{}')"""
+                    ),
+                    {"now": datetime(2026, 8, 12, 9, tzinfo=UTC)},
+                )
     finally:
         engine.dispose()

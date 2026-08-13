@@ -49,3 +49,23 @@ class SourceProviderRegistry:
         if type(hits) is not int or not 1 <= hits <= 1000:
             raise ValueError("hits должен быть от 1 до 1000")
         return {"url": url, "query": query, "tags": tags, "hits": hits}
+
+    def create(self, connection, *, client):
+        from postify.adapters.sources.hn_algolia import HnAlgoliaCandidateSource
+
+        configuration = self.validate(connection.provider, connection.configuration)
+        factories = {
+            "hn_algolia": lambda: HnAlgoliaCandidateSource(
+                client=client,
+                url=configuration["url"],
+                query=configuration["query"],
+                tags=configuration["tags"],
+                hits=configuration["hits"],
+            )
+        }
+        try:
+            return factories[connection.provider]()
+        except KeyError:
+            raise UnsupportedProvider(
+                f"Источник {connection.provider} не поддерживается"
+            ) from None

@@ -26,8 +26,13 @@ class SqlAlchemyOperationRunRepository:
             try:
                 run_id = session.execute(text("""
                     INSERT INTO operation_runs(project_id,operation,status,started_at)
-                    VALUES (:project,:operation,'running',:now) RETURNING id
-                """), {"project": self.project_id, "operation": OperationKind(operation).value, "now": now}).scalar_one()
+                    VALUES (:project,:operation,'running',:now)
+                    ON CONFLICT (project_id,operation) WHERE status='running'
+                    DO NOTHING RETURNING id
+                """), {"project": self.project_id, "operation": OperationKind(operation).value, "now": now}).scalar_one_or_none()
+                if run_id is None:
+                    session.rollback()
+                    raise RuntimeError("operation_busy")
                 session.commit()
                 return run_id
             except BaseException:

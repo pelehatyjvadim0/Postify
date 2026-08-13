@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import text
 
 from postify.domain.delivery.models import DeliveryClaim, PublishFailureKind
 
 
 class SqlAlchemyDeliveryRepository:
-    def __init__(self, session_factory, project_id: int = 1) -> None:
+    def __init__(
+        self,
+        session_factory,
+        project_id: int = 1,
+        *,
+        route_id: int | None = None,
+        channel_id: int | None = None,
+        channel_snapshot: dict[str, object] | None = None,
+    ) -> None:
         self.sf = session_factory
         self.project_id = project_id
+        self.route_id = route_id
+        self.channel_id = channel_id
+        self.channel_snapshot = channel_snapshot or {}
 
     def reserve_next(self, *, now):
         with self.sf() as session:
@@ -28,9 +41,21 @@ class SqlAlchemyDeliveryRepository:
                 if row.delivery_id is None:
                     delivery_id = session.execute(text("""
                         INSERT INTO deliveries
-                        (project_id,package_id,status,attempt_no,sending_started_at,created_at,updated_at)
-                        VALUES (:project,:package_id,'sending',1,:now,:now,:now) RETURNING id
-                    """), {"project": self.project_id, "package_id": row.id, "now": now}).scalar_one()
+                        (project_id,package_id,route_id,channel_id,channel_snapshot,
+                         status,attempt_no,sending_started_at,created_at,updated_at)
+                        VALUES (:project,:package_id,:route_id,:channel_id,
+                                CAST(:channel_snapshot AS jsonb),'sending',1,:now,:now,:now)
+                        RETURNING id
+                    """), {
+                        "project": self.project_id,
+                        "package_id": row.id,
+                        "route_id": self.route_id,
+                        "channel_id": self.channel_id,
+                        "channel_snapshot": json.dumps(
+                            self.channel_snapshot, ensure_ascii=False
+                        ),
+                        "now": now,
+                    }).scalar_one()
                     attempt_no = 1
                 else:
                     attempt_no = row.attempt_no + 1

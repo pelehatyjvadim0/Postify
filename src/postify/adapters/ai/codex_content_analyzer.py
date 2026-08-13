@@ -179,17 +179,23 @@ class CodexContentAnalyzer:
         package_limit: int,
         brief: GenerationBrief | None = None,
     ) -> str:
+        include_source = brief is not None and brief.cta_link_mode == "source"
         material = "\n\n".join(
-            f"Попытка {article.attempt_id}. Заголовок: {article.title}\nПолный текст статьи:\n{article.text}"
+            f"Попытка {article.attempt_id}. Заголовок: {article.title}"
+            + (f"\nURL источника: {article.source_url}" if include_source else "")
+            + f"\nПолный текст статьи:\n{article.text}"
             for article in articles
         )
         product_context = ""
         language_instruction = "Пиши анализ и выбранные посты на русском. "
         if brief is not None:
+            cta = brief.cta
+            if brief.cta_link_mode == "custom" and brief.cta_url:
+                cta = f"{cta}: {brief.cta_url}"
             product_context = (
                 f"Тема проекта: {brief.topic}. Язык: {brief.language}. "
                 f"Аудитория: {brief.audience}. Формат: {brief.format_instructions}. "
-                f"CTA: {brief.cta}.\n"
+                f"CTA: {cta}.\n"
             )
             language_instruction = (
                 f"Пиши анализ и выбранные посты на языке {brief.language}. "
@@ -198,7 +204,12 @@ class CodexContentAnalyzer:
             product_context
             + "Проанализируй каждую статью и верни ровно один outcome на каждую попытку. "
             f"Выбери не более {package_limit}. {language_instruction}"
-            "Не добавляй source URL или URL источника в посты.\n\n" + material
+            + (
+                "Добавь URL источника только в CTA выбранных постов.\n\n"
+                if include_source
+                else "Не добавляй source URL или URL источника в посты.\n\n"
+            )
+            + material
         )
 
     @staticmethod

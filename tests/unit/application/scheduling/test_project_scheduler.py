@@ -139,6 +139,28 @@ def test_repeat_tick_in_same_minute_does_not_submit_claimed_slot_again() -> None
     assert submitted == list(first)
 
 
+def test_production_repository_passes_atomically_accepted_run_to_worker() -> None:
+    # Поломка review: scheduler создаёт durable run, но worker пытается создать второй.
+    class DurableScheduleRepository(ScheduleRepository):
+        def accept(self, command) -> int:
+            return 991
+
+        def claim(self, command) -> bool:
+            raise AssertionError("durable repository must use atomic accept")
+
+    repository = DurableScheduleRepository(
+        (_project(sources=(SourceSchedule(True, "0 9 * * *"),)),)
+    )
+    submitted = []
+
+    commands = ProjectScheduler(repository, submitted.append).tick(
+        datetime(2026, 8, 12, 6, tzinfo=UTC)
+    )
+
+    assert commands[0].operation_run_id == 991
+    assert submitted == list(commands)
+
+
 def test_disabled_sources_routes_and_autopublish_do_not_produce_commands() -> None:
     # Поломка: scheduler игнорирует enabled/autopublish и запускает отключённую работу.
     repository = ScheduleRepository(
@@ -179,8 +201,8 @@ def test_runner_busy_does_not_turn_claimed_command_into_a_second_flow() -> None:
         raise AssertionError("Scheduler must preserve runner duplicate semantics")
 
 
-def test_scheduled_publish_uses_same_web_application_boundary_as_http() -> None:
-    # Поломка: scheduled publish обходит HTTP availability/duplicate boundary.
+def test_scheduled_publish_uses_persisted_web_boundary_without_env_telegram_gate() -> None:
+    # Поломка review: env Telegram решает доступность persisted route.
     from postify.web.services import WebApplication
 
     class Projects:
@@ -203,14 +225,14 @@ def test_scheduled_publish_uses_same_web_application_boundary_as_http() -> None:
     application._operations = Operations()
     application._telegram = None
 
-    try:
-        application._submit_scheduled(
-            ScheduledCommand(41, "publish_once", datetime(2026, 8, 12, 6, tzinfo=UTC))
+    application._submit_scheduled(
+        ScheduledCommand(
+            41,
+            "publish_once",
+            datetime(2026, 8, 12, 6, tzinfo=UTC),
+            operation_run_id=91,
         )
-    except RuntimeError as error:
-        assert str(error) == "service_unavailable"
-    else:
-        raise AssertionError("Scheduled publish must use WebApplication.publish_once")
+    )
 
     assert application._projects.requested == [41]
-    assert application._operations.submitted == []
+    assert application._operations.submitted == [(41, "publish_once")]

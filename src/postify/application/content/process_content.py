@@ -8,6 +8,7 @@ from postify.application.ports.article_extractor import ArticleExtractor
 from postify.application.ports.content_analyzer import ContentAnalyzer
 from postify.application.ports.content_repository import ContentRepository
 from postify.application.ports.media_provider import MediaProvider
+from postify.application.ports.content_analyzer import GenerationBrief
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,8 @@ class ProcessContent:
         limits: ContentLimits,
         review_required: bool,
         timezone: str,
+        generation_brief: GenerationBrief | None = None,
+        generation_snapshot: dict[str, object] | None = None,
         clock: Callable[[], datetime],
     ):
         self.r = repository
@@ -41,6 +44,8 @@ class ProcessContent:
         self.limits = limits
         self.review = review_required
         self.tz = ZoneInfo(timezone)
+        self.brief = generation_brief
+        self.generation_snapshot = dict(generation_snapshot or {})
         self.clock = clock
 
     def execute(self):
@@ -73,11 +78,13 @@ class ProcessContent:
             AnalysisInput(i, a.source_url, a.title, a.text) for i, a in articles.items()
         )
         try:
-            batch = self.a.analyze(
-                inputs,
-                self.r.package_slots_remaining(
-                    day=day, limit=self.limits.package_limit
-                ),
+            package_slots = self.r.package_slots_remaining(
+                day=day, limit=self.limits.package_limit
+            )
+            batch = (
+                self.a.analyze(inputs, package_slots, self.brief)
+                if self.brief is not None
+                else self.a.analyze(inputs, package_slots)
             )
         except Exception as error:
             code = getattr(error, "code", "codex_failed")
@@ -88,6 +95,7 @@ class ProcessContent:
             batch,
             articles=articles,
             review_required=self.review,
+            generation_snapshot=self.generation_snapshot,
             now=now,
             day=day,
             package_limit=self.limits.package_limit,

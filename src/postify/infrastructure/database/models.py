@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -25,7 +25,7 @@ class CandidateModel(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_projects.id"), nullable=False, default=1
+        BigInteger, ForeignKey("content_projects.id"), nullable=False
     )
     source_name: Mapped[str] = mapped_column(String, nullable=False)
     source_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -51,7 +51,7 @@ class CandidateDecisionModel(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_projects.id"), nullable=False, default=1
+        BigInteger, ForeignKey("content_projects.id"), nullable=False
     )
     candidate_id: Mapped[int] = mapped_column(
         BigInteger,
@@ -103,6 +103,11 @@ class SourceConnectionModel(Base):
 
 class ContentFormatModel(Base):
     __tablename__ = "content_formats"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "id", name="uq_content_formats_project_id_id"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
@@ -118,6 +123,11 @@ class ContentFormatModel(Base):
 
 class CallToActionModel(Base):
     __tablename__ = "calls_to_action"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "id", name="uq_calls_to_action_project_id_id"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
@@ -134,6 +144,11 @@ class CallToActionModel(Base):
 
 class ChannelConnectionModel(Base):
     __tablename__ = "channel_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "id", name="uq_channel_connections_project_id_id"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
@@ -152,19 +167,45 @@ class ChannelConnectionModel(Base):
 
 class PublicationRouteModel(Base):
     __tablename__ = "publication_routes"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "format_id",
+            "channel_id",
+            name="uq_publication_routes_project_format_channel",
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_publication_routes_project_id_id"
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "format_id"],
+            ["content_formats.project_id", "content_formats.id"],
+            name="fk_publication_routes_project_format",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "channel_id"],
+            ["channel_connections.project_id", "channel_connections.id"],
+            name="fk_publication_routes_project_channel",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "cta_id"],
+            ["calls_to_action.project_id", "calls_to_action.id"],
+            name="fk_publication_routes_project_cta",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("content_projects.id"), nullable=False
     )
     format_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_formats.id"), nullable=False
+        BigInteger, nullable=False
     )
     channel_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("channel_connections.id"), nullable=False
+        BigInteger, nullable=False
     )
     cta_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("calls_to_action.id")
+        BigInteger
     )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     schedule: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

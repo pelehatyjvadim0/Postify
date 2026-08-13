@@ -5,7 +5,7 @@ from alembic.config import Config
 from datetime import UTC, datetime
 import pytest
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 
 pytestmark = pytest.mark.integration
@@ -604,3 +604,89 @@ def test_project_migration_scopes_existing_rows_and_generalises_connections(
             ).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_production_invariants_migration_downgrades_and_upgrades_again(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка final review: project_id default не снят или rollback неповторяем.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        inspector = inspect(engine)
+        assert inspector.get_columns("candidates")[-1]["name"] == "project_id"
+        assert next(
+            column
+            for column in inspector.get_columns("candidates")
+            if column["name"] == "project_id"
+        )["default"] is None
+        active_index = next(
+            index
+            for index in inspector.get_indexes("operation_runs")
+            if index["name"] == "uq_operation_runs_active_project_operation"
+        )
+        assert active_index["unique"] is True
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "20260812_07")
+    engine = create_engine(isolated_database_url)
+    try:
+        project_default = next(
+            column
+            for column in inspect(engine).get_columns("candidates")
+            if column["name"] == "project_id"
+        )["default"]
+        assert project_default is not None and "1" in project_default
+    finally:
+        engine.dispose()
+
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        project_default = next(
+            column
+            for column in inspect(engine).get_columns("candidates")
+            if column["name"] == "project_id"
+        )["default"]
+        assert project_default is None
+    finally:
+        engine.dispose()
+
+
+def test_project_migration_downgrade_reports_project_scoped_duplicates(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Поломка final review: rollback падает opaque unique violation вместо preflight.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    now = datetime(2026, 8, 13, 9, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO content_projects
+                    (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
+                    VALUES (2,'Второй','Тема','ru','Аудитория','Europe/Moscow',
+                            '{}'::jsonb,:now,:now)"""
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO candidates
+                    (id,project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                    VALUES
+                    (1,1,'source','same','Первый','https://example.test/1',:now,'{}'),
+                    (2,2,'source','same','Второй','https://example.test/2',:now,'{}')"""
+                ),
+                {"now": now},
+            )
+    finally:
+        engine.dispose()
+
+    with pytest.raises(
+        ProgrammingError,
+        match="Нельзя откатить 20260812_06.*candidates",
+    ):
+        command.downgrade(alembic_config, "20260809_05")

@@ -1,4 +1,5 @@
 const API_ROOT = "/api/v1";
+let csrfCapability = null;
 
 export class ApiError extends Error {
   constructor(status, code) {
@@ -12,6 +13,9 @@ export class ApiError extends Error {
 export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
+  if (!["GET", "HEAD", "OPTIONS"].includes(options.method || "GET") && csrfCapability) {
+    headers.set("X-Postify-CSRF", csrfCapability);
+  }
   const response = await fetch(`${API_ROOT}${path}`, {...options, headers});
   if (!response.ok) {
     let code = "request_failed";
@@ -23,13 +27,18 @@ export async function request(path, options = {}) {
 
 const projectPath = (projectId, resource) => `/projects/${projectId}/${resource}`;
 
-export const getBootstrap = (signal) => request("/bootstrap", {signal});
+export const getBootstrap = async (signal) => {
+  const bootstrap = await request("/bootstrap", {signal});
+  csrfCapability = bootstrap.csrfToken;
+  return bootstrap;
+};
 export const getDashboard = (projectId, signal) => request(projectPath(projectId, "dashboard"), {signal});
 export const getMaterials = (projectId, signal, status = null) => {
   const query = status && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
   return request(`${projectPath(projectId, "materials")}${query}`, {signal});
 };
 export const getPackages = (projectId, signal) => request(projectPath(projectId, "packages"), {signal});
+export const getPackage = (projectId, packageId, signal) => request(projectPath(projectId, `packages/${packageId}`), {signal});
 export const getQueue = (projectId, signal) => request(projectPath(projectId, "queue"), {signal});
 export const getPublications = (projectId, signal) => request(projectPath(projectId, "publications"), {signal});
 export const getOperations = (projectId, signal) => request(projectPath(projectId, "operations"), {signal});

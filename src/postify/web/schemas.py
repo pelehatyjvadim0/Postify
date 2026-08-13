@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from postify.domain.projects.cron import normalize_cron
+
 
 class RequestSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,7 +24,6 @@ class MainSettingsRequest(RequestSchema):
 
 
 class ConfigurationSettingsRequest(RequestSchema):
-    selection_policy_version: str | None = Field(default=None, min_length=1)
     selection_rules: tuple[str, ...] | None = None
     topic_terms: tuple[str, ...] | None = None
     topic_exclusion_terms: tuple[str, ...] | None = None
@@ -48,6 +49,11 @@ class SourceRequest(RequestSchema):
     enabled: bool
     configuration: dict[str, Any]
     schedule: str = Field(min_length=1)
+
+    @field_validator("schedule")
+    @classmethod
+    def valid_cron(cls, value: str) -> str:
+        return normalize_cron(value)
 
 
 class ChannelRequest(RequestSchema):
@@ -88,6 +94,11 @@ class PublicationScheduleRequest(RequestSchema):
 class SourceScheduleRequest(RequestSchema):
     id: int = Field(gt=0)
     schedule: str = Field(min_length=1)
+
+    @field_validator("schedule")
+    @classmethod
+    def valid_cron(cls, value: str) -> str:
+        return normalize_cron(value)
 
 
 class RouteScheduleRequest(PublicationScheduleRequest):

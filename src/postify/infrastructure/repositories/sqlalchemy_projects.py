@@ -2,9 +2,21 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
-from postify.domain.projects.models import ContentProject, ProjectConfiguration
+from postify.domain.projects.models import (
+    CallToAction,
+    ChannelConnection,
+    ContentFormat,
+    ContentProject,
+    ProjectConfiguration,
+    PublicationRoute,
+    SourceConnection,
+)
+from postify.application.projects.runtime_configuration import (
+    ProjectRuntimeGraph,
+    RuntimeChannel,
+)
 from postify.infrastructure.database.models import (
     CallToActionModel,
     ChannelConnectionModel,
@@ -36,6 +48,93 @@ class SqlAlchemyProjectRepository:
             if model is None or not model.configuration:
                 return None
             return _project(model)
+
+    def runtime_graph(self, project_id: int) -> ProjectRuntimeGraph:
+        project = self.get(project_id)
+        with self._session_factory() as session:
+            sources = tuple(
+                SourceConnection(
+                    item.id,
+                    item.project_id,
+                    item.provider,
+                    item.name,
+                    item.enabled,
+                    dict(item.configuration),
+                    item.schedule,
+                )
+                for item in session.scalars(
+                    select(SourceConnectionModel)
+                    .where(SourceConnectionModel.project_id == project_id)
+                    .order_by(SourceConnectionModel.id)
+                ).all()
+            )
+            formats = tuple(
+                ContentFormat(
+                    item.id,
+                    item.project_id,
+                    item.name,
+                    item.kind,
+                    item.instructions,
+                    item.enabled,
+                )
+                for item in session.scalars(
+                    select(ContentFormatModel)
+                    .where(ContentFormatModel.project_id == project_id)
+                    .order_by(ContentFormatModel.id)
+                ).all()
+            )
+            ctas = tuple(
+                CallToAction(
+                    item.id,
+                    item.project_id,
+                    item.name,
+                    item.text,
+                    item.link_mode,
+                    item.custom_url,
+                    item.enabled,
+                )
+                for item in session.scalars(
+                    select(CallToActionModel)
+                    .where(CallToActionModel.project_id == project_id)
+                    .order_by(CallToActionModel.id)
+                ).all()
+            )
+            channels = tuple(
+                RuntimeChannel(
+                    ChannelConnection(
+                        item.id,
+                        item.project_id,
+                        item.provider,
+                        item.name,
+                        item.enabled,
+                        dict(item.configuration),
+                        item.encrypted_secret is not None,
+                        item.connection_status,
+                    ),
+                    item.encrypted_secret,
+                )
+                for item in session.scalars(
+                    select(ChannelConnectionModel)
+                    .where(ChannelConnectionModel.project_id == project_id)
+                    .order_by(ChannelConnectionModel.id)
+                ).all()
+            )
+            routes = tuple(
+                PublicationRoute(
+                    item.id,
+                    item.project_id,
+                    item.format_id,
+                    item.channel_id,
+                    item.cta_id,
+                    item.enabled,
+                )
+                for item in session.scalars(
+                    select(PublicationRouteModel)
+                    .where(PublicationRouteModel.project_id == project_id)
+                    .order_by(PublicationRouteModel.id)
+                ).all()
+            )
+        return ProjectRuntimeGraph(project, sources, formats, ctas, channels, routes)
 
     def create_project_graph(self, graph) -> ContentProject:
         with self._session_factory() as session:
@@ -131,6 +230,22 @@ class SqlAlchemyProjectRepository:
                             },
                             created_at=graph.project.created_at,
                             updated_at=graph.project.updated_at,
+                        )
+                    )
+                for table in (
+                    "content_projects",
+                    "source_connections",
+                    "content_formats",
+                    "calls_to_action",
+                    "channel_connections",
+                    "publication_routes",
+                ):
+                    session.execute(
+                        text(
+                            f"""SELECT setval(
+                            pg_get_serial_sequence('{table}', 'id'),
+                            GREATEST(COALESCE((SELECT max(id) FROM {table}), 1), 1),
+                            true)"""
                         )
                     )
                 session.commit()
@@ -347,6 +462,30 @@ class SqlAlchemyProjectRepository:
         if resource == "channels":
             values["encrypted_secret"] = item.encrypted_secret
         return values
+
+    def validate_route_references(
+        self,
+        project_id: int,
+        format_id: int,
+        channel_id: int,
+        cta_id: int | None,
+    ) -> None:
+        references = [
+            (ContentFormatModel, format_id),
+            (ChannelConnectionModel, channel_id),
+        ]
+        if cta_id is not None:
+            references.append((CallToActionModel, cta_id))
+        with self._session_factory() as session:
+            for model, resource_id in references:
+                found = session.scalar(
+                    select(model.id).where(
+                        model.project_id == project_id,
+                        model.id == resource_id,
+                    )
+                )
+                if found is None:
+                    raise LookupError(resource_id)
 
     def set_channel_status(
         self, project_id: int, channel_id: int, status: str, now: datetime

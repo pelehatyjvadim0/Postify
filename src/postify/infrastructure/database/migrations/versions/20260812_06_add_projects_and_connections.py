@@ -298,6 +298,46 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            conflicts text[];
+        BEGIN
+            conflicts := array_remove(ARRAY[
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM candidates
+                    GROUP BY source_name, source_id HAVING count(*) > 1
+                ) THEN 'candidates(source_name,source_id)' END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM candidate_decisions
+                    GROUP BY candidate_id HAVING count(*) > 1
+                ) THEN 'candidate_decisions(candidate_id)' END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM content_attempts
+                    GROUP BY candidate_id, attempt_no HAVING count(*) > 1
+                ) THEN 'content_attempts(candidate_id,attempt_no)' END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM content_packages
+                    GROUP BY attempt_id HAVING count(*) > 1
+                ) THEN 'content_packages(attempt_id)' END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM content_quota_state
+                    GROUP BY id HAVING count(*) > 1
+                ) THEN 'content_quota_state(id)' END,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM content_daily_usage
+                    GROUP BY day HAVING count(*) > 1
+                ) THEN 'content_daily_usage(day)' END
+            ], NULL);
+            IF cardinality(conflicts) > 0 THEN
+                RAISE EXCEPTION
+                    'Нельзя откатить 20260812_06: проектные дубликаты несовместимы с глобальными ограничениями: %',
+                    array_to_string(conflicts, ', ');
+            END IF;
+        END $$;
+        """
+    )
     op.execute("DROP VIEW telegram_delivery_attempts")
     op.execute("DROP VIEW telegram_deliveries")
     op.drop_constraint(

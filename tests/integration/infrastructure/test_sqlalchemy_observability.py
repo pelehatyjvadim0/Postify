@@ -39,8 +39,8 @@ def _seed_candidate(connection, marker: str, *, decision: str | None = None) -> 
     candidate_id = connection.execute(
         text(
             "INSERT INTO candidates "
-            "(source_name, source_id, title, url, discovered_at, raw_payload) "
-            "VALUES ('hn', :marker, :marker, :url, :now, '{}'::jsonb) RETURNING id"
+            "(project_id, source_name, source_id, title, url, discovered_at, raw_payload) "
+            "VALUES (1, 'hn', :marker, :marker, :url, :now, '{}'::jsonb) RETURNING id"
         ),
         {"marker": marker, "url": f"https://source.test/{marker}", "now": NOW},
     ).scalar_one()
@@ -48,8 +48,8 @@ def _seed_candidate(connection, marker: str, *, decision: str | None = None) -> 
         connection.execute(
             text(
                 "INSERT INTO candidate_decisions "
-                "(candidate_id,status,reason,explanation,signals,policy_version,decided_at) "
-                "VALUES (:id,:status,:reason,'safe','{}'::jsonb,'v1',:now)"
+                "(project_id,candidate_id,status,reason,explanation,signals,policy_version,decided_at) "
+                "VALUES (1,:id,:status,:reason,'safe','{}'::jsonb,'v1',:now)"
             ),
             {
                 "id": candidate_id,
@@ -73,9 +73,9 @@ def _seed_package(
     attempt_id = connection.execute(
         text(
             "INSERT INTO content_attempts "
-            "(candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
+            "(project_id,candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
             "analysis,started_at,finished_at) "
-            "VALUES (:candidate_id,1,'fresh',:status,:url,'title','article','analysis',"
+            "VALUES (1,:candidate_id,1,'fresh',:status,:url,'title','article','analysis',"
             ":now,:now) RETURNING id"
         ),
         {
@@ -88,9 +88,9 @@ def _seed_package(
     return connection.execute(
         text(
             "INSERT INTO content_packages "
-            "(attempt_id,source_url,context,analysis,post_text,media_path,media_mime,"
+            "(project_id,attempt_id,source_url,context,analysis,post_text,media_path,media_mime,"
             "media_source_type,media_source_url,review_required,status,created_at,updated_at) "
-            "VALUES (:attempt_id,:url,'context','analysis',:post_text,:path,'image/png',"
+            "VALUES (1,:attempt_id,:url,'context','analysis',:post_text,:path,'image/png',"
             "'og',:media_url,true,:status,:now,:now) RETURNING id"
         ),
         {
@@ -117,9 +117,9 @@ def _seed_delivery(
     return connection.execute(
         text(
             "INSERT INTO telegram_deliveries "
-            "(package_id,status,attempt_no,message_id,sending_started_at,confirmed_at,"
+            "(project_id,package_id,status,attempt_no,message_id,sending_started_at,confirmed_at,"
             "media_deleted_at,failure_code,failure_reason,created_at,updated_at) "
-            "VALUES (:package_id,:status,:attempt_no,:message_id,:now,:confirmed_at,"
+            "VALUES (1,:package_id,:status,:attempt_no,:message_id,:now,:confirmed_at,"
             ":media_deleted_at,:failure_code,:failure_reason,:now,:now) RETURNING id"
         ),
         {
@@ -182,6 +182,39 @@ def test_operation_run_start_and_success_are_independently_committed(
             ).one() == ("succeeded", "completed", None, NOW + timedelta(seconds=2))
     finally:
         engine.dispose()
+
+
+def test_two_process_repositories_exclude_same_running_project_operation(
+    migrated_database_url: str,
+) -> None:
+    # Поломка review: process-local active set не защищает от второго UI process.
+    OperationKind, *_ = _api()
+    first_engine = create_engine(migrated_database_url)
+    second_engine = create_engine(migrated_database_url)
+    _, first = _repositories(first_engine)
+    _, second = _repositories(second_engine)
+    try:
+        first_run = first.start(OperationKind.RUN_ONCE, now=NOW)
+
+        with pytest.raises(RuntimeError, match="operation_busy"):
+            second.start(OperationKind.RUN_ONCE, now=NOW + timedelta(seconds=1))
+
+        publish_run = second.start(
+            OperationKind.PUBLISH_ONCE, now=NOW + timedelta(seconds=1)
+        )
+        first.fail(
+            first_run,
+            failure_code="run_once_failed",
+            now=NOW + timedelta(seconds=2),
+        )
+        second.fail(
+            publish_run,
+            failure_code="publish_once_failed",
+            now=NOW + timedelta(seconds=2),
+        )
+    finally:
+        first_engine.dispose()
+        second_engine.dispose()
 
 
 def test_operation_run_rejects_second_terminal_transition(
@@ -320,8 +353,8 @@ def test_snapshot_returns_newest_ten_delivery_attempts_with_safe_fields(
                 connection.execute(
                     text(
                         "INSERT INTO telegram_delivery_attempts "
-                        "(delivery_id,attempt_no,outcome,code,reason,started_at,finished_at,message_id) "
-                        "VALUES (:delivery_id,1,'published',NULL,:reason,:started,:finished,:message_id)"
+                        "(project_id,delivery_id,attempt_no,outcome,code,reason,started_at,finished_at,message_id) "
+                        "VALUES (1,:delivery_id,1,'published',NULL,:reason,:started,:finished,:message_id)"
                     ),
                     {
                         "delivery_id": delivery_id,

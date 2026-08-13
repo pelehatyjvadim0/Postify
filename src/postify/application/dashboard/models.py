@@ -78,12 +78,23 @@ class QueueSlot:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicationAttempt:
+    attempt_no: int
+    outcome: str
+    code: str | None
+    message_id: int | None
+    started_at: datetime
+    finished_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class Publication:
     delivery_id: int
     package_id: int
     provider: str | None
     status: str
-    attempts: int
+    attempt_count: int
+    attempts: tuple[PublicationAttempt, ...]
     message_id: int | None
     failure_code: str | None
     failure_reason: str | None

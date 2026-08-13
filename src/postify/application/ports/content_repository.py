@@ -39,6 +39,7 @@ class ContentRepository(Protocol):
         *,
         articles: Mapping[int, ExtractedArticle],
         review_required: bool,
+        generation_snapshot: Mapping[str, object],
         now: datetime,
         day: date,
         package_limit: int,

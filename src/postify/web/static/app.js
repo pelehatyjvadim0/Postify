@@ -1,6 +1,6 @@
 import {
   approvePackage, checkChannel, createResource, deleteResource, getBootstrap,
-  getDashboard, getMaterials, getOperations, getPackages, getPublications,
+  getDashboard, getMaterials, getOperations, getPackage, getPackages, getPublications,
   getQueue, getSettings, publishOnce, rejectPackage, removeChannelSecret,
   runOnce, updateResource, updateSettings,
 } from "./api.js";
@@ -111,11 +111,19 @@ function closeDetail() {
   lastOpener = null;
 }
 
-function openPackage(node) {
-  const item = itemBy("package", node.dataset.id);
-  if (!item) return;
-  const actions = item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="show-reject-form" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : "";
-  openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose"><p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd>${externalLink(item.source_url)}</dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl></article>`, actions, node);
+async function openPackage(node) {
+  const summary = itemBy("package", node.dataset.id);
+  if (!summary) return;
+  openDetail(`Пакет № ${summary.package_id}`, `<p class="section-kicker">Загрузка пакета…</p>`, "", node);
+  try {
+    const item = await getPackage(projectId, summary.package_id);
+    const actions = item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="show-reject-form" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : "";
+    const media = item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Медиа пакета № ${escapeHtml(item.package_id)}">` : "";
+    const history = (item.history || []).map((entry) => `<li>${statusBadge(entry.status)} <span>${escapeHtml(entry.reason)}</span> <time>${escapeHtml(dateTime(entry.created_at))}</time></li>`).join("") || "<li>История пока пуста</li>";
+    openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose">${media}<p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd>${externalLink(item.source_url)}</dd><dt>Анализ</dt><dd>${escapeHtml(item.analysis)}</dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl><h3>История</h3><ol class="package-history">${history}</ol></article>`, actions, node);
+  } catch (_) {
+    detailContent.querySelector(".detail-body").innerHTML = `<p class="settings-error">Не удалось загрузить пакет.</p>`;
+  }
 }
 
 function openMaterial(node) {
@@ -127,7 +135,8 @@ function openMaterial(node) {
 function openDelivery(node) {
   const item = itemBy("delivery", node.dataset.id);
   if (!item) return;
-  openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempts)}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl></article>`, "", node);
+  const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>message ID: ${escapeHtml(attempt.message_id || "—")}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
+  openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempt_count ?? item.attempts?.length ?? item.attempts ?? 0)}</dd><dt>Сообщение</dt><dd>${escapeHtml(item.message_id || "—")}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl><h3>Попытки</h3><ol class="package-history">${attempts}</ol></article>`, "", node);
 }
 
 function openRun(node) {

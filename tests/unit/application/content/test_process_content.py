@@ -71,12 +71,22 @@ class FakeRepository:
         *,
         articles: dict[int, object],
         review_required: bool,
+        generation_snapshot: dict[str, object] | None = None,
         now: datetime,
         day: date,
         package_limit: int,
     ):
         self.events.append(
-            ("drafts", batch, dict(articles), review_required, now, day, package_limit)
+            (
+                "drafts",
+                batch,
+                dict(articles),
+                review_required,
+                generation_snapshot,
+                now,
+                day,
+                package_limit,
+            )
         )
         return tuple(
             SimpleNamespace(attempt_id=topic.attempt_id, package_id=100 + topic.attempt_id,
@@ -109,10 +119,12 @@ class FakeAnalyzer:
     def __init__(self, outcome: object) -> None:
         self.outcome = outcome
         self.calls: list[tuple[object, int]] = []
+        self.briefs: list[object | None] = []
 
-    def analyze(self, articles: object, package_limit: int):
+    def analyze(self, articles: object, package_limit: int, brief=None):
         materialized = tuple(articles)
         self.calls.append((materialized, package_limit))
+        self.briefs.append(brief)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
@@ -401,3 +413,53 @@ def test_process_persists_full_analysis_batch_but_acquires_media_only_for_select
     ]
     assert result.packages_created == 1
     assert result.failed == 0
+
+
+def test_process_passes_effective_generation_brief_and_persists_its_snapshot() -> None:
+    # Поломка: runtime загрузил настройки, но анализатор и история пакета их потеряли.
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    api = _api()
+    attempt = _attempt(1)
+    article = _article(api, 1)
+    brief = GenerationBrief(
+        topic="Автоматизация отчётов",
+        language="ru",
+        audience="Редакторы",
+        format_instructions="Хук, три шага и ограничение",
+        cta="Открыть источник",
+    )
+    snapshot = {
+        "topic": brief.topic,
+        "language": brief.language,
+        "audience": brief.audience,
+        "format": {"id": 7, "instructions": brief.format_instructions},
+        "cta": {"id": 9, "text": brief.cta, "link_mode": "source"},
+    }
+    repository = FakeRepository([attempt])
+    analyzer = FakeAnalyzer(_batch(api, (1,)))
+    processor = api.ProcessContent(
+        repository,
+        FakeExtractor({attempt.source_url: article}),
+        analyzer,
+        FakeMedia(
+            api.StoredMedia(
+                "/media/one.jpg",
+                "image/jpeg",
+                "og",
+                "https://cdn.test/1.jpg",
+            )
+        ),
+        limits=_limits(api),
+        review_required=True,
+        timezone="UTC",
+        generation_brief=brief,
+        generation_snapshot=snapshot,
+        clock=lambda: NOW,
+    )
+
+    processor.execute()
+
+    assert analyzer.briefs == [brief]
+    draft = next(event for event in repository.events if event[0] == "drafts")
+    assert draft[4] == snapshot

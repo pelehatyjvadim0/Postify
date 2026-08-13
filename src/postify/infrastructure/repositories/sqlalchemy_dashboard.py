@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from postify.application.dashboard.models import (
     DashboardOverview,
@@ -15,6 +15,7 @@ from postify.application.dashboard.models import (
     PackageHistoryEntry,
     PackageSummary,
     Publication,
+    PublicationAttempt,
     QueueSlot,
 )
 
@@ -245,11 +246,11 @@ class SqlAlchemyDashboardRepository:
             row.updated_at,
         )
 
-    def package_media_path(self, project_id: int, package_id: int) -> str:
+    def package_media_path(self, project_id: int, package_id: int) -> tuple[str, str]:
         with self._session_factory() as session:
             row = session.execute(
                 text(
-                    """SELECT media_path FROM content_packages
+                    """SELECT media_path,media_mime FROM content_packages
                     WHERE project_id=:project AND id=:package
                     AND media_path IS NOT NULL AND media_deleted_at IS NULL"""
                 ),
@@ -257,7 +258,7 @@ class SqlAlchemyDashboardRepository:
             ).mappings().first()
         if row is None:
             raise LookupError(package_id)
-        return row.media_path
+        return row.media_path, row.media_mime
 
     def queue(self, project_id: int, day: date) -> tuple[QueueSlot, ...]:
         with self._session_factory() as session:
@@ -356,6 +357,38 @@ class SqlAlchemyDashboardRepository:
                 .mappings()
                 .all()
             )
+            attempts_by_delivery: dict[int, list[PublicationAttempt]] = {
+                row.delivery_id: [] for row in rows
+            }
+            if attempts_by_delivery:
+                attempt_rows = (
+                    session.execute(
+                        text(
+                            """SELECT delivery_id,attempt_no,outcome,code,message_id,
+                            started_at,finished_at FROM delivery_attempts
+                            WHERE project_id=:project
+                            AND delivery_id IN :delivery_ids
+                            ORDER BY delivery_id,attempt_no"""
+                        ).bindparams(bindparam("delivery_ids", expanding=True)),
+                        {
+                            "project": project_id,
+                            "delivery_ids": tuple(attempts_by_delivery),
+                        },
+                    )
+                    .mappings()
+                    .all()
+                )
+                for item in attempt_rows:
+                    attempts_by_delivery[item.delivery_id].append(
+                        PublicationAttempt(
+                            item.attempt_no,
+                            item.outcome,
+                            item.code,
+                            item.message_id,
+                            item.started_at,
+                            item.finished_at,
+                        )
+                    )
         return tuple(
             Publication(
                 row.delivery_id,
@@ -363,6 +396,7 @@ class SqlAlchemyDashboardRepository:
                 row.provider,
                 row.status,
                 row.attempt_no,
+                tuple(attempts_by_delivery[row.delivery_id]),
                 row.message_id,
                 row.failure_code,
                 row.failure_reason,

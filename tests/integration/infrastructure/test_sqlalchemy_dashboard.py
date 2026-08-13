@@ -336,7 +336,10 @@ def test_dashboard_reads_persisted_package_publication_and_operation_fields(
         assert package.generation_snapshot["format"] == "practical"
         assert publication.provider == "telegram"
         assert publication.status == "published"
-        assert publication.attempts == 2
+        assert publication.attempt_count == 2
+        assert [(item.attempt_no, item.outcome, item.message_id) for item in publication.attempts] == [
+            (2, "published", 42)
+        ]
         assert publication.message_id == 42
         assert publication.failure_code is None
         assert publication.confirmed_at == NOW

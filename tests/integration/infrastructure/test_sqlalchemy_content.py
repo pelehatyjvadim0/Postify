@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import os
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -37,8 +39,8 @@ def _seed_selected(engine, discovered_values: list[datetime]) -> list[int]:
             candidate_id = connection.execute(
                 text(
                     "INSERT INTO candidates "
-                    "(source_name, source_id, title, url, discovered_at, raw_payload) "
-                    "VALUES ('hn', :source_id, :title, :url, :discovered_at, '{}'::jsonb) "
+                    "(project_id, source_name, source_id, title, url, discovered_at, raw_payload) "
+                    "VALUES (1, 'hn', :source_id, :title, :url, :discovered_at, '{}'::jsonb) "
                     "RETURNING id"
                 ),
                 {
@@ -51,8 +53,8 @@ def _seed_selected(engine, discovered_values: list[datetime]) -> list[int]:
             connection.execute(
                 text(
                     "INSERT INTO candidate_decisions "
-                    "(candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
-                    "VALUES (:candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
+                    "(project_id, candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
+                    "VALUES (1, :candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
                     "'{}'::jsonb, 'v1', :decided_at)"
                 ),
                 {"candidate_id": candidate_id, "decided_at": NOW},
@@ -87,6 +89,95 @@ def test_claim_enforces_daily_limit_and_never_claims_candidate_twice(
         assert len(rows) == 12
         assert len(set(rows)) == 12
         assert {attempt.attempt_no for attempt in first} == {1}
+    finally:
+        engine.dispose()
+
+
+def test_project_cleanup_preserves_other_projects_active_media(
+    migrated_database_url: str, tmp_path: Path
+) -> None:
+    # Поломка: run project 1 сканирует общий media root и удаляет active-файл project 2.
+    import httpx
+
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.application.content.process_content import ProcessContent
+    from postify.domain.content.models import ContentLimits
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    media_path = tmp_path / "other-project-active.png"
+    media_path.write_bytes(b"project-2-media")
+    old = (NOW - timedelta(days=4)).timestamp()
+    os.utime(media_path, (old, old))
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO content_projects
+                    (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
+                    VALUES (2,'Второй','AI','ru','Команды','UTC','{}'::jsonb,:now,:now)"""
+                ),
+                {"now": NOW},
+            )
+            candidate_id = connection.execute(
+                text(
+                    """INSERT INTO candidates
+                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                    VALUES (2,'source','other-active','Other','https://example.com/other',:now,'{}'::jsonb)
+                    RETURNING id"""
+                ),
+                {"now": NOW},
+            ).scalar_one()
+            attempt_id = connection.execute(
+                text(
+                    """INSERT INTO content_attempts
+                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
+                    VALUES (2,:candidate,1,'fresh','packaged','https://example.com/other',:now)
+                    RETURNING id"""
+                ),
+                {"candidate": candidate_id, "now": NOW},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    """INSERT INTO content_packages
+                    (project_id,attempt_id,source_url,context,analysis,post_text,media_path,
+                     media_mime,review_required,status,generation_snapshot,created_at,updated_at)
+                    VALUES (2,:attempt,'https://example.com/other','ctx','analysis','post',:path,
+                            'image/png',true,'approved','{}'::jsonb,:now,:now)"""
+                ),
+                {"attempt": attempt_id, "path": str(media_path), "now": NOW},
+            )
+
+        class Unused:
+            def __getattr__(self, name):
+                raise AssertionError(name)
+
+        repository = SqlAlchemyContentRepository(sessionmaker(engine), project_id=1)
+        with httpx.Client() as client:
+            processor = ProcessContent(
+                repository,
+                Unused(),
+                Unused(),
+                LocalMediaProvider(
+                    client,
+                    tmp_path,
+                    1_000_000,
+                    None,
+                    url_policy=PublicHttpUrlPolicy(),
+                ),
+                limits=ContentLimits(1, 1, 1, 100, 0),
+                review_required=True,
+                timezone="UTC",
+                clock=lambda: NOW,
+            )
+
+            result = processor.execute()
+
+        assert result.claimed == 0
+        assert media_path.read_bytes() == b"project-2-media"
     finally:
         engine.dispose()
 
@@ -405,9 +496,9 @@ def test_repository_returns_full_package_and_review_history_atomically(
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id, attempt_no, tier, status, source_url, article_title, article_text, "
+                "(project_id, candidate_id, attempt_no, tier, status, source_url, article_title, article_text, "
                 "analysis, failure_code, retry_at, started_at, finished_at) VALUES "
-                "(:candidate_id, 1, 'fresh', 'completed', :url, 'Article', :context, :analysis, "
+                "(1, :candidate_id, 1, 'fresh', 'completed', :url, 'Article', :context, :analysis, "
                 "NULL, NULL, :now, :now) RETURNING id"
             ),
             {
@@ -421,10 +512,10 @@ def test_repository_returns_full_package_and_review_history_atomically(
         package_id = connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
+                "(project_id, attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
                 "media_source_type, media_source_url, review_required, status, media_deleted_at, "
                 "created_at, updated_at) VALUES "
-                "(:attempt_id, :url, :context, :analysis, :post, :path, 'image/jpeg', 'og', "
+                "(1, :attempt_id, :url, :context, :analysis, :post, :path, 'image/jpeg', 'og', "
                 ":media_url, true, 'awaiting_review', NULL, :now, :now) RETURNING id"
             ),
             {
@@ -442,8 +533,8 @@ def test_repository_returns_full_package_and_review_history_atomically(
             connection.execute(
                 text(
                     "INSERT INTO content_package_status_history "
-                    "(package_id, status, reason, created_at) VALUES "
-                    "(:package_id, :status, 'test', :now)"
+                    "(project_id, package_id, status, reason, created_at) VALUES "
+                    "(1, :package_id, :status, 'test', :now)"
                 ),
                 {"package_id": package_id, "status": status, "now": NOW},
             )
@@ -536,9 +627,9 @@ def _seed_processing_package(engine) -> tuple[int, int]:
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
+                "(project_id,candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
                 "analysis,started_at) VALUES "
-                "(:candidate_id,1,'fresh','processing',:url,'Article',:body,:analysis,:now) "
+                "(1,:candidate_id,1,'fresh','processing',:url,'Article',:body,:analysis,:now) "
                 "RETURNING id"
             ),
             {
@@ -552,9 +643,9 @@ def _seed_processing_package(engine) -> tuple[int, int]:
         package_id = connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id,source_url,context,analysis,post_text,review_required,status,"
+                "(project_id,attempt_id,source_url,context,analysis,post_text,review_required,status,"
                 "created_at,updated_at) VALUES "
-                "(:attempt_id,:url,:body,:analysis,:post,true,'processing',:now,:now) "
+                "(1,:attempt_id,:url,:body,:analysis,:post,true,'processing',:now,:now) "
                 "RETURNING id"
             ),
             {
@@ -570,8 +661,8 @@ def _seed_processing_package(engine) -> tuple[int, int]:
             connection.execute(
                 text(
                     "INSERT INTO content_package_status_history "
-                    "(package_id,status,reason,created_at) "
-                    "VALUES (:package_id,:status,'generated',:now)"
+                    "(project_id,package_id,status,reason,created_at) "
+                    "VALUES (1,:package_id,:status,'generated',:now)"
                 ),
                 {"package_id": package_id, "status": status, "now": NOW},
             )

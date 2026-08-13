@@ -6,6 +6,8 @@ from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from postify.domain.projects.cron import normalize_cron
+
 
 class UnsupportedProvider(ValueError):
     """Адаптер подключения не зарегистрирован."""
@@ -159,7 +161,7 @@ class SourceConnection:
 
     def __post_init__(self) -> None:
         _validate_connection(self)
-        object.__setattr__(self, "schedule", _normalise_text(self.schedule, "schedule"))
+        object.__setattr__(self, "schedule", normalize_cron(self.schedule))
 
 
 @dataclass(frozen=True, slots=True)
