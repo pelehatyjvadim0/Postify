@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import functools
 import http.server
@@ -13,6 +14,9 @@ from playwright.sync_api import Browser, Page, Playwright, Route, sync_playwrigh
 ROOT = Path(__file__).parents[2]
 STATIC = ROOT / "src/postify/web/static"
 PROJECT = "/api/v1/projects/41"
+PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 FIXTURES = {
     "/api/v1/bootstrap": {
@@ -259,7 +263,7 @@ def install_api(page: Page, requests: list[tuple[str, str]] | None = None) -> No
             route.fulfill(status=202 if path.endswith("run-once") else 200, content_type="application/json", body='{"status":"accepted"}')
             return
         if "/media/packages/" in path:
-            route.fulfill(status=200, content_type="image/png", body=b"fixture-image")
+            route.fulfill(status=200, content_type="image/png", body=PIXEL_PNG)
             return
         payload = FIXTURES.get(path)
         route.fulfill(
@@ -1076,7 +1080,7 @@ def test_package_source_url_allows_only_http_and_https(
     def handle(route: Route) -> None:
         path = "/" + route.request.url.split("/", 3)[-1]
         if "/media/packages/" in path:
-            route.fulfill(status=200, content_type="image/png", body=b"fixture-image")
+            route.fulfill(status=200, content_type="image/png", body=PIXEL_PNG)
             return
         if path in {f"{PROJECT}/packages", f"{PROJECT}/packages/9001"}:
             payload = json.loads(json.dumps(FIXTURES[path]))
@@ -1118,7 +1122,10 @@ def test_review_detail_loads_real_detail_history_analysis_and_media(
         assert inspected.locator(".package-history").get_by_text("generated", exact=True).is_visible()
         assert inspected.locator(".package-media").get_attribute("src") == f"{PROJECT}/media/packages/9001"
         assert ("GET", f"{PROJECT}/packages/9001") in requests
-        inspected.locator(".package-media").evaluate("image => image.decode().catch(() => undefined)")
+        natural_width = inspected.locator(".package-media").evaluate(
+            "image => image.decode().then(() => image.naturalWidth)"
+        )
+        assert natural_width > 0
         assert ("GET", f"{PROJECT}/media/packages/9001") in requests
     finally:
         inspected.close()
@@ -1352,6 +1359,9 @@ def test_overview_and_journal_render_runtime_and_recent_operations(
     recent.wait_for()
     assert recent.get_by_text("Поиск и подготовка", exact=True).is_visible()
     assert recent.get_by_text("Успешно", exact=True).is_visible()
+    heading_x = recent.locator(".panel-title").bounding_box()["x"]
+    operation_x = recent.locator(".operation-summary li").first.bounding_box()["x"]
+    assert operation_x == pytest.approx(heading_x, abs=1)
 
     page.goto(f"{base_url}/#journal")
     runtime = page.locator(".runtime-state")

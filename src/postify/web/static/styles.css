@@ -205,7 +205,7 @@ h2, h3 { margin: 0; }
 .package-history, .signal-list { margin: 12px 0 0; padding: 0; display: grid; gap: 8px; list-style: none; }
 .package-history li, .signal-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .recent-operations { margin-top: 22px; }
-.operation-summary { margin: 0; padding: 0; display: grid; gap: 0; list-style: none; }
+.operation-summary { margin: 0; padding: 0 22px; display: grid; gap: 0; list-style: none; }
 .operation-summary li { padding: 12px 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
 .operation-summary li:last-child { border-bottom: 0; }
 .operation-summary li > span:first-child { display: grid; gap: 3px; }

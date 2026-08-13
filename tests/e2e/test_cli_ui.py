@@ -26,6 +26,9 @@ def _subprocess_environment(temporary_directory: Path) -> dict[str, str]:
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "TMPDIR": str(temporary_directory),
+        # Build tooling may reuse downloaded distributions, while application
+        # configuration below remains an explicit allowlist.
+        "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR", str(Path.home() / ".cache/uv")),
     }
 
 
