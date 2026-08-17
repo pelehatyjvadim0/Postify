@@ -38,19 +38,19 @@ AGENTS.MD
 CLAUDE.md
 GEMINI.md
 .codex/
-.claude/*
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/sssf/
-!.claude/skills/sssf/**
+.claude/
 .cursor/
 .agents/
 .opencode/
 .worktrees/
-docs/superpowers/
-.superpowers/
 
-# sssf runtime
-adws/adw_data/sessions/
-adws/adw_data/sssf.db*
-*.pyc
+# Локальная инфраструктура разработки (не часть Postify)
+/adws/
+/super-simple-software-factory/
+/tests/unit/adws/
+/specs/
+/docs/sssf-task-workflow.md
+/docs/context/
+/docs/archive/development-loop/
+/docs/archive/superpowers/
+/WAVE_*_HANDOFF.md
