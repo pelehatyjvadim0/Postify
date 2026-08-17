@@ -96,7 +96,7 @@ def install_api(page, fixtures: dict[str, object]) -> None:
 def capture(page, filename: str, route: str, viewport: str, state: str) -> dict[str, object]:
     target = OUTPUT / filename
     page.wait_for_timeout(500)
-    page.screenshot(path=target, full_page=True)
+    page.screenshot(path=target, full_page=False)
     dimensions = page.evaluate(
         """() => ({scrollWidth: document.documentElement.scrollWidth,
                     clientWidth: document.documentElement.clientWidth,
@@ -109,6 +109,8 @@ def capture(page, filename: str, route: str, viewport: str, state: str) -> dict[
         "state": state,
         "sha256": sha256(target.read_bytes()).hexdigest(),
         "bytes": target.stat().st_size,
+        "width": page.viewport_size["width"],
+        "height": page.viewport_size["height"],
         **dimensions,
         "horizontal_overflow": dimensions["scrollWidth"] > dimensions["clientWidth"],
     }
