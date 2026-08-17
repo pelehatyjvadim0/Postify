@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from time import monotonic
 
@@ -160,8 +160,9 @@ def test_schedule_accept_atomically_creates_operation_or_leaves_slot_retryable(
         operations.fail(
             active, failure_code="run_once_failed", now=SLOT.replace(second=1)
         )
-        run_id = repository.accept(ScheduledCommand(1, "run_once", retry_slot))
-        assert type(run_id) is int
+        accepted = repository.accept(ScheduledCommand(1, "run_once", retry_slot))
+        assert accepted is not None
+        assert type(accepted.operation_run_id) is int
         with engine.connect() as connection:
             assert connection.execute(
                 text(
@@ -169,10 +170,39 @@ def test_schedule_accept_atomically_creates_operation_or_leaves_slot_retryable(
                     "JOIN schedule_slot_claims c ON c.project_id=r.project_id "
                     "AND c.kind=r.operation WHERE r.id=:id"
                 ),
-                {"id": run_id},
+                {"id": accepted.operation_run_id},
             ).one() == ("running", retry_slot)
     finally:
         engine.dispose()
+
+
+def test_accepted_job_is_recovered_once_after_repository_restart(
+    migrated_database_url: str,
+) -> None:
+    first_engine, first = _repository(migrated_database_url)
+    command = ScheduledCommand(1, "run_once", SLOT.replace(minute=9))
+    try:
+        accepted = first.accept(command)
+        assert accepted is not None
+        assert accepted.job_id is not None
+    finally:
+        first_engine.dispose()
+
+    restarted_engine, restarted = _repository(migrated_database_url)
+    try:
+        recovered = restarted.claim_pending(now=SLOT)
+        assert recovered == (accepted,)
+        restarted.acknowledge(accepted.job_id, succeeded=True, now=SLOT)
+        assert restarted.claim_pending(now=SLOT + timedelta(hours=1)) == ()
+        with restarted_engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT status,attempt_count FROM scheduled_jobs WHERE id=:id"
+                ),
+                {"id": accepted.job_id},
+            ).one() == ("succeeded", 1)
+    finally:
+        restarted_engine.dispose()
 
 
 def test_claims_are_isolated_by_project(migrated_database_url: str) -> None:

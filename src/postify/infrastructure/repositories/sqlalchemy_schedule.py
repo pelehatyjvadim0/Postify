@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 
 from sqlalchemy import select, text
 
@@ -52,6 +53,7 @@ class SqlAlchemyScheduleRepository:
             route_rows = session.execute(
                 select(
                     PublicationRouteModel.project_id,
+                    PublicationRouteModel.id,
                     PublicationRouteModel.schedule,
                 )
                 .where(PublicationRouteModel.enabled.is_(True))
@@ -62,13 +64,14 @@ class SqlAlchemyScheduleRepository:
         for project_id, cron in source_rows:
             sources[project_id].append(SourceSchedule(enabled=True, cron=cron))
         routes = defaultdict(list)
-        for project_id, schedule in route_rows:
+        for project_id, route_id, schedule in route_rows:
             values = schedule if isinstance(schedule, dict) else {}
             routes[project_id].append(
                 RouteSchedule(
                     enabled=True,
                     autopublish=values.get("autopublish") is True,
                     slots=tuple(values.get("slots", ())),
+                    route_id=route_id,
                 )
             )
         return tuple(
@@ -93,9 +96,9 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO schedule_slot_claims
-                            (project_id, kind, scheduled_for)
-                        VALUES (:project_id, :kind, :scheduled_for)
-                        ON CONFLICT (project_id, kind, scheduled_for) DO NOTHING
+                            (project_id, kind, scheduled_for, route_id)
+                        VALUES (:project_id, :kind, :scheduled_for, :route_id)
+                        ON CONFLICT DO NOTHING
                         RETURNING true
                         """
                     ),
@@ -103,6 +106,7 @@ class SqlAlchemyScheduleRepository:
                         "project_id": command.project_id,
                         "kind": command.kind,
                         "scheduled_for": command.scheduled_for,
+                        "route_id": command.route_id,
                     },
                 ).scalar_one_or_none()
                 session.commit()
@@ -111,8 +115,8 @@ class SqlAlchemyScheduleRepository:
                 session.rollback()
                 raise
 
-    def accept(self, command: ScheduledCommand) -> int | None:
-        """Atomically owns a slot and its durable operation run."""
+    def accept(self, command: ScheduledCommand) -> ScheduledCommand | None:
+        """Atomically own a route slot, operation run, and recoverable queued job."""
         with self._session_factory() as session:
             try:
                 self._set_timeouts(session)
@@ -124,9 +128,9 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO schedule_slot_claims
-                            (project_id, kind, scheduled_for)
-                        VALUES (:project_id, :kind, :scheduled_for)
-                        ON CONFLICT (project_id, kind, scheduled_for) DO NOTHING
+                            (project_id, kind, scheduled_for, route_id)
+                        VALUES (:project_id, :kind, :scheduled_for, :route_id)
+                        ON CONFLICT DO NOTHING
                         RETURNING true
                         """
                     ),
@@ -134,6 +138,7 @@ class SqlAlchemyScheduleRepository:
                         "project_id": command.project_id,
                         "kind": command.kind,
                         "scheduled_for": command.scheduled_for,
+                        "route_id": command.route_id,
                     },
                 ).scalar_one_or_none()
                 if claimed is not True:
@@ -154,11 +159,113 @@ class SqlAlchemyScheduleRepository:
                 if run_id is None:
                     session.rollback()
                     return None
+                job_id = session.execute(
+                    text(
+                        """
+                        INSERT INTO scheduled_jobs
+                            (project_id,kind,route_id,scheduled_for,operation_run_id,
+                             status,attempt_count,created_at,updated_at)
+                        VALUES (:project_id,:kind,:route_id,:scheduled_for,:run_id,
+                                'queued',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "project_id": command.project_id,
+                        "kind": command.kind,
+                        "route_id": command.route_id,
+                        "scheduled_for": command.scheduled_for,
+                        "run_id": run_id,
+                    },
+                ).scalar_one()
                 session.commit()
-                return run_id
+                return ScheduledCommand(
+                    command.project_id,
+                    command.kind,
+                    command.scheduled_for,
+                    route_id=command.route_id,
+                    operation_run_id=run_id,
+                    job_id=job_id,
+                )
             except BaseException:
                 session.rollback()
                 raise
+
+    def claim_job(self, job_id: int | None, *, now) -> ScheduledCommand | None:
+        if job_id is None:
+            return None
+        commands = self._claim_jobs(now=now, job_id=job_id)
+        return commands[0] if commands else None
+
+    def claim_pending(self, *, now) -> tuple[ScheduledCommand, ...]:
+        return self._claim_jobs(now=now)
+
+    def _claim_jobs(
+        self, *, now, job_id: int | None = None
+    ) -> tuple[ScheduledCommand, ...]:
+        with self._session_factory() as session:
+            try:
+                self._set_timeouts(session)
+                job_filter = "" if job_id is None else "AND id=:job_id"
+                rows = session.execute(
+                    text(
+                        f"""
+                        SELECT id,project_id,kind,route_id,scheduled_for,operation_run_id
+                        FROM scheduled_jobs
+                        WHERE true {job_filter}
+                          AND (status='queued' OR
+                               (status='leased' AND lease_expires_at<=:now))
+                        ORDER BY id
+                        FOR UPDATE SKIP LOCKED
+                        """
+                    ),
+                    {"job_id": job_id, "now": now},
+                ).mappings().all()
+                commands = []
+                for row in rows:
+                    session.execute(
+                        text(
+                            """
+                            UPDATE scheduled_jobs
+                            SET status='leased', lease_expires_at=:expires,
+                                attempt_count=attempt_count+1, updated_at=:now
+                            WHERE id=:id
+                            """
+                        ),
+                        {"id": row.id, "now": now, "expires": now + timedelta(minutes=5)},
+                    )
+                    commands.append(
+                        ScheduledCommand(
+                            row.project_id,
+                            row.kind,
+                            row.scheduled_for,
+                            route_id=row.route_id,
+                            operation_run_id=row.operation_run_id,
+                            job_id=row.id,
+                        )
+                    )
+                session.commit()
+                return tuple(commands)
+            except BaseException:
+                session.rollback()
+                raise
+
+    def acknowledge(self, job_id: int, *, succeeded: bool, now) -> None:
+        with self._session_factory() as session:
+            result = session.execute(
+                text(
+                    """
+                    UPDATE scheduled_jobs
+                    SET status=:status, lease_expires_at=NULL, updated_at=:now
+                    WHERE id=:id AND status='leased'
+                    """
+                ),
+                {"id": job_id, "status": "succeeded" if succeeded else "failed", "now": now},
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                raise RuntimeError("scheduled_job_not_leased")
+            session.commit()
 
     def _set_timeouts(self, session) -> None:
         session.execute(

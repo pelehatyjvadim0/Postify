@@ -1148,6 +1148,68 @@ def test_publication_detail_renders_attempt_outcomes_and_external_message_id(
     )
 
 
+def test_empty_journal_and_failed_attempt_show_complete_operational_detail(
+    browser: Browser, base_url: str
+) -> None:
+    inspected = browser.new_page()
+
+    def handle(route: Route) -> None:
+        path = "/" + route.request.url.split("/", 3)[-1]
+        payload = FIXTURES.get(path)
+        if path == f"{PROJECT}/operations":
+            payload = {
+                "items": [],
+                "operational": {
+                    "deficit": 2,
+                    "deficit_reasons": ["eligible_source_shortage"],
+                    "signals": [{"code": "content_failures", "count": 3}],
+                    "runtime": {"database": "available", "scheduler": "active"},
+                },
+            }
+        elif path == f"{PROJECT}/publications":
+            payload = {
+                "items": [
+                    {
+                        **FIXTURES[path]["items"][0],
+                        "status": "failed",
+                        "attempts": [
+                            {
+                                "attempt_no": 1,
+                                "outcome": "failed",
+                                "code": "telegram_rejected",
+                                "reason": "Канал запретил отправку",
+                                "message_id": None,
+                                "started_at": "2026-08-12T09:55:00Z",
+                                "finished_at": "2026-08-12T09:56:00Z",
+                            }
+                        ],
+                    }
+                ]
+            }
+        route.fulfill(json=payload)
+
+    inspected.route("**/api/v1/**", handle)
+    try:
+        inspected.goto(f"{base_url}/#journal")
+        inspected.locator('[data-screen="journal"]:not([data-loading])').wait_for()
+        assert inspected.get_by_text("Запусков пока нет", exact=True).is_visible()
+        assert inspected.get_by_text("База данных: Доступно", exact=True).is_visible()
+        assert inspected.get_by_text("Планировщик: Активен", exact=True).is_visible()
+        assert inspected.get_by_text("Недостаточно подходящих источников", exact=True).is_visible()
+        journal = inspected.locator('[data-screen="journal"]')
+        assert journal.locator('[data-action="new-run"]').is_visible()
+        assert journal.locator('[data-action="publish-once"]').is_visible()
+
+        inspected.goto(f"{base_url}/#publications")
+        inspected.locator('[data-screen="publications"]:not([data-loading])').wait_for()
+        inspected.locator('[data-action="open-delivery"]').click()
+        detail = inspected.locator("#detail-content")
+        assert detail.get_by_text("Канал отклонил публикацию", exact=True).is_visible()
+        assert detail.get_by_text("Канал запретил отправку", exact=True).is_visible()
+    finally:
+        inspected.close()
+
+
 def test_all_emitted_domain_codes_have_explicit_russian_labels(page: Page, base_url: str) -> None:
     # Break caught: a backend enum reaches the UI as an English snake_case fallback.
     expected = {

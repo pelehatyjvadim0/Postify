@@ -212,6 +212,62 @@ def test_older_retryable_precedes_later_new_package_in_fifo_order(migrated_datab
         engine.dispose()
 
 
+def test_retry_is_reserved_only_by_its_persisted_route_and_channel(
+    migrated_database_url: str,
+) -> None:
+    FailureKind, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        for statement in (
+            """
+                INSERT INTO content_formats
+                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (701,1,'First','post','one',true,:now,:now),
+                       (702,1,'Second','post','two',true,:now,:now)
+            """,
+            """
+                INSERT INTO channel_connections
+                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                VALUES (801,1,'telegram','First',true,'{}','ok',:now,:now),
+                       (802,1,'telegram','Second',true,'{}','ok',:now,:now)
+            """,
+            """
+                INSERT INTO publication_routes
+                    (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
+                VALUES (901,1,701,801,true,'{}',:now,:now),
+                       (902,1,702,802,true,'{}',:now,:now)
+            """,
+        ):
+            connection.execute(text(statement), {"now": NOW})
+    retryable_id = _seed_package(engine, marker="route-one-retry")
+    route_two_id = _seed_package(engine, marker="route-two-new")
+    first_route = Repository(
+        sessionmaker(engine), project_id=1, route_id=901, channel_id=801
+    )
+    second_route = Repository(
+        sessionmaker(engine), project_id=1, route_id=902, channel_id=802
+    )
+    try:
+        claim = first_route.reserve_next(now=NOW)
+        assert claim is not None and claim.package_id == retryable_id
+        first_route.record_failure(
+            claim,
+            kind=FailureKind.RETRYABLE,
+            code="retry",
+            reason="route one only",
+            now=NOW,
+        )
+
+        other = second_route.reserve_next(now=NOW + timedelta(minutes=1))
+        assert other is not None and other.package_id == route_two_id
+
+        retry = first_route.reserve_next(now=NOW + timedelta(minutes=2))
+        assert retry is not None and retry.package_id == retryable_id
+        assert retry.attempt_no == 2
+    finally:
+        engine.dispose()
+
+
 def test_stale_sending_becomes_uncertain_with_one_attempt(
     migrated_database_url: str,
 ) -> None:

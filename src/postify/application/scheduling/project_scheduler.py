@@ -20,6 +20,7 @@ class RouteSchedule:
     enabled: bool
     autopublish: bool
     slots: tuple[str, ...]
+    route_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,9 @@ class ScheduledCommand:
     project_id: int
     kind: Literal["run_once", "publish_once"]
     scheduled_for: datetime
+    route_id: int | None = None
     operation_run_id: int | None = None
+    job_id: int | None = None
 
 
 class ScheduleRepository(Protocol):
@@ -58,33 +61,54 @@ class ProjectScheduler:
             raise ValueError("now must contain timezone")
         exact_slot = now.astimezone(UTC).replace(second=0, microsecond=0)
         claimed: list[ScheduledCommand] = []
+        claim_pending = getattr(self._repository, "claim_pending", None)
+        if callable(claim_pending):
+            for command in claim_pending(now=now.astimezone(UTC)):
+                self._run_command(command)
+                claimed.append(command)
         for schedule in self._repository.list_schedules():
             local = now.astimezone(ZoneInfo(schedule.timezone))
-            kinds = []
+            commands: list[ScheduledCommand] = []
             if any(
                 source.enabled and cron_matches(source.cron, local)
                 for source in schedule.sources
             ):
-                kinds.append("run_once")
+                commands.append(
+                    ScheduledCommand(schedule.project_id, "run_once", exact_slot)
+                )
             local_slot = local.strftime("%H:%M")
-            if any(
-                route.enabled and route.autopublish and local_slot in route.slots
+            commands.extend(
+                ScheduledCommand(
+                    schedule.project_id,
+                    "publish_once",
+                    exact_slot,
+                    route_id=route.route_id,
+                )
                 for route in schedule.routes
-            ):
-                kinds.append("publish_once")
-            for kind in kinds:
-                command = ScheduledCommand(schedule.project_id, kind, exact_slot)
+                if route.enabled and route.autopublish and local_slot in route.slots
+            )
+            for command in commands:
                 accept = getattr(self._repository, "accept", None)
                 if callable(accept):
-                    run_id = accept(command)
-                    if run_id is None:
+                    accepted = accept(command)
+                    if accepted is None:
                         continue
-                    command = ScheduledCommand(
-                        command.project_id,
-                        command.kind,
-                        command.scheduled_for,
-                        operation_run_id=run_id,
-                    )
+                    if isinstance(accepted, ScheduledCommand):
+                        command = accepted
+                        claim_job = getattr(self._repository, "claim_job", None)
+                        if callable(claim_job):
+                            leased = claim_job(command.job_id, now=now.astimezone(UTC))
+                            if leased is None:
+                                continue
+                            command = leased
+                    else:
+                        command = ScheduledCommand(
+                            command.project_id,
+                            command.kind,
+                            command.scheduled_for,
+                            route_id=command.route_id,
+                            operation_run_id=accepted,
+                        )
                 elif not self._repository.claim(command):
                     continue
                 self._run_command(command)

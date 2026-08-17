@@ -92,8 +92,9 @@ class WebApplication:
         self._projects = SqlAlchemyProjectRepository(self._sessions)
         self._dashboard = SqlAlchemyDashboardRepository(self._sessions)
         self._operations = BoundedOperations()
+        self._schedule_repository = SqlAlchemyScheduleRepository(self._sessions)
         self._scheduler = ProjectScheduler(
-            SqlAlchemyScheduleRepository(self._sessions), self._submit_scheduled
+            self._schedule_repository, self._submit_scheduled
         )
         self._cipher = (
             SecretCipher(settings.postify_secret_key.get_secret_value())
@@ -303,10 +304,11 @@ class WebApplication:
         ) as action:
             action.execute()
 
-    def _publish_once(self, project_id: int) -> None:
+    def _publish_once(self, project_id: int, route_id: int | None = None) -> None:
         with open_project_publish_once(
             self._settings,
             project_id=project_id,
+            route_id=route_id,
             record_operation=False,
         ) as action:
             action.execute()
@@ -317,6 +319,8 @@ class WebApplication:
             command.project_id,
             command.kind,
             accepted_run_id=command.operation_run_id,
+            route_id=command.route_id,
+            scheduled_job_id=command.job_id,
         )
 
     def _submit_operation(
@@ -325,6 +329,8 @@ class WebApplication:
         kind: str,
         *,
         accepted_run_id: int | None = None,
+        route_id: int | None = None,
+        scheduled_job_id: int | None = None,
     ) -> None:
         operation_kind = OperationKind(kind)
         journal = SqlAlchemyOperationRunRepository(
@@ -345,6 +351,7 @@ class WebApplication:
                     with open_project_publish_once(
                         self._settings,
                         project_id=project_id,
+                        route_id=route_id,
                         record_operation=False,
                     ) as action:
                         outcome = action.execute().outcome
@@ -357,8 +364,16 @@ class WebApplication:
                     )
                 except BaseException:
                     pass
+                if scheduled_job_id is not None:
+                    self._schedule_repository.acknowledge(
+                        scheduled_job_id, succeeded=False, now=datetime.now(UTC)
+                    )
                 raise
             journal.succeed(run_id, outcome=outcome, now=datetime.now(UTC))
+            if scheduled_job_id is not None:
+                self._schedule_repository.acknowledge(
+                    scheduled_job_id, succeeded=True, now=datetime.now(UTC)
+                )
 
         try:
             self._operations.submit(project_id, kind, operation)

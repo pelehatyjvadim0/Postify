@@ -82,6 +82,7 @@ class PublicationAttempt:
     attempt_no: int
     outcome: str
     code: str | None
+    reason: str | None
     message_id: int | None
     started_at: datetime
     finished_at: datetime

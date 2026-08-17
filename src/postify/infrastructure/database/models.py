@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -234,3 +234,20 @@ class ScheduleSlotClaimModel(Base):
     claimed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    route_id: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class ScheduledJobModel(Base):
+    __tablename__ = "scheduled_jobs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    route_id: Mapped[int | None] = mapped_column(BigInteger)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    operation_run_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

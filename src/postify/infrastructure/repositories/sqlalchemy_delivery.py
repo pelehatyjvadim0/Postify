@@ -31,10 +31,14 @@ class SqlAlchemyDeliveryRepository:
                            d.status, d.attempt_no
                     FROM content_packages p
                     LEFT JOIN deliveries d ON d.package_id = p.id AND d.project_id=p.project_id
-                    WHERE p.project_id=:project AND p.status = 'approved' AND (d.id IS NULL OR d.status = 'retryable')
+                    WHERE p.project_id=:project AND p.status = 'approved'
+                      AND (d.id IS NULL OR
+                           (d.status = 'retryable'
+                            AND d.route_id IS NOT DISTINCT FROM :route_id
+                            AND d.channel_id IS NOT DISTINCT FROM :channel_id))
                     ORDER BY p.created_at, p.id
                     FOR UPDATE OF p SKIP LOCKED LIMIT 1
-                """), {"project": self.project_id}).mappings().first()
+                """), {"project": self.project_id, "route_id": self.route_id, "channel_id": self.channel_id}).mappings().first()
                 if row is None:
                     session.commit()
                     return None
@@ -64,7 +68,9 @@ class SqlAlchemyDeliveryRepository:
                         UPDATE deliveries SET status='sending', attempt_no=:attempt_no,
                         sending_started_at=:now, failure_code=NULL, failure_reason=NULL, updated_at=:now
                         WHERE project_id=:project AND id=:id AND status='retryable'
-                    """), {"project": self.project_id, "id": delivery_id, "attempt_no": attempt_no, "now": now})
+                          AND route_id IS NOT DISTINCT FROM :route_id
+                          AND channel_id IS NOT DISTINCT FROM :channel_id
+                    """), {"project": self.project_id, "id": delivery_id, "attempt_no": attempt_no, "now": now, "route_id": self.route_id, "channel_id": self.channel_id})
                 session.commit()
                 return DeliveryClaim(delivery_id, row.id, attempt_no, row.post_text, row.media_path, row.media_mime)
             except:

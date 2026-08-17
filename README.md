@@ -229,7 +229,8 @@ postify ui --host 127.0.0.1 --port 8000
 Перед обновлением сохраните БД, медиа и точную версию пакета:
 
 ```sh
-pg_dump --format=custom --file=postify-before-upgrade.dump "$DATABASE_URL"
+PG_DUMP_DATABASE_URL="postgresql:${DATABASE_URL#postgresql+psycopg:}"
+pg_dump --format=custom --file=postify-before-upgrade.dump "$PG_DUMP_DATABASE_URL"
 tar -C /var/lib/postify -czf postify-media-before-upgrade.tar.gz media
 python -m pip show postify
 ```

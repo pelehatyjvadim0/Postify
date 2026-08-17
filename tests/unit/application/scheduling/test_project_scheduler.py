@@ -69,6 +69,29 @@ def test_tick_submits_each_due_command_through_injected_runner() -> None:
     )
 
 
+def test_tick_keeps_each_due_publication_bound_to_its_route() -> None:
+    repository = ScheduleRepository(
+        (
+            _project(
+                routes=(
+                    RouteSchedule(True, True, ("08:00",), route_id=7),
+                    RouteSchedule(True, True, ("09:00",), route_id=19),
+                )
+            ),
+        )
+    )
+    submitted = []
+
+    commands = ProjectScheduler(repository, submitted.append).tick(
+        datetime(2026, 8, 12, 6, 0, tzinfo=UTC)
+    )
+
+    assert [(item.kind, item.route_id) for item in commands] == [
+        ("publish_once", 19)
+    ]
+    assert submitted == list(commands)
+
+
 def test_tick_does_nothing_outside_configured_minute() -> None:
     # Поломка: polling запускает ближайший слот до его точной минуты.
     repository = ScheduleRepository(
@@ -201,7 +224,9 @@ def test_runner_busy_does_not_turn_claimed_command_into_a_second_flow() -> None:
         raise AssertionError("Scheduler must preserve runner duplicate semantics")
 
 
-def test_scheduled_publish_uses_persisted_web_boundary_without_env_telegram_gate() -> None:
+def test_scheduled_publish_uses_persisted_web_boundary_without_env_telegram_gate(
+    monkeypatch,
+) -> None:
     # Поломка review: env Telegram решает доступность persisted route.
     from postify.web.services import WebApplication
 
@@ -220,19 +245,39 @@ def test_scheduled_publish_uses_persisted_web_boundary_without_env_telegram_gate
         def submit(self, project_id, kind, operation) -> None:
             self.submitted.append((project_id, kind))
 
+    selected_routes = []
+
+    class PublishAction:
+        def execute(self):
+            return type("Result", (), {"outcome": "empty"})()
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def opened(*args, **kwargs):
+        selected_routes.append(kwargs["route_id"])
+        yield PublishAction()
+
+    monkeypatch.setattr("postify.web.services.open_project_publish_once", opened)
+
     application = object.__new__(WebApplication)
     application._projects = Projects()
     application._operations = Operations()
     application._telegram = None
+    application._settings = object()
 
     application._submit_scheduled(
         ScheduledCommand(
             41,
             "publish_once",
             datetime(2026, 8, 12, 6, tzinfo=UTC),
+            route_id=73,
             operation_run_id=91,
         )
     )
 
     assert application._projects.requested == [41]
     assert application._operations.submitted == [(41, "publish_once")]
+
+    application._publish_once(41, 73)
+    assert selected_routes == [73]

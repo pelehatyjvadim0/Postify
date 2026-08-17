@@ -364,7 +364,7 @@ class SqlAlchemyDashboardRepository:
                 attempt_rows = (
                     session.execute(
                         text(
-                            """SELECT delivery_id,attempt_no,outcome,code,message_id,
+                            """SELECT delivery_id,attempt_no,outcome,code,reason,message_id,
                             started_at,finished_at FROM delivery_attempts
                             WHERE project_id=:project
                             AND delivery_id IN :delivery_ids
@@ -384,6 +384,7 @@ class SqlAlchemyDashboardRepository:
                             item.attempt_no,
                             item.outcome,
                             item.code,
+                            item.reason,
                             item.message_id,
                             item.started_at,
                             item.finished_at,

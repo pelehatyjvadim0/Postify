@@ -19,6 +19,8 @@ const LABELS = {
   telegram_retryable: "Канал временно недоступен",
   telegram_rejected: "Канал отклонил публикацию",
   stale_sending: "Отправка не завершена",
+  eligible_source_shortage: "Недостаточно подходящих источников",
+  content_failures: "Ошибки обработки",
 };
 
 export const escapeHtml = (value) => String(value ?? "")
@@ -103,11 +105,12 @@ export function renderPublications(data) {
 
 export function renderJournal(data) {
   const items = data.items || [];
-  if (!items.length) return `<section class="screen" data-screen="journal">${empty("Запусков пока нет")}</section>`;
   const operational = data.operational || {};
   const runtime = operational.runtime || {};
   const signalSummary = (operational.signals || []).map((item) => `${label(item.code)}: ${item.count}`).join(" · ") || "Проблем нет";
-  return `<section class="screen" data-screen="journal"><div class="journal-toolbar"><div><p class="section-kicker">Операции</p><h2>Последние запуски</h2><small>Дефицит: ${escapeHtml(operational.deficit ?? 0)} · ${escapeHtml(signalSummary)}</small><div class="runtime-state"><span>База данных: ${escapeHtml(label(runtime.database))}</span><span>Планировщик: ${escapeHtml(label(runtime.scheduler))}</span></div></div><div><button class="button button--quiet" type="button" data-action="publish-once">Опубликовать один</button><button class="button button--primary" type="button" data-action="new-run">＋ Запустить поиск</button></div></div><div class="journal-list">${items.map((item) => `<button class="journal-row" type="button" data-action="open-run" data-id="${escapeHtml(item.run_id)}"><span class="run-icon">↻</span><span><strong>№ ${escapeHtml(item.run_id)} · ${escapeHtml(label(item.kind))}</strong><small>${escapeHtml(dateTime(item.started_at))}</small></span>${statusBadge(item.status)}<span>${escapeHtml(item.duration ?? "—")} сек.</span><span>→</span></button>`).join("")}</div></section>`;
+  const deficitReasons = (operational.deficit_reasons || []).map(label).join(" · ") || "Причин дефицита нет";
+  const journal = items.length ? items.map((item) => `<button class="journal-row" type="button" data-action="open-run" data-id="${escapeHtml(item.run_id)}"><span class="run-icon">↻</span><span><strong>№ ${escapeHtml(item.run_id)} · ${escapeHtml(label(item.kind))}</strong><small>${escapeHtml(dateTime(item.started_at))}</small></span>${statusBadge(item.status)}<span>${escapeHtml(item.duration ?? "—")} сек.</span><span>→</span></button>`).join("") : empty("Запусков пока нет");
+  return `<section class="screen" data-screen="journal"><div class="journal-toolbar"><div><p class="section-kicker">Операции</p><h2>Последние запуски</h2><small>Дефицит: ${escapeHtml(operational.deficit ?? 0)} · ${escapeHtml(signalSummary)}</small><small>${escapeHtml(deficitReasons)}</small><div class="runtime-state"><span>База данных: ${escapeHtml(label(runtime.database))}</span><span>Планировщик: ${escapeHtml(label(runtime.scheduler))}</span></div></div><div><button class="button button--quiet" type="button" data-action="publish-once">Опубликовать один</button><button class="button button--primary" type="button" data-action="new-run">＋ Запустить поиск</button></div></div><div class="journal-list">${journal}</div></section>`;
 }
 
 export const screens = {overview: renderOverview, materials: renderMaterials, review: renderReview, queue: renderQueue, publications: renderPublications, journal: renderJournal};

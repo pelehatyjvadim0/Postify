@@ -135,7 +135,7 @@ function openMaterial(node) {
 function openDelivery(node) {
   const item = itemBy("delivery", node.dataset.id);
   if (!item) return;
-  const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>message ID: ${escapeHtml(attempt.message_id || "—")}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
+  const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>${escapeHtml(label(attempt.code))}</span><span>${escapeHtml(attempt.reason || "—")}</span><span>message ID: ${escapeHtml(attempt.message_id || "—")}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
   openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempt_count ?? item.attempts?.length ?? item.attempts ?? 0)}</dd><dt>Сообщение</dt><dd>${escapeHtml(item.message_id || "—")}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl><h3>Попытки</h3><ol class="package-history">${attempts}</ol></article>`, "", node);
 }
 
