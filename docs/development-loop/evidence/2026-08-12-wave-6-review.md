@@ -1,6 +1,8 @@
 # Gate-review Wave 6
 
-Актуальный итог 2026-08-17: **APPROVED для Wave 6 на `497746a`**.
+Актуальный итог 2026-08-17: **APPROVED для продукта `497746a` на evidence
+boundary `e6af284`**. Управляющие результаты находятся в финальной секции
+«Синхронизация по quality/07».
 Ниже сохранены исторические факты Task 11; финальная remediation-секция в конце
 заменяет прежние числа и недолговечную ссылку на `tmp/`.
 
@@ -98,3 +100,50 @@ Manifest содержит `14` ready PNG (7 desktop `1440×1000`, 7 mobile
 
 Verdict: **APPROVED**. Это не разрешает merge/push/cleanup; эти lifecycle
 действия остались вне scope.
+
+## Синхронизация по `quality/07` — 2026-08-17
+
+После предыдущей remediation-проверки capture/manifest-контракт был исправлен
+в `e6af284`, без изменения product behavior после `497746a`. Все 14
+детерминированных gates затем выполнены на `e6af284`; их `command.log` являются
+актуальным источником чисел:
+
+| Gate | Команда | Результат |
+| --- | --- | --- |
+| PostgreSQL 16 full | `uv run pytest -q` | `741 passed in 51.10s` |
+| Focused backend | `uv run pytest -p no:cacheprovider -q tests/integration/test_project_runtime_configuration.py tests/integration/test_web_component.py tests/integration/test_web_operation_ownership.py` | `12 passed in 2.03s` |
+| Browser | `uv run pytest -p no:cacheprovider -q tests/ui_mockup/test_browser_flows.py` | `77 passed in 28.51s` |
+| Installed wheel | `uv run pytest -p no:cacheprovider -q tests/e2e/test_cli_ui.py` | `1 passed in 3.08s` |
+| Ruff | `uv run ruff check .` | `All checks passed!` |
+| Compile | `uv run python -m compileall -q src` | exit `0`, без вывода |
+| Lock | `uv lock --check` | exit `0`; `Resolved 43 packages in 0.87ms` |
+| JavaScript | четыре `node --check` для `api.js`, `screens.js`, `settings.js`, `app.js` | все exit `0` |
+| Diff | `git diff --check`; `git diff --check 9ce37da..HEAD` | оба exit `0` |
+| Visual | `uv run python adws/adw_modules/visual_evidence.py docs/development-loop/evidence/artifacts/2026-08-12-wave-6/manifest.json` | 16 PNG валидны |
+
+Factory передал test gates отдельный `TEST_DATABASE_URL` на loopback cluster;
+секретов в command logs нет. Trace-backed setup:
+
+```sh
+/usr/lib/postgresql/16/bin/initdb -D /dev/shm/postify-sssf-pg16 --username=postify_gate --auth=trust --encoding=UTF8 --no-locale
+mkdir -p /dev/shm/postify-sssf-pg16-socket
+/usr/lib/postgresql/16/bin/pg_ctl -D /dev/shm/postify-sssf-pg16 -l /dev/shm/postify-sssf-pg16.log -o "-h 127.0.0.1 -p 55434 -k /dev/shm/postify-sssf-pg16-socket" start
+```
+
+Первая попытка старта без socket-каталога была неуспешной; показанная команда
+является успешной. Сервер подтвердил PostgreSQL `16.14` и принимал соединения
+только на `127.0.0.1:55434`.
+
+Durable manifest:
+`docs/development-loop/evidence/artifacts/2026-08-12-wave-6/manifest.json`.
+Он ссылается на 7 desktop и 7 mobile ready PNG, `desktop-loading.png` и
+`mobile-error.png`; все файлы существуют, hashes/размеры совпадают, все 16
+overflow checks отрицательны. Quality gate валидировал уже созданные
+артефакты; воспроизводимая capture-команда хранится в manifest.
+
+Независимый review в
+`adws/adw_data/sessions/0b38d798/context_handoff/review.md` выдал `APPROVED` на
+`e6af284`; durable acceptance record —
+`.superpowers/sdd/2026-08-12-ui-backend-settings/final-rereview-3.md`.
+Merge, push, main-branch validation, worktree deletion и cleanup не доказаны и
+не заявляются.
