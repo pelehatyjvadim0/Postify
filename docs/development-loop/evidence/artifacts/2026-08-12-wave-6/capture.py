@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 
 from playwright.sync_api import Route, sync_playwright
@@ -20,6 +21,7 @@ VIEWPORTS = {"desktop": (1440, 1000), "mobile": (360, 800)}
 
 
 def main() -> None:
+    sys.path.insert(0, str(ROOT))
     from tests.ui_mockup.test_browser_flows import FIXTURES
 
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=STATIC)
@@ -55,7 +57,7 @@ def main() -> None:
                 error = browser.new_page(viewport={"width": 360, "height": 800})
                 error.route("**/api/v1/**", lambda route: route.fulfill(status=503, json={"code": "service_unavailable"}))
                 error.goto(f"{base_url}/#overview")
-                error.locator("[data-error]").wait_for()
+                error.locator(".error-state").wait_for()
                 entries.append(capture(error, "mobile-error.png", "overview", "mobile", "error"))
                 error.close()
             finally:
@@ -93,6 +95,7 @@ def install_api(page, fixtures: dict[str, object]) -> None:
 
 def capture(page, filename: str, route: str, viewport: str, state: str) -> dict[str, object]:
     target = OUTPUT / filename
+    page.wait_for_timeout(500)
     page.screenshot(path=target, full_page=True)
     dimensions = page.evaluate(
         """() => ({scrollWidth: document.documentElement.scrollWidth,
