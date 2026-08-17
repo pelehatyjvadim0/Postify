@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.sample
 
 # Зависимости и сборка
 node_modules/
@@ -37,10 +38,19 @@ AGENTS.MD
 CLAUDE.md
 GEMINI.md
 .codex/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/sssf/
+!.claude/skills/sssf/**
 .cursor/
 .agents/
 .opencode/
 .worktrees/
 docs/superpowers/
 .superpowers/
+
+# sssf runtime
+adws/adw_data/sessions/
+adws/adw_data/sssf.db*
+*.pyc
