@@ -2,9 +2,9 @@
   "schema_version": 1,
   "capture_command": "uv run python docs/development-loop/evidence/artifacts/2026-08-12-wave-6/capture.py",
   "product_commit": "497746a3c7da8742c6a826b2ee1de28ede15dad2",
-  "screens": [
+  "captures": [
     {
-      "file": "desktop-overview.png",
+      "path": "desktop-overview.png",
       "route": "overview",
       "viewport": "desktop",
       "state": "ready",
@@ -15,24 +15,30 @@
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-materials.png",
+      "path": "desktop-materials.png",
       "route": "materials",
       "viewport": "desktop",
       "state": "ready",
-      "sha256": "e1190243629f17635eda83f5ef91b4a7fbe6970a66dba864d677689cb1c972f2",
-      "bytes": 70568,
+      "sha256": "607f6222ebed49fb65370a01832564973c0c1d368fa9de55824f0c49c4001f11",
+      "bytes": 70571,
       "width": 1440,
       "height": 1000,
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-review.png",
+      "path": "desktop-review.png",
       "route": "review",
       "viewport": "desktop",
       "state": "ready",
@@ -43,10 +49,13 @@
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-queue.png",
+      "path": "desktop-queue.png",
       "route": "queue",
       "viewport": "desktop",
       "state": "ready",
@@ -57,10 +66,13 @@
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-publications.png",
+      "path": "desktop-publications.png",
       "route": "publications",
       "viewport": "desktop",
       "state": "ready",
@@ -71,24 +83,30 @@
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-journal.png",
+      "path": "desktop-journal.png",
       "route": "journal",
       "viewport": "desktop",
       "state": "ready",
-      "sha256": "0801da0940746d1a856567d24abdacc00cadbeb7fdd4a7b1537487761076dff6",
+      "sha256": "997118d85c8274be915a974c302132e986fca876a040165209440d0e0f9059f0",
       "bytes": 81576,
       "width": 1440,
       "height": 1000,
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-settings.png",
+      "path": "desktop-settings.png",
       "route": "settings",
       "viewport": "desktop",
       "state": "ready",
@@ -99,10 +117,13 @@
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1214,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-overview.png",
+      "path": "mobile-overview.png",
       "route": "overview",
       "viewport": "mobile",
       "state": "ready",
@@ -113,10 +134,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 1361,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-materials.png",
+      "path": "mobile-materials.png",
       "route": "materials",
       "viewport": "mobile",
       "state": "ready",
@@ -127,10 +151,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-review.png",
+      "path": "mobile-review.png",
       "route": "review",
       "viewport": "mobile",
       "state": "ready",
@@ -141,10 +168,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-queue.png",
+      "path": "mobile-queue.png",
       "route": "queue",
       "viewport": "mobile",
       "state": "ready",
@@ -155,10 +185,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-publications.png",
+      "path": "mobile-publications.png",
       "route": "publications",
       "viewport": "mobile",
       "state": "ready",
@@ -169,10 +202,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-journal.png",
+      "path": "mobile-journal.png",
       "route": "journal",
       "viewport": "mobile",
       "state": "ready",
@@ -183,10 +219,13 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-settings.png",
+      "path": "mobile-settings.png",
       "route": "settings",
       "viewport": "mobile",
       "state": "ready",
@@ -197,24 +236,30 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 1450,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "desktop-loading.png",
+      "path": "desktop-loading.png",
       "route": "journal",
       "viewport": "desktop",
       "state": "loading",
-      "sha256": "0be5f8c983e9a414971964925fa1699061c249b2524d92a96ff0eb21a2789f7e",
-      "bytes": 105090,
+      "sha256": "c49ee64c93259f360efbed15f6e929c4ed855ba4ee3da2ee3be60f47823d0758",
+      "bytes": 105004,
       "width": 1440,
       "height": 1000,
       "scrollWidth": 1440,
       "clientWidth": 1440,
       "scrollHeight": 1000,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     },
     {
-      "file": "mobile-error.png",
+      "path": "mobile-error.png",
       "route": "overview",
       "viewport": "mobile",
       "state": "error",
@@ -225,7 +270,10 @@
       "scrollWidth": 360,
       "clientWidth": 360,
       "scrollHeight": 800,
-      "horizontal_overflow": false
+      "horizontal_overflow": false,
+      "checks": {
+        "overflow_free": true
+      }
     }
   ]
 }

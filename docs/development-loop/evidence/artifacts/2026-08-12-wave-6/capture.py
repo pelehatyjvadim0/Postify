@@ -71,9 +71,24 @@ def main() -> None:
         "schema_version": 1,
         "capture_command": "uv run python docs/development-loop/evidence/artifacts/2026-08-12-wave-6/capture.py",
         "product_commit": subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+            [
+                "git",
+                "log",
+                "-1",
+                "--format=%H",
+                "--",
+                "src/postify",
+                "tests",
+                "README.md",
+                ".env.example",
+                "pyproject.toml",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip(),
-        "screens": entries,
+        "captures": entries,
     }
     (OUTPUT / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
@@ -103,7 +118,7 @@ def capture(page, filename: str, route: str, viewport: str, state: str) -> dict[
                     scrollHeight: document.documentElement.scrollHeight})"""
     )
     return {
-        "file": filename,
+        "path": filename,
         "route": route,
         "viewport": viewport,
         "state": state,
@@ -113,6 +128,9 @@ def capture(page, filename: str, route: str, viewport: str, state: str) -> dict[
         "height": page.viewport_size["height"],
         **dimensions,
         "horizontal_overflow": dimensions["scrollWidth"] > dimensions["clientWidth"],
+        "checks": {
+            "overflow_free": dimensions["scrollWidth"] <= dimensions["clientWidth"]
+        },
     }
 
 
