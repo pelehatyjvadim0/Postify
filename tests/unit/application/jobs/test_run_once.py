@@ -123,3 +123,19 @@ def test_content_error_propagates_after_selection_and_is_not_reported_as_success
         job.execute()
 
     assert events == ["import", "selection", "content"]
+
+
+def test_public_content_stage_reuses_pipeline_without_import_or_selection() -> None:
+    # Wave 10 owner commands must call the shared content action without a parallel pipeline.
+    from postify.application.jobs.run_once import RunOnce
+
+    events: list[str] = []
+    expected = object()
+    action = RunOnce(
+        RecordingStep("import", events),
+        RecordingStep("selection", events),
+        RecordingStep("content", events, expected),
+    )
+
+    assert action.process_content() is expected
+    assert events == ["content"]

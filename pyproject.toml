@@ -8,19 +8,22 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "alembic",
+    "cryptography>=50.0.0",
+    "fastapi>=0.141.1",
     "httpcore",
     "httpx",
     "psycopg[binary]",
     "pydantic-settings",
     "sqlalchemy",
     "typer",
+    "uvicorn>=0.52.1",
 ]
 
 [project.scripts]
 postify = "postify.cli:app"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["playwright", "pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -29,6 +32,12 @@ where = ["src"]
 postify = [
     "infrastructure/database/migrations/*.py",
     "infrastructure/database/migrations/versions/*.py",
+    "web/static/index.html",
+    "web/static/styles.css",
+    "web/static/app.js",
+    "web/static/api.js",
+    "web/static/screens.js",
+    "web/static/settings.js",
 ]
 
 [tool.pytest.ini_options]

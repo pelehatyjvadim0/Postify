@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
+import os
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -37,8 +39,8 @@ def _seed_selected(engine, discovered_values: list[datetime]) -> list[int]:
             candidate_id = connection.execute(
                 text(
                     "INSERT INTO candidates "
-                    "(source_name, source_id, title, url, discovered_at, raw_payload) "
-                    "VALUES ('hn', :source_id, :title, :url, :discovered_at, '{}'::jsonb) "
+                    "(project_id, source_name, source_id, title, url, discovered_at, raw_payload) "
+                    "VALUES (1, 'hn', :source_id, :title, :url, :discovered_at, '{}'::jsonb) "
                     "RETURNING id"
                 ),
                 {
@@ -51,8 +53,8 @@ def _seed_selected(engine, discovered_values: list[datetime]) -> list[int]:
             connection.execute(
                 text(
                     "INSERT INTO candidate_decisions "
-                    "(candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
-                    "VALUES (:candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
+                    "(project_id, candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
+                    "VALUES (1, :candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
                     "'{}'::jsonb, 'v1', :decided_at)"
                 ),
                 {"candidate_id": candidate_id, "decided_at": NOW},
@@ -87,6 +89,95 @@ def test_claim_enforces_daily_limit_and_never_claims_candidate_twice(
         assert len(rows) == 12
         assert len(set(rows)) == 12
         assert {attempt.attempt_no for attempt in first} == {1}
+    finally:
+        engine.dispose()
+
+
+def test_project_cleanup_preserves_other_projects_active_media(
+    migrated_database_url: str, tmp_path: Path
+) -> None:
+    # Поломка: run project 1 сканирует общий media root и удаляет active-файл project 2.
+    import httpx
+
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.application.content.process_content import ProcessContent
+    from postify.domain.content.models import ContentLimits
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    media_path = tmp_path / "other-project-active.png"
+    media_path.write_bytes(b"project-2-media")
+    old = (NOW - timedelta(days=4)).timestamp()
+    os.utime(media_path, (old, old))
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO content_projects
+                    (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
+                    VALUES (2,'Второй','AI','ru','Команды','UTC','{}'::jsonb,:now,:now)"""
+                ),
+                {"now": NOW},
+            )
+            candidate_id = connection.execute(
+                text(
+                    """INSERT INTO candidates
+                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                    VALUES (2,'source','other-active','Other','https://example.com/other',:now,'{}'::jsonb)
+                    RETURNING id"""
+                ),
+                {"now": NOW},
+            ).scalar_one()
+            attempt_id = connection.execute(
+                text(
+                    """INSERT INTO content_attempts
+                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
+                    VALUES (2,:candidate,1,'fresh','packaged','https://example.com/other',:now)
+                    RETURNING id"""
+                ),
+                {"candidate": candidate_id, "now": NOW},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    """INSERT INTO content_packages
+                    (project_id,attempt_id,source_url,context,analysis,post_text,media_path,
+                     media_mime,review_required,status,generation_snapshot,created_at,updated_at)
+                    VALUES (2,:attempt,'https://example.com/other','ctx','analysis','post',:path,
+                            'image/png',true,'approved','{}'::jsonb,:now,:now)"""
+                ),
+                {"attempt": attempt_id, "path": str(media_path), "now": NOW},
+            )
+
+        class Unused:
+            def __getattr__(self, name):
+                raise AssertionError(name)
+
+        repository = SqlAlchemyContentRepository(sessionmaker(engine), project_id=1)
+        with httpx.Client() as client:
+            processor = ProcessContent(
+                repository,
+                Unused(),
+                Unused(),
+                LocalMediaProvider(
+                    client,
+                    tmp_path,
+                    1_000_000,
+                    None,
+                    url_policy=PublicHttpUrlPolicy(),
+                ),
+                limits=ContentLimits(1, 1, 1, 100, 0),
+                review_required=True,
+                timezone="UTC",
+                clock=lambda: NOW,
+            )
+
+            result = processor.execute()
+
+        assert result.claimed == 0
+        assert media_path.read_bytes() == b"project-2-media"
     finally:
         engine.dispose()
 
@@ -167,6 +258,218 @@ def test_due_retry_waits_six_hours_consumes_slot_and_second_failure_is_terminal(
                 {"day": NOW.date()},
             ).scalar_one()
         assert started == 2
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("target_status", ["failed", "retry_scheduled"])
+def test_manual_retry_bypasses_automatic_limit_and_preserves_attempt_history(
+    migrated_database_url: str, target_status: str,
+) -> None:
+    # Manual retry must neither wait for automation nor consume its daily budget.
+    from postify.domain.content.models import ExecutionContext
+
+    ContentLimits, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    _seed_selected(engine, [NOW - timedelta(days=1)])
+    repository = Repository(sessionmaker(engine))
+    try:
+        first = repository.claim(now=NOW, day=NOW.date(), limits=_limits(ContentLimits))[0]
+        if target_status == "failed":
+            repository.fail_attempt(first.id, code="codex_failed", now=NOW)
+        else:
+            repository.schedule_article_retry(
+                first.id,
+                retry_at=NOW + timedelta(hours=6),
+                now=NOW,
+            )
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE content_daily_usage SET analyses_started=12 WHERE project_id=1 AND day=:day"), {"day": NOW.date()})
+
+        retried = repository.claim(
+            now=NOW + timedelta(minutes=1), day=NOW.date(), limits=_limits(ContentLimits),
+            context=ExecutionContext(mode="manual", actor="ui", batch_size=1, target_attempt_id=first.id),
+        )
+
+        with engine.connect() as connection:
+            usage = connection.execute(text("SELECT analyses_started,manual_analyses_started FROM content_daily_usage WHERE project_id=1 AND day=:day"), {"day": NOW.date()}).one()
+            history = connection.execute(text("SELECT attempt_no,status FROM content_attempts WHERE project_id=1 AND candidate_id=:candidate ORDER BY attempt_no"), {"candidate": first.candidate_id}).all()
+        assert len(retried) == 1
+        assert retried[0].attempt_no == 2
+        assert usage == (12, 1)
+        assert history == [(1, "retried"), (2, "processing")]
+    finally:
+        engine.dispose()
+
+
+def test_manual_return_to_analysis_is_project_scoped_and_idempotent(
+    migrated_database_url: str,
+) -> None:
+    # A rejected package creates a new attempt only once and never crosses projects.
+    from postify.domain.content.models import ExecutionContext
+
+    ContentLimits, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    candidate_id = _seed_selected(engine, [NOW - timedelta(days=1)])[0]
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO content_projects(id,name,topic,language,audience,timezone,configuration,created_at,updated_at) VALUES (2,'Other','topic','ru','audience','UTC','{}'::jsonb,:now,:now)"), {"now": NOW})
+        attempt_id = connection.execute(text("INSERT INTO content_attempts(project_id,candidate_id,attempt_no,tier,status,source_url,started_at) VALUES (1,:candidate,1,'fresh','packaged','https://source.test/manual',:now) RETURNING id"), {"candidate": candidate_id, "now": NOW}).scalar_one()
+        package_id = connection.execute(text("INSERT INTO content_packages(project_id,attempt_id,source_url,context,analysis,post_text,review_required,status,generation_snapshot,created_at,updated_at) VALUES (1,:attempt,'https://source.test/manual','ctx','анализ','пост',true,'rejected','{}'::jsonb,:now,:now) RETURNING id"), {"attempt": attempt_id, "now": NOW}).scalar_one()
+    repository = Repository(sessionmaker(engine))
+    context = ExecutionContext(mode="manual", actor="ui", batch_size=1, target_package_id=package_id)
+    try:
+        returned = repository.claim(now=NOW, day=NOW.date(), limits=_limits(ContentLimits), context=context)
+        repeated = repository.claim(now=NOW + timedelta(minutes=1), day=NOW.date(), limits=_limits(ContentLimits), context=context)
+        foreign = Repository(sessionmaker(engine), project_id=2).claim(now=NOW, day=NOW.date(), limits=_limits(ContentLimits), context=context)
+        with engine.connect() as connection:
+            packages = connection.execute(text("SELECT status FROM content_packages WHERE project_id=1 AND id=:package"), {"package": package_id}).scalars().all()
+            attempts = connection.execute(text("SELECT attempt_no FROM content_attempts WHERE project_id=1 AND candidate_id=:candidate ORDER BY attempt_no"), {"candidate": candidate_id}).scalars().all()
+        assert len(returned) == 1
+        assert repeated == ()
+        assert foreign == ()
+        assert packages == ["rejected"]
+        assert attempts == [1, 2]
+    finally:
+        engine.dispose()
+
+
+def test_manual_regeneration_links_new_package_version_and_preserves_old_package(
+    migrated_database_url: str,
+) -> None:
+    from postify.domain.content.models import ExecutionContext
+
+    ContentLimits, Repository = _api()
+    _, BatchAnalysis, _ = _analysis_api()
+    engine = create_engine(migrated_database_url)
+    candidate_id = _seed_selected(engine, [NOW - timedelta(days=1)])[0]
+    with engine.begin() as connection:
+        attempt_id = connection.execute(
+            text(
+                "INSERT INTO content_attempts"
+                "(project_id,candidate_id,attempt_no,tier,status,source_url,started_at) "
+                "VALUES (1,:candidate,1,'fresh','packaged','https://source.test/version',:now) "
+                "RETURNING id"
+            ),
+            {"candidate": candidate_id, "now": NOW},
+        ).scalar_one()
+        package_id = connection.execute(
+            text(
+                "INSERT INTO content_packages"
+                "(project_id,attempt_id,source_url,context,analysis,post_text,"
+                "review_required,status,generation_snapshot,created_at,updated_at) "
+                "VALUES (1,:attempt,'https://source.test/version','ctx','анализ','старый пост',"
+                "true,'rejected','{}'::jsonb,:now,:now) RETURNING id"
+            ),
+            {"attempt": attempt_id, "now": NOW},
+        ).scalar_one()
+    repository = Repository(sessionmaker(engine))
+    context = ExecutionContext(
+        mode="manual",
+        actor="ui",
+        purpose="regenerate_post",
+        batch_size=1,
+        target_package_id=package_id,
+    )
+    try:
+        attempt = repository.claim(
+            now=NOW,
+            day=NOW.date(),
+            limits=_limits(ContentLimits),
+            context=context,
+        )[0]
+        article, topic = _article_and_topic(attempt.id)
+        repository.save_extracted(attempt.id, article)
+        drafts = repository.save_analysis_and_create_packages(
+            BatchAnalysis(
+                topics=(topic,),
+                requested_attempt_ids=(attempt.id,),
+                package_limit=1,
+            ),
+            articles={attempt.id: article},
+            review_required=True,
+            now=NOW,
+            day=NOW.date(),
+            package_limit=3,
+            context=context,
+        )
+
+        with engine.connect() as connection:
+            versions = connection.execute(
+                text(
+                    "SELECT id,previous_package_id FROM content_packages "
+                    "WHERE project_id=1 ORDER BY id"
+                )
+            ).all()
+        assert drafts[0].package_id != package_id
+        assert versions == [(package_id, None), (drafts[0].package_id, package_id)]
+    finally:
+        engine.dispose()
+
+
+def test_package_rejection_persists_sql_null_reason(
+    migrated_database_url: str,
+) -> None:
+    _, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    candidate_id = _seed_selected(engine, [NOW - timedelta(days=1)])[0]
+    with engine.begin() as connection:
+        attempt_id = connection.execute(
+            text(
+                "INSERT INTO content_attempts"
+                "(project_id,candidate_id,attempt_no,tier,status,source_url,started_at) "
+                "VALUES (1,:candidate,1,'fresh','packaged','https://source.test/reject',:now) "
+                "RETURNING id"
+            ),
+            {"candidate": candidate_id, "now": NOW},
+        ).scalar_one()
+        package_id = connection.execute(
+            text(
+                "INSERT INTO content_packages"
+                "(project_id,attempt_id,source_url,context,analysis,post_text,review_required,"
+                "status,generation_snapshot,created_at,updated_at) "
+                "VALUES (1,:attempt,'https://source.test/reject','ctx','анализ','пост',true,"
+                "'awaiting_review','{}'::jsonb,:now,:now) RETURNING id"
+            ),
+            {"attempt": attempt_id, "now": NOW},
+        ).scalar_one()
+    repository = Repository(sessionmaker(engine))
+    try:
+        rejected = repository.reject(package_id, now=NOW)
+        with engine.connect() as connection:
+            reason = connection.execute(
+                text(
+                    "SELECT reason FROM content_package_status_history "
+                    "WHERE project_id=1 AND package_id=:package AND status='rejected'"
+                ),
+                {"package": package_id},
+            ).scalar_one()
+        assert rejected.status == "rejected"
+        assert reason is None
+    finally:
+        engine.dispose()
+
+
+def test_manual_media_replacement_preserves_prior_media_version_without_usage(
+    migrated_database_url: str,
+) -> None:
+    from postify.domain.content.models import StoredMedia
+
+    ContentLimits, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    candidate_id = _seed_selected(engine, [NOW - timedelta(days=1)])[0]
+    with engine.begin() as connection:
+        attempt_id = connection.execute(text("INSERT INTO content_attempts(project_id,candidate_id,attempt_no,tier,status,source_url,started_at) VALUES (1,:candidate,1,'fresh','packaged','https://source.test/media',:now) RETURNING id"), {"candidate": candidate_id, "now": NOW}).scalar_one()
+        package_id = connection.execute(text("INSERT INTO content_packages(project_id,attempt_id,source_url,context,analysis,post_text,media_path,media_mime,media_source_type,media_source_url,review_required,status,generation_snapshot,created_at,updated_at) VALUES (1,:attempt,'https://source.test/media','ctx','анализ','пост','/media/old.jpg','image/jpeg','og','https://old.test',true,'awaiting_review','{}'::jsonb,:now,:now) RETURNING id"), {"attempt": attempt_id, "now": NOW}).scalar_one()
+    repository = Repository(sessionmaker(engine))
+    try:
+        repository.replace_media(package_id, media=StoredMedia("/media/new.jpg", "image/jpeg", "wikimedia", "https://new.test"), now=NOW)
+        with engine.connect() as connection:
+            current = connection.execute(text("SELECT media_path,media_source_url FROM content_packages WHERE project_id=1 AND id=:id"), {"id": package_id}).one()
+            history = connection.execute(text("SELECT media_path,media_source_url FROM content_package_media_versions WHERE project_id=1 AND package_id=:id"), {"id": package_id}).one()
+            usage = connection.execute(text("SELECT analyses_started,packages_created,manual_analyses_started,manual_packages_created FROM content_daily_usage WHERE project_id=1 AND day=:day"), {"day": NOW.date()}).first()
+        assert current == ("/media/new.jpg", "https://new.test")
+        assert history == ("/media/old.jpg", "https://old.test")
+        assert usage is None
     finally:
         engine.dispose()
 
@@ -329,6 +632,78 @@ def test_concurrent_package_reservation_never_exceeds_three(
         engine.dispose()
 
 
+def test_manual_load_more_creates_repeated_batches_of_three_without_automatic_usage(
+    migrated_database_url: str,
+) -> None:
+    from postify.domain.content.models import ExecutionContext
+
+    ContentLimits, Repository = _api()
+    _, BatchAnalysis, _ = _analysis_api()
+    engine = create_engine(migrated_database_url)
+    _seed_selected(engine, [NOW - timedelta(days=1)] * 7)
+    repository = Repository(sessionmaker(engine))
+    context = ExecutionContext(mode="manual", actor="ui", batch_size=3)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO content_daily_usage"
+                    "(project_id,day,analyses_started,packages_created) "
+                    "VALUES (1,:day,12,3)"
+                ),
+                {"day": NOW.date()},
+            )
+
+        created = []
+        claimed_ids = []
+        for _ in range(2):
+            claimed = repository.claim(
+                now=NOW,
+                day=NOW.date(),
+                limits=_limits(ContentLimits),
+                context=context,
+            )
+            assert len(claimed) == 3
+            claimed_ids.extend(item.candidate_id for item in claimed)
+            articles = {}
+            topics = []
+            for attempt in claimed:
+                article, topic = _article_and_topic(attempt.id)
+                articles[attempt.id] = article
+                topics.append(topic)
+                repository.save_extracted(attempt.id, article)
+            created.append(
+                repository.save_analysis_and_create_packages(
+                    BatchAnalysis(
+                        topics=tuple(topics),
+                        requested_attempt_ids=tuple(item.id for item in claimed),
+                        package_limit=3,
+                    ),
+                    articles=articles,
+                    review_required=True,
+                    now=NOW,
+                    day=NOW.date(),
+                    package_limit=3,
+                    context=context,
+                )
+            )
+
+        with engine.connect() as connection:
+            usage = connection.execute(
+                text(
+                    "SELECT analyses_started,packages_created,"
+                    "manual_analyses_started,manual_packages_created "
+                    "FROM content_daily_usage WHERE project_id=1 AND day=:day"
+                ),
+                {"day": NOW.date()},
+            ).one()
+        assert [len(batch) for batch in created] == [3, 3]
+        assert len(set(claimed_ids)) == 6
+        assert usage == (12, 3, 6, 6)
+    finally:
+        engine.dispose()
+
+
 def test_package_history_sql_failure_rolls_back_analysis_package_and_budget(
     migrated_database_url: str,
 ) -> None:
@@ -405,9 +780,9 @@ def test_repository_returns_full_package_and_review_history_atomically(
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id, attempt_no, tier, status, source_url, article_title, article_text, "
+                "(project_id, candidate_id, attempt_no, tier, status, source_url, article_title, article_text, "
                 "analysis, failure_code, retry_at, started_at, finished_at) VALUES "
-                "(:candidate_id, 1, 'fresh', 'completed', :url, 'Article', :context, :analysis, "
+                "(1, :candidate_id, 1, 'fresh', 'completed', :url, 'Article', :context, :analysis, "
                 "NULL, NULL, :now, :now) RETURNING id"
             ),
             {
@@ -421,10 +796,10 @@ def test_repository_returns_full_package_and_review_history_atomically(
         package_id = connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
+                "(project_id, attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
                 "media_source_type, media_source_url, review_required, status, media_deleted_at, "
                 "created_at, updated_at) VALUES "
-                "(:attempt_id, :url, :context, :analysis, :post, :path, 'image/jpeg', 'og', "
+                "(1, :attempt_id, :url, :context, :analysis, :post, :path, 'image/jpeg', 'og', "
                 ":media_url, true, 'awaiting_review', NULL, :now, :now) RETURNING id"
             ),
             {
@@ -442,8 +817,8 @@ def test_repository_returns_full_package_and_review_history_atomically(
             connection.execute(
                 text(
                     "INSERT INTO content_package_status_history "
-                    "(package_id, status, reason, created_at) VALUES "
-                    "(:package_id, :status, 'test', :now)"
+                    "(project_id, package_id, status, reason, created_at) VALUES "
+                    "(1, :package_id, :status, 'test', :now)"
                 ),
                 {"package_id": package_id, "status": status, "now": NOW},
             )
@@ -536,9 +911,9 @@ def _seed_processing_package(engine) -> tuple[int, int]:
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
+                "(project_id,candidate_id,attempt_no,tier,status,source_url,article_title,article_text,"
                 "analysis,started_at) VALUES "
-                "(:candidate_id,1,'fresh','processing',:url,'Article',:body,:analysis,:now) "
+                "(1,:candidate_id,1,'fresh','processing',:url,'Article',:body,:analysis,:now) "
                 "RETURNING id"
             ),
             {
@@ -552,9 +927,9 @@ def _seed_processing_package(engine) -> tuple[int, int]:
         package_id = connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id,source_url,context,analysis,post_text,review_required,status,"
+                "(project_id,attempt_id,source_url,context,analysis,post_text,review_required,status,"
                 "created_at,updated_at) VALUES "
-                "(:attempt_id,:url,:body,:analysis,:post,true,'processing',:now,:now) "
+                "(1,:attempt_id,:url,:body,:analysis,:post,true,'processing',:now,:now) "
                 "RETURNING id"
             ),
             {
@@ -570,8 +945,8 @@ def _seed_processing_package(engine) -> tuple[int, int]:
             connection.execute(
                 text(
                     "INSERT INTO content_package_status_history "
-                    "(package_id,status,reason,created_at) "
-                    "VALUES (:package_id,:status,'generated',:now)"
+                    "(project_id,package_id,status,reason,created_at) "
+                    "VALUES (1,:package_id,:status,'generated',:now)"
                 ),
                 {"package_id": package_id, "status": status, "now": NOW},
             )

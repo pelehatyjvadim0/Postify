@@ -99,22 +99,66 @@ Postify задуман не как планировщик публикаций. 
 
 Основной контентный конвейер готов и принят. Дальше фокус — сделать его удобным для управления, подключить больше сигналов и источников, а затем замкнуть цикл аналитикой и дистрибуцией.
 
+- [x] Сформулирована продуктовая идея и границы Telegram MVP
+- [x] Согласованы принципы модульной архитектуры
+- [x] Определён контентный конвейер и критерии качества
+- [x] Выбран стек локального MVP и формат запуска
+- [x] Реализован технический импорт HN Algolia и идемпотентное хранение в PostgreSQL
+- [x] Реализованы CLI и systemd-обвязка первой волны
+- [x] Реализованы универсальный отбор и журнал решений
+- [x] Реализованы контентные пакеты с ручной проверкой
+- [x] Реализована публикация в Telegram
+- [x] Реализованы долговечный журнал запусков и расширенный `status`
+- [x] Подключён локальный UI с настройками проекта и встроенным планировщиком
+- [ ] Подключены аналитика и видеосервис
+
+## Рабочие возможности
+
+- конфигурация из `.env` и переменных окружения;
+- импорт кандидатов из HN Algolia;
+- PostgreSQL-хранилище и Alembic-миграции;
+- команды `run-once`, `publish-once`, `start`, `status`, `stop` и `ui`;
+- systemd service и timer для запуска импорта по расписанию.
+- универсальный профиль отбора из переменных окружения: версия, язык, аудитория, правила, маркеры и окно свежести;
+- объяснимые решения `selected` и `rejected`, которые сохраняются один раз и не перезаписываются;
+- `run-once` сначала импортирует кандидатов, затем отбирает все записи без решения и сообщает оба набора счётчиков.
+
+`run-once` извлекает текст выбранных статей, создаёт не более трёх локальных контентных пакетов и оставляет их на проверке. Используются локальный Codex и изображения статьи или Wikimedia Commons. Для проверки доступны `postify content list`, `show ID`, `approve ID`, `reject ID` и семь разделов UI.
+
 ## Подготовка
 
 Нужны Python 3.12+, `uv` и отдельный экземпляр PostgreSQL 16 для Postify. Не используйте общий экземпляр PostgreSQL, если команда `postify stop` не должна иметь право его останавливать.
 
 ```sh
-uv sync --all-groups
+uv venv
+uv pip install --python .venv/bin/python .
+. .venv/bin/activate
 test -e .env || cp .env.example .env
 ```
 
-Заполните в `.env` как минимум `DATABASE_URL`, `HN_QUERY`, параметры systemd, расписания и все `SELECTION_*` из `.env.example`. Профиль отбора не привязан к одной нише: правила и маркеры задаются конфигурацией. Не добавляйте `.env` в Git.
+Для разработки вместо установки пакета используйте `uv sync --all-groups`.
+
+Заполните в `.env` как минимум `DATABASE_URL`, `HN_QUERY`,
+параметры systemd, расписания и все `SELECTION_*` из
+`.env.example`. Профиль отбора не привязан к одной нише: правила и
+маркеры задаются конфигурацией. Не добавляйте `.env` в Git.
+
+`POSTIFY_SECRET_KEY` нужен для шифрования токенов каналов. Создайте его
+один раз и храните отдельно от БД:
+
+```sh
+.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+При утере ключа зашифрованные токены невосстановимы. Не заменяйте ключ
+в работающей системе вслепую: сначала сохраните backup, затем удалите
+старые секреты каналов и введите их заново уже с новым ключом.
 
 Примените миграции к той же отдельной PostgreSQL 16:
 
 ```sh
 POSTIFY_ALEMBIC_DATABASE_URL='postgresql+psycopg://<пользователь>:<пароль>@<хост>:5432/<база>' \
-  uv run --env-file .env alembic upgrade head
+  .venv/bin/alembic upgrade head
 ```
 
 `POSTIFY_ALEMBIC_DATABASE_URL` передаётся Alembic явно; команда не берёт URL миграций из другого источника.
@@ -122,16 +166,69 @@ POSTIFY_ALEMBIC_DATABASE_URL='postgresql+psycopg://<пользователь>:<�
 ## Запуск
 
 ```sh
-uv run --env-file .env postify run-once
-uv run --env-file .env postify publish-once
-uv run --env-file .env postify start
-uv run --env-file .env postify status
-uv run --env-file .env postify stop
+set -a
+. ./.env
+set +a
+postify ui --host 127.0.0.1 --port 8000
 ```
 
-`run-once` выводит счётчики импорта, проверенных кандидатов, `selected`, `rejected` и конкурентных конфликтов. `publish-once` доставляет один approved пакет; для него нужны только `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и `TELEGRAM_TIMEOUT_SECONDS`. `start` включает отдельные import и Telegram timers, а `stop` ждёт завершения обоих one-shot services.
+Первый запуск после миграции идемпотентно создаёт проект из безопасных
+настроек окружения. Повторный запуск не перезаписывает изменения из UI.
+Панель откроется на `http://127.0.0.1:8000` и покажет семь разделов:
+**Обзор**, **Материалы**, **Проверка**, **Очередь**, **Публикации**, **Журнал** и
+**Настройки**.
+
+Источники, каналы и маршруты хранятся как нейтральные по провайдеру
+подключения. Сейчас каталог содержит `hn_algolia` для источника и `telegram` для
+канала. Маршрут связывает формат, канал, CTA и расписание; общие экраны не
+зависят от конкретной площадки.
+
+Остальные CLI-команды доступны в том же окружении:
+
+```sh
+postify run-once
+postify publish-once
+postify status
+```
+
+`run-once` выводит счётчики импорта, проверенных кандидатов, `selected`, `rejected` и конкурентных конфликтов. `publish-once` доставляет один approved пакет; для него нужны `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и `TELEGRAM_TIMEOUT_SECONDS`.
 
 `status` показывает систему, сущности, последние пакеты и попытки доставки, дневной план, последние запуски и проблемы. Для `status` не нужны Telegram credentials: команда не вызывает Telegram и только читает PostgreSQL и безопасные systemd facts.
+
+Аналитика и видеосервис остаются следующими волнами.
+
+## Один владелец расписания
+
+Web-планировщик и legacy systemd timers не должны работать одновременно. Перед
+запуском `postify ui` отключите оба legacy timer и проверьте их состояние:
+
+```sh
+sudo systemctl disable --now postify-run-once.timer
+sudo systemctl disable --now postify-publish-once.timer
+systemctl is-enabled postify-run-once.timer postify-publish-once.timer
+systemctl is-active postify-run-once.timer postify-publish-once.timer
+postify ui --host 127.0.0.1 --port 8000
+```
+
+Ожидаемо, что оба `is-enabled` вернут `disabled`, а оба `is-active` — `inactive`.
+Обратный переход на systemd начинайте с остановки всех экземпляров UI, после чего
+включайте timers командами `sudo systemctl enable --now ...`.
+
+## Backup и rollback
+
+Перед обновлением сохраните БД, медиа и точную версию пакета:
+
+```sh
+PG_DUMP_DATABASE_URL="postgresql:${DATABASE_URL#postgresql+psycopg:}"
+pg_dump --format=custom --file=postify-before-upgrade.dump "$PG_DUMP_DATABASE_URL"
+tar -C /var/lib/postify -czf postify-media-before-upgrade.tar.gz media
+python -m pip show postify
+```
+
+Если после миграции нужен rollback, сначала остановите UI и timers. Надёжный путь —
+развернуть чистую PostgreSQL 16, восстановить `pg_restore` и медиа, затем установить
+предыдущий wheel. Не запускайте `alembic downgrade` на единственной копии рабочей БД: downgrade
+может удалить данные новой схемы. После rollback проверьте `postify status` до возврата трафика.
 
 ## Установка systemd units
 

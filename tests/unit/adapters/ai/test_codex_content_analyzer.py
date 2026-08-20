@@ -121,6 +121,8 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
         repository_cwd=repository,
         timeout_seconds=600,
         work_dir=work,
+        model="gpt-5.6-luna",
+        reasoning_effort="high",
     )
     result = analyzer.analyze([_input(AnalysisInput)], package_limit=3)
 
@@ -137,12 +139,28 @@ def test_codex_exec_receives_article_body_and_hardened_invocation(tmp_path: Path
     assert Path(argv[argv.index("--output-last-message") + 1]).parent == invocation
     assert "--output-schema" in argv
     assert "--output-last-message" in argv
-    assert "--model" not in argv
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-luna"
+    assert 'model_reasoning_effort="high"' in argv
     assert kwargs["shell"] is False
     assert kwargs["timeout"] == 600
     assert MARKER in str(kwargs["input"])
     assert result.topics[0].attempt_id == 17
     assert not invocation.exists()
+
+
+def test_codex_requires_explicit_valid_analysis_profile(tmp_path: Path) -> None:
+    _, _, CodexContentAnalyzer = _api()
+
+    with pytest.raises(ValueError, match="model"):
+        CodexContentAnalyzer(lambda *_args, **_kwargs: None, tmp_path, 60, tmp_path, model=" ")
+    with pytest.raises(ValueError, match="reasoning effort"):
+        CodexContentAnalyzer(
+            lambda *_args, **_kwargs: None,
+            tmp_path,
+            60,
+            tmp_path,
+            reasoning_effort="extreme",
+        )
 
 
 @pytest.mark.parametrize(
@@ -185,17 +203,23 @@ def test_codex_rejects_overlapping_repository_and_work_before_artifacts_or_runne
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected_code"),
     [
-        "not-json",
-        json.dumps({"topics": [{"attempt_id": 999, "analysis": "x", "usefulness": 1,
-                                 "post_text": "x", "media_query": "x"}]}),
-        json.dumps({"topics": [{"attempt_id": 17, "analysis": "x", "usefulness": 1,
-                                 "post_text": "https://source.test/post", "media_query": "x"}]}),
+        ("not-json", "codex_output_not_json"),
+        (
+            json.dumps({"topics": [{"attempt_id": 999, "analysis": "Анализ", "usefulness": 1,
+                                     "selected": True, "post_text": "Пост", "media_query": "x"}]}),
+            "codex_output_domain_invalid",
+        ),
+        (
+            json.dumps({"topics": [{"attempt_id": 17, "analysis": "Анализ", "usefulness": 1,
+                                     "selected": True, "post_text": "https://source.test/post", "media_query": "x"}]}),
+            "codex_output_source_url_forbidden",
+        ),
     ],
 )
 def test_codex_rejects_invalid_json_unknown_id_and_source_url(
-    tmp_path: Path, payload: str
+    tmp_path: Path, payload: str, expected_code: str
 ) -> None:
     # Поломка (gate 7/10): malformed/untrusted batch создаёт пакет.
     AnalysisInput, CodexAnalysisError, CodexContentAnalyzer = _api()
@@ -204,9 +228,44 @@ def test_codex_rejects_invalid_json_unknown_id_and_source_url(
         Path(argv[argv.index("--output-last-message") + 1]).write_text(payload, encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout="raw", stderr="secret")
 
-    analyzer = CodexContentAnalyzer(runner, tmp_path, 600, tmp_path)
-    with pytest.raises(CodexAnalysisError):
+    analyzer = CodexContentAnalyzer(
+        runner, tmp_path / "repository", 600, tmp_path / "work"
+    )
+    with pytest.raises(CodexAnalysisError) as caught:
         analyzer.analyze([_input(AnalysisInput)], package_limit=3)
+    assert caught.value.code == expected_code
+
+
+def test_codex_allows_source_url_when_cta_uses_source_link(tmp_path: Path) -> None:
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    payload = _valid_output()
+    payload["topics"][0]["post_text"] = (
+        "Открыть источник: https://source.test/post"
+    )
+
+    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(
+        runner, tmp_path / "repository", 600, tmp_path / "work"
+    )
+    brief = GenerationBrief(
+        topic="python",
+        language="ru",
+        audience="Читатели",
+        format_instructions="Разбор",
+        cta="Открыть источник",
+        cta_link_mode="source",
+    )
+
+    result = analyzer.analyze([_input(AnalysisInput)], package_limit=3, brief=brief)
+
+    assert result.selected_topics[0].post_text == payload["topics"][0]["post_text"]
 
 
 @pytest.mark.parametrize("selected", [0, 1])
@@ -238,7 +297,7 @@ def test_codex_rejects_integer_selected_as_invalid_output(
     with pytest.raises(CodexAnalysisError) as caught:
         analyzer.analyze([_input(AnalysisInput)], package_limit=1)
 
-    assert caught.value.code == "codex_invalid_output"
+    assert caught.value.code == "codex_output_schema_mismatch"
 
 
 def test_codex_failure_exposes_stable_code_without_stdout_stderr_or_prompt(
@@ -412,22 +471,23 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
             "media_query",
         }
     properties = selected_schema["properties"]
-    assert properties["attempt_id"] == {"type": "integer", "minimum": 1}
-    assert properties["analysis"] == {"type": "string", "minLength": 1}
-    assert properties["usefulness"] == {
-        "type": "integer",
-        "minimum": 0,
-        "maximum": 100,
-    }
-    assert properties["selected"] == {"type": "boolean", "const": True}
-    assert properties["post_text"] == {"type": "string", "minLength": 1}
-    assert properties["media_query"] == {"type": "string", "minLength": 1}
-    assert unselected_schema["properties"] == {
-        **properties,
-        "selected": {"type": "boolean", "const": False},
-        "post_text": {"type": "null"},
-        "media_query": {"type": "null"},
-    }
+    assert properties["attempt_id"]["type"] == "integer"
+    assert properties["attempt_id"]["exclusiveMinimum"] == 0
+    assert properties["analysis"]["type"] == "string"
+    assert properties["analysis"]["minLength"] == 1
+    assert properties["usefulness"]["type"] == "integer"
+    assert properties["usefulness"]["minimum"] == 0
+    assert properties["usefulness"]["maximum"] == 100
+    assert properties["selected"]["type"] == "boolean"
+    assert properties["selected"]["const"] is True
+    assert properties["post_text"]["type"] == "string"
+    assert properties["post_text"]["minLength"] == 1
+    assert properties["media_query"]["type"] == "string"
+    assert properties["media_query"]["minLength"] == 1
+    unselected_properties = unselected_schema["properties"]
+    assert unselected_properties["selected"]["const"] is False
+    assert unselected_properties["post_text"]["type"] == "null"
+    assert unselected_properties["media_query"]["type"] == "null"
     common = {
         "attempt_id": 17,
         "analysis": "Полный анализ",
@@ -468,6 +528,73 @@ def test_codex_writes_strict_schema_and_explicit_complete_batch_prompt(
     assert "SECOND-ARTICLE-BODY-MARKER" in prompt
     assert "--skip-git-repo-check" in captured["argv"]
     assert captured["argv"][-1] == "-"
+
+
+def test_codex_prompt_uses_platform_neutral_generation_brief(tmp_path: Path) -> None:
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    captured: dict[str, object] = {}
+
+    def runner(argv: list[str], **kwargs: object):
+        captured["prompt"] = kwargs["input"]
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(_valid_output()), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(runner, tmp_path / "repo", 600, tmp_path / "work")
+    analyzer.analyze(
+        [_input(AnalysisInput)],
+        package_limit=1,
+        brief=GenerationBrief(
+            topic="Автоматизация небольших команд",
+            language="ru",
+            audience="Продуктовые команды",
+            format_instructions="Хук, польза и честное ограничение",
+            cta="Покажи полезный следующий шаг без навязчивости",
+        ),
+    )
+
+    prompt = str(captured["prompt"])
+    assert "Автоматизация небольших команд" in prompt
+    assert "Язык: ru" in prompt
+    assert "Продуктовые команды" in prompt
+    assert "Хук, польза и честное ограничение" in prompt
+    assert "Покажи полезный следующий шаг" in prompt
+    assert "Telegram" not in prompt
+
+
+def test_codex_prompt_uses_brief_language_for_generation(tmp_path: Path) -> None:
+    # Поломка review: brief.language не управляет языком постов из-за hardcode русского.
+    AnalysisInput, _, CodexContentAnalyzer = _api()
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    captured: dict[str, object] = {}
+
+    def runner(argv: list[str], **kwargs: object):
+        captured["prompt"] = kwargs["input"]
+        Path(argv[argv.index("--output-last-message") + 1]).write_text(
+            json.dumps(_valid_output()), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    analyzer = CodexContentAnalyzer(runner, tmp_path / "repo", 600, tmp_path / "work")
+    analyzer.analyze(
+        [_input(AnalysisInput)],
+        package_limit=1,
+        brief=GenerationBrief(
+            topic="Team automation",
+            language="en",
+            audience="Product teams",
+            format_instructions="Useful and concise",
+            cta="Try the next step",
+        ),
+    )
+
+    prompt = str(captured["prompt"])
+    assert "Пиши анализ и выбранные посты на языке en." in prompt
+    assert "на русском" not in prompt.casefold()
 
 
 def test_codex_preserves_selected_and_nonselected_outcomes_from_complete_batch(

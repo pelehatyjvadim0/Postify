@@ -29,8 +29,8 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         candidate_id = connection.execute(
             text(
                 "INSERT INTO candidates "
-                "(source_name, source_id, title, url, discovered_at, raw_payload) "
-                "VALUES ('hn', :source_id, :title, :url, :now, '{}'::jsonb) RETURNING id"
+                "(project_id, source_name, source_id, title, url, discovered_at, raw_payload) "
+                "VALUES (1, 'hn', :source_id, :title, :url, :now, '{}'::jsonb) RETURNING id"
             ),
             {
                 "source_id": marker,
@@ -42,8 +42,8 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         connection.execute(
             text(
                 "INSERT INTO candidate_decisions "
-                "(candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
-                "VALUES (:candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
+                "(project_id, candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
+                "VALUES (1, :candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
                 "'{}'::jsonb, 'v1', :now)"
             ),
             {"candidate_id": candidate_id, "now": NOW},
@@ -51,9 +51,9 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(candidate_id, attempt_no, tier, status, source_url, article_title, "
+                "(project_id, candidate_id, attempt_no, tier, status, source_url, article_title, "
                 "article_text, analysis, started_at, finished_at) "
-                "VALUES (:candidate_id, 1, 'fresh', 'packaged', :url, 'title', "
+                "VALUES (1, :candidate_id, 1, 'fresh', 'packaged', :url, 'title', "
                 "'article', 'analysis', :now, :now) RETURNING id"
             ),
             {"candidate_id": candidate_id, "url": f"https://source.test/{marker}", "now": NOW},
@@ -61,9 +61,9 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
         return connection.execute(
             text(
                 "INSERT INTO content_packages "
-                "(attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
+                "(project_id, attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
                 "media_source_type, media_source_url, review_required, status, created_at, updated_at) "
-                "VALUES (:attempt_id, :url, 'context', 'analysis', :post_text, :media_path, "
+                "VALUES (1, :attempt_id, :url, 'context', 'analysis', :post_text, :media_path, "
                 "'image/png', 'og', :media_url, true, :status, :now, :now) RETURNING id"
             ),
             {
@@ -155,8 +155,8 @@ def test_delivery_has_one_row_per_package(migrated_database_url: str) -> None:
                 connection.execute(
                     text(
                         "INSERT INTO telegram_deliveries "
-                        "(package_id, status, attempt_no, sending_started_at, created_at, updated_at) "
-                        "VALUES (:package_id, 'sending', 1, :now, :now, :now)"
+                        "(project_id, package_id, status, attempt_no, sending_started_at, created_at, updated_at) "
+                        "VALUES (1, :package_id, 'sending', 1, :now, :now, :now)"
                     ),
                     {"package_id": package_id, "now": NOW},
                 )
@@ -208,6 +208,127 @@ def test_older_retryable_precedes_later_new_package_in_fifo_order(migrated_datab
         assert retry is not None and retry.package_id == retryable_id
         assert retry.attempt_no == 2
         assert later_id != retry.package_id
+    finally:
+        engine.dispose()
+
+
+def test_retry_is_reserved_only_by_its_persisted_route_and_channel(
+    migrated_database_url: str,
+) -> None:
+    FailureKind, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        for statement in (
+            """
+                INSERT INTO content_formats
+                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (701,1,'First','post','one',true,:now,:now),
+                       (702,1,'Second','post','two',true,:now,:now)
+            """,
+            """
+                INSERT INTO channel_connections
+                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                VALUES (801,1,'telegram','First',true,'{}','ok',:now,:now),
+                       (802,1,'telegram','Second',true,'{}','ok',:now,:now)
+            """,
+            """
+                INSERT INTO publication_routes
+                    (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
+                VALUES (901,1,701,801,true,'{}',:now,:now),
+                       (902,1,702,802,true,'{}',:now,:now)
+            """,
+        ):
+            connection.execute(text(statement), {"now": NOW})
+    retryable_id = _seed_package(engine, marker="route-one-retry")
+    route_two_id = _seed_package(engine, marker="route-two-new")
+    first_route = Repository(
+        sessionmaker(engine), project_id=1, route_id=901, channel_id=801
+    )
+    second_route = Repository(
+        sessionmaker(engine), project_id=1, route_id=902, channel_id=802
+    )
+    try:
+        claim = first_route.reserve_next(now=NOW)
+        assert claim is not None and claim.package_id == retryable_id
+        first_route.record_failure(
+            claim,
+            kind=FailureKind.RETRYABLE,
+            code="retry",
+            reason="route one only",
+            now=NOW,
+        )
+
+        other = second_route.reserve_next(now=NOW + timedelta(minutes=1))
+        assert other is not None and other.package_id == route_two_id
+
+        retry = first_route.reserve_next(now=NOW + timedelta(minutes=2))
+        assert retry is not None and retry.package_id == retryable_id
+        assert retry.attempt_no == 2
+    finally:
+        engine.dispose()
+
+
+def test_manual_delivery_retry_action_resolves_only_project_owned_retryable_route(
+    migrated_database_url: str,
+) -> None:
+    from postify.application.delivery.manual_operations import (
+        DeliveryNotRetryable,
+        ManualDeliveryRetry,
+    )
+
+    FailureKind, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO content_formats
+                (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (711,1,'Manual','post','manual',true,:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO channel_connections
+                (id,project_id,provider,name,enabled,configuration,connection_status,
+                 created_at,updated_at)
+                VALUES (811,1,'telegram','Manual',true,'{}','ok',:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO publication_routes
+                (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
+                VALUES (911,1,711,811,true,'{}',:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+    package_id = _seed_package(engine, marker="manual-delivery-retry")
+    repository = Repository(
+        sessionmaker(engine), project_id=1, route_id=911, channel_id=811
+    )
+    try:
+        claim = repository.reserve_next(now=NOW, package_id=package_id)
+        assert claim is not None
+        repository.record_failure(
+            claim,
+            kind=FailureKind.RETRYABLE,
+            code="telegram_retryable",
+            reason="safe",
+            now=NOW,
+        )
+
+        route_id, context = ManualDeliveryRetry(
+            Repository(sessionmaker(engine), project_id=1)
+        ).prepare(claim.delivery_id)
+
+        assert route_id == 911
+        assert context.target_delivery_id == claim.delivery_id
+        with pytest.raises(DeliveryNotRetryable):
+            ManualDeliveryRetry(
+                Repository(sessionmaker(engine), project_id=2)
+            ).prepare(claim.delivery_id)
     finally:
         engine.dispose()
 
@@ -333,7 +454,7 @@ def test_confirmation_sql_failure_rolls_back_every_write(
             )
             connection.execute(
                 text(
-                    "CREATE TRIGGER fail_telegram_attempt BEFORE INSERT ON telegram_delivery_attempts "
+                    "CREATE TRIGGER fail_telegram_attempt BEFORE INSERT ON delivery_attempts "
                     "FOR EACH ROW EXECUTE FUNCTION fail_telegram_attempt_insert()"
                 )
             )

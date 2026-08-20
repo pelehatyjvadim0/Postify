@@ -162,6 +162,7 @@ class ShowOperationalStatus:
             "content_attempts": (
                 "processing",
                 "retry_scheduled",
+                "retried",
                 "failed",
                 "analyzed_not_selected",
                 "packaged",
@@ -232,6 +233,7 @@ class ShowOperationalStatus:
             "content_attempts": {
                 "processing",
                 "retry_scheduled",
+                "retried",
                 "failed",
                 "analyzed_not_selected",
                 "packaged",

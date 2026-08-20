@@ -13,14 +13,18 @@ from postify.infrastructure.database.models import CandidateDecisionModel, Candi
 
 
 class SqlAlchemyDecisionRepository:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], project_id: int = 1) -> None:
         self._session_factory = session_factory
+        self._project_id = project_id
 
     def find_undecided(self) -> list[StoredCandidate]:
         statement = (
             select(CandidateModel)
             .outerjoin(CandidateDecisionModel, CandidateDecisionModel.candidate_id == CandidateModel.id)
-            .where(CandidateDecisionModel.id.is_(None))
+            .where(
+                CandidateModel.project_id == self._project_id,
+                CandidateDecisionModel.id.is_(None),
+            )
             .order_by(CandidateModel.id)
         )
         with self._session_factory() as session:
@@ -44,6 +48,7 @@ class SqlAlchemyDecisionRepository:
             return set()
         rows = [
             {
+                "project_id": self._project_id,
                 "candidate_id": decision.candidate_id,
                 "status": decision.status.value,
                 "reason": decision.reason.value,
@@ -57,7 +62,9 @@ class SqlAlchemyDecisionRepository:
         statement = (
             insert(CandidateDecisionModel)
             .values(rows)
-            .on_conflict_do_nothing(constraint="uq_candidate_decisions_candidate_id")
+            .on_conflict_do_nothing(
+                constraint="uq_candidate_decisions_project_candidate_id"
+            )
             .returning(CandidateDecisionModel.candidate_id)
         )
         with self._session_factory() as session:

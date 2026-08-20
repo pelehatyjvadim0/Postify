@@ -30,9 +30,13 @@ class RunOnce:
     def execute(self) -> RunOnceResult:
         import_result = self._importer.execute()
         selection_result = self._selector.execute()
-        content_result = self._content.execute() if self._content else None
+        content_result = self.process_content()
         return RunOnceResult(
             import_result=import_result,
             selection_result=selection_result,
             content_result=content_result,
         )
+
+    def process_content(self):
+        """Run only the shared content stage after an owner command chose its target."""
+        return self._content.execute() if self._content else None

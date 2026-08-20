@@ -6,7 +6,7 @@ from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from postify.domain.candidates.models import Candidate
@@ -183,4 +183,31 @@ def test_save_new_explicitly_rolls_back_and_reuses_session_after_serialization_e
         assert total == 1
     finally:
         shared_session.close()
+        engine.dispose()
+
+
+def test_same_source_key_is_deduplicated_per_project(
+    migrated_database_url: str,
+) -> None:
+    from postify.infrastructure.repositories.sqlalchemy_candidates import (
+        SqlAlchemyCandidateRepository,
+    )
+
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO content_projects "
+                "(id,name,topic,language,audience,timezone,configuration,created_at,updated_at) "
+                "VALUES (2,'Второй','Тема','ru','Аудитория','UTC','{}'::jsonb,now(),now())"
+            )
+        )
+    first = SqlAlchemyCandidateRepository(sessionmaker(engine), project_id=1)
+    second = SqlAlchemyCandidateRepository(sessionmaker(engine), project_id=2)
+    try:
+        assert first.save_new([candidate("shared")]) == 1
+        assert second.save_new([candidate("shared")]) == 1
+        assert first.save_new([candidate("shared")]) == 0
+        assert first.count() == second.count() == 1
+    finally:
         engine.dispose()

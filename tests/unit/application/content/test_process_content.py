@@ -18,11 +18,23 @@ def _api():
         AnalyzedTopic,
         BatchAnalysis,
         ContentLimits,
+        ExecutionContext,
         ExtractedArticle,
         StoredMedia,
     )
 
-    return SimpleNamespace(**locals())
+    return SimpleNamespace(
+        ProcessContent=ProcessContent,
+        ArticleExtractionError=ArticleExtractionError,
+        CodexAnalysisError=CodexAnalysisError,
+        MediaAcquireError=MediaAcquireError,
+        AnalyzedTopic=AnalyzedTopic,
+        BatchAnalysis=BatchAnalysis,
+        ContentLimits=ContentLimits,
+        ExecutionContext=ExecutionContext,
+        ExtractedArticle=ExtractedArticle,
+        StoredMedia=StoredMedia,
+    )
 
 
 class FakeRepository:
@@ -36,11 +48,11 @@ class FakeRepository:
         self.events.append(("active_media_paths",))
         return set(self.protected)
 
-    def claim(self, *, now: datetime, day: date, limits: object):
+    def claim(self, *, now: datetime, day: date, limits: object, context=None):
         self.events.append(("claim", now, day, limits))
         return tuple(self.attempts)
 
-    def package_slots_remaining(self, *, day: date, limit: int) -> int:
+    def package_slots_remaining(self, *, day: date, limit: int, context=None) -> int:
         self.events.append(("package_slots", day, limit))
         return limit - self.package_usage
 
@@ -61,12 +73,23 @@ class FakeRepository:
         *,
         articles: dict[int, object],
         review_required: bool,
+        generation_snapshot: dict[str, object] | None = None,
         now: datetime,
         day: date,
         package_limit: int,
+        context=None,
     ):
         self.events.append(
-            ("drafts", batch, dict(articles), review_required, now, day, package_limit)
+            (
+                "drafts",
+                batch,
+                dict(articles),
+                review_required,
+                generation_snapshot,
+                now,
+                day,
+                package_limit,
+            )
         )
         return tuple(
             SimpleNamespace(attempt_id=topic.attempt_id, package_id=100 + topic.attempt_id,
@@ -99,10 +122,12 @@ class FakeAnalyzer:
     def __init__(self, outcome: object) -> None:
         self.outcome = outcome
         self.calls: list[tuple[object, int]] = []
+        self.briefs: list[object | None] = []
 
-    def analyze(self, articles: object, package_limit: int):
+    def analyze(self, articles: object, package_limit: int, brief=None):
         materialized = tuple(articles)
         self.calls.append((materialized, package_limit))
+        self.briefs.append(brief)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
@@ -254,6 +279,31 @@ def test_second_article_failure_is_terminal_and_never_schedules_third_attempt() 
     assert result.failed == 1
 
 
+def test_manual_article_failure_is_terminal_and_never_enters_automatic_retry_queue() -> None:
+    # Break caught: a manual owner command creates a scheduled retry that automation later consumes.
+    api = _api()
+    attempt = _attempt(1)
+    repository = FakeRepository([attempt])
+    processor = api.ProcessContent(
+        repository,
+        FakeExtractor({attempt.source_url: api.ArticleExtractionError("raw secret")}),
+        FakeAnalyzer(_batch(api, ())),
+        FakeMedia(None),
+        limits=_limits(api),
+        review_required=True,
+        timezone="UTC",
+        context=api.ExecutionContext(mode="manual", actor="ui", batch_size=1),
+        clock=lambda: NOW,
+    )
+
+    result = processor.execute()
+
+    assert not [event for event in repository.events if event[0] == "retry"]
+    assert ("fail_attempt", 1, "article_unavailable", NOW) in repository.events
+    assert result.retry_scheduled == 0
+    assert result.failed == 1
+
+
 def test_codex_failure_finishes_all_extracted_attempts_with_safe_code() -> None:
     # Поломка (gate 10): Codex-сбой оставляет processing или сохраняет stderr.
     api = _api()
@@ -391,3 +441,60 @@ def test_process_persists_full_analysis_batch_but_acquires_media_only_for_select
     ]
     assert result.packages_created == 1
     assert result.failed == 0
+
+
+def test_process_passes_effective_generation_brief_and_persists_its_snapshot() -> None:
+    # Поломка: runtime загрузил настройки, но анализатор и история пакета их потеряли.
+    from postify.application.ports.content_analyzer import GenerationBrief
+
+    api = _api()
+    attempt = _attempt(1)
+    article = _article(api, 1)
+    brief = GenerationBrief(
+        topic="Автоматизация отчётов",
+        language="ru",
+        audience="Редакторы",
+        format_instructions="Хук, три шага и ограничение",
+        cta="Открыть источник",
+    )
+    snapshot = {
+        "topic": brief.topic,
+        "language": brief.language,
+        "audience": brief.audience,
+        "format": {"id": 7, "instructions": brief.format_instructions},
+        "cta": {"id": 9, "text": brief.cta, "link_mode": "source"},
+    }
+    repository = FakeRepository([attempt])
+    analyzer = FakeAnalyzer(_batch(api, (1,)))
+    processor = api.ProcessContent(
+        repository,
+        FakeExtractor({attempt.source_url: article}),
+        analyzer,
+        FakeMedia(
+            api.StoredMedia(
+                "/media/one.jpg",
+                "image/jpeg",
+                "og",
+                "https://cdn.test/1.jpg",
+            )
+        ),
+        limits=_limits(api),
+        review_required=True,
+        timezone="UTC",
+        generation_brief=brief,
+        generation_snapshot=snapshot,
+        codex_model="gpt-5.6-luna",
+        codex_reasoning_effort="high",
+        clock=lambda: NOW,
+    )
+
+    result = processor.execute()
+
+    assert analyzer.briefs == [brief]
+    draft = next(event for event in repository.events if event[0] == "drafts")
+    assert draft[4] == snapshot
+    assert result.materials_taken == 1
+    assert (result.codex_model, result.codex_reasoning_effort) == (
+        "gpt-5.6-luna",
+        "high",
+    )

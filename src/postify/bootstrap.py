@@ -34,6 +34,44 @@ from postify.infrastructure.repositories.sqlalchemy_decisions import (
 )
 
 
+def project_manual_content_operations(session_factory, project_id: int):
+    """Compose project-scoped owner eligibility around the shared content port."""
+    from postify.application.content.manual_operations import ManualContentOperations
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    return ManualContentOperations(
+        SqlAlchemyContentRepository(session_factory, project_id=project_id)
+    )
+
+
+def project_manual_delivery_retry(session_factory, project_id: int):
+    """Compose project-scoped delivery retry eligibility around its shared port."""
+    from postify.application.delivery.manual_operations import ManualDeliveryRetry
+    from postify.infrastructure.repositories.sqlalchemy_delivery import (
+        SqlAlchemyDeliveryRepository,
+    )
+
+    return ManualDeliveryRetry(
+        SqlAlchemyDeliveryRepository(session_factory, project_id=project_id)
+    )
+
+
+def project_review_content(session_factory, project_id: int, media, *, clock):
+    """Compose the shared review action without leaking persistence into web."""
+    from postify.application.content.review_content import ReviewContent
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    return ReviewContent(
+        SqlAlchemyContentRepository(session_factory, project_id=project_id),
+        media,
+        clock=clock,
+    )
+
+
 def open_content_review(settings: Settings):
     """Открывает review-зависимости; фабрика отделена для CLI и тестов."""
     from contextlib import contextmanager
@@ -68,7 +106,54 @@ def open_content_review(settings: Settings):
 
 
 @contextmanager
-def open_publish_once(settings: Settings, telegram: TelegramSettings):
+def open_project_replace_media(settings: Settings, *, project_id: int):
+    """Build the shared project-scoped media replacement action."""
+    from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.media.wikimedia import WikimediaImageSearch
+    from postify.application.content.replace_media import ReplacePackageMedia
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_projects import (
+        SqlAlchemyProjectRepository,
+    )
+
+    engine = create_engine_from_settings(settings)
+    client: httpx.Client | None = None
+    try:
+        sessions = sessionmaker(engine)
+        graph = SqlAlchemyProjectRepository(sessions).runtime_graph(project_id)
+        configuration = graph.project.configuration
+        policy = PublicHttpUrlPolicy()
+        client = httpx.Client(timeout=configuration.analysis_timeout_seconds)
+        yield ReplacePackageMedia(
+            SqlAlchemyContentRepository(sessions, project_id=project_id),
+            HttpArticleExtractor(
+                client=client,
+                max_bytes=configuration.article_max_bytes,
+                url_policy=policy,
+            ),
+            LocalMediaProvider(
+                client,
+                settings.content_media_dir,
+                configuration.media_max_bytes,
+                WikimediaImageSearch(client=client),
+                url_policy=policy,
+            ),
+            clock=lambda: datetime.now(UTC),
+        )
+    finally:
+        if client is not None:
+            client.close()
+        engine.dispose()
+
+
+@contextmanager
+def open_publish_once(
+    settings: Settings, telegram: TelegramSettings, *, project_id: int = 1
+):
     from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
     from postify.adapters.media.local_media_provider import LocalMediaProvider
     from postify.adapters.telegram.bot_api import TelegramBotApiPublisher
@@ -84,7 +169,9 @@ def open_publish_once(settings: Settings, telegram: TelegramSettings):
         client = httpx.Client(timeout=telegram.telegram_timeout_seconds)
         media = LocalMediaProvider(client, settings.content_media_dir, settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy())
         action = PublishContent(
-            SqlAlchemyDeliveryRepository(sessionmaker(engine)),
+            _for_project(
+                SqlAlchemyDeliveryRepository, sessionmaker(engine), project_id
+            ),
             TelegramBotApiPublisher(client, bot_token=telegram.telegram_bot_token.get_secret_value(), chat_id=telegram.telegram_chat_id),
             media,
             timeout_seconds=telegram.telegram_timeout_seconds,
@@ -92,11 +179,112 @@ def open_publish_once(settings: Settings, telegram: TelegramSettings):
         )
         yield RecordedAction(
             action,
-            SqlAlchemyOperationRunRepository(sessionmaker(engine)),
+            _for_project(
+                SqlAlchemyOperationRunRepository, sessionmaker(engine), project_id
+            ),
             operation=OperationKind.PUBLISH_ONCE,
             success_outcome=lambda result: result.outcome,
             failure_code="publish_once_failed",
         )
+    finally:
+        if client is not None:
+            client.close()
+        engine.dispose()
+
+
+@contextmanager
+def open_project_publish_once(
+    settings: Settings,
+    *,
+    project_id: int,
+    route_id: int | None = None,
+    transport: httpx.BaseTransport | None = None,
+    record_operation: bool = True,
+    package_id: int | None = None,
+    delivery_id: int | None = None,
+):
+    """Открывает publish из свежего project graph без env-секретов."""
+    from postify.adapters.channels.registry import ChannelProviderRegistry
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.application.delivery.publish_content import PublishContent
+    from postify.application.observability.record_operation import RecordedAction
+    from postify.domain.observability.models import OperationKind
+    from postify.infrastructure.repositories.sqlalchemy_delivery import (
+        SqlAlchemyDeliveryRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_observability import (
+        SqlAlchemyOperationRunRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_projects import (
+        SqlAlchemyProjectRepository,
+    )
+    from postify.infrastructure.security.secrets import SecretCipher
+
+    engine = create_engine_from_settings(settings)
+    client: httpx.Client | None = None
+    try:
+        sessions = sessionmaker(engine)
+        graph = SqlAlchemyProjectRepository(sessions).runtime_graph(project_id)
+        route = graph.enabled_route(route_id)
+        runtime_channel = graph.channel_for(route)
+        if settings.postify_secret_key is None:
+            raise RuntimeError("secret_storage_unavailable")
+        if runtime_channel.encrypted_secret is None:
+            raise RuntimeError("publication_secret_unavailable")
+        if runtime_channel.connection.connection_status not in {"configured", "ok"}:
+            raise RuntimeError("publication_channel_unavailable")
+        cipher = SecretCipher(settings.postify_secret_key.get_secret_value())
+        secret = cipher.decrypt(runtime_channel.encrypted_secret)
+        channel = runtime_channel.connection
+        timeout_seconds = float(graph.project.configuration.analysis_timeout_seconds)
+        client = httpx.Client(timeout=timeout_seconds, transport=transport)
+        publisher = ChannelProviderRegistry().create_publisher(
+            channel,
+            decrypted_secret=secret,
+            client=client,
+        )
+        channel_snapshot = {
+            "id": channel.id,
+            "name": channel.name,
+            "provider": channel.provider,
+            "configuration": dict(channel.configuration),
+        }
+        action = PublishContent(
+            SqlAlchemyDeliveryRepository(
+                sessions,
+                project_id=project_id,
+                route_id=route.id,
+                channel_id=channel.id,
+                channel_snapshot=channel_snapshot,
+                package_id=package_id,
+                delivery_id=delivery_id,
+            ),
+            publisher,
+            LocalMediaProvider(
+                client,
+                settings.content_media_dir,
+                graph.project.configuration.media_max_bytes,
+                None,
+                url_policy=PublicHttpUrlPolicy(),
+            ),
+            timeout_seconds=timeout_seconds,
+            clock=lambda: datetime.now(UTC),
+        )
+        if record_operation:
+            yield RecordedAction(
+                action,
+                _for_project(
+                    SqlAlchemyOperationRunRepository,
+                    sessions,
+                    project_id,
+                ),
+                operation=OperationKind.PUBLISH_ONCE,
+                success_outcome=lambda result: result.outcome,
+                failure_code="publish_once_failed",
+            )
+        else:
+            yield action
     finally:
         if client is not None:
             client.close()
@@ -179,9 +367,15 @@ def selection_profile_from_settings(settings: Settings) -> SelectionProfile:
 
 @contextmanager
 def open_run_once(
-    settings: Settings, *, transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    *,
+    project_id: int = 1,
+    transport: httpx.BaseTransport | None = None,
 ) -> Iterator[RunOnce]:
-    from postify.application.observability.record_operation import RecordedAction
+    from postify.application.observability.record_operation import (
+        RecordedAction,
+        run_once_operation_metadata,
+    )
     from postify.domain.observability.models import OperationKind
     from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
     profile = selection_profile_from_settings(settings)
@@ -189,14 +383,18 @@ def open_run_once(
         action = RunOnce(
             ImportCandidates(
                 resources.source,
-                SqlAlchemyCandidateRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyCandidateRepository, resources.session_factory, project_id
+                ),
             ),
             SelectCandidates(
-                SqlAlchemyDecisionRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyDecisionRepository, resources.session_factory, project_id
+                ),
                 profile,
                 lambda: datetime.now(UTC),
             ),
-            _content_processor(settings, resources)
+            _content_processor(settings, resources, project_id=project_id)
             if callable(resources.session_factory)
             else None,
         )
@@ -210,14 +408,168 @@ def open_run_once(
         else:
             yield RecordedAction(
                 action,
-                SqlAlchemyOperationRunRepository(resources.session_factory),
+                _for_project(
+                    SqlAlchemyOperationRunRepository,
+                    resources.session_factory,
+                    project_id,
+                ),
                 operation=OperationKind.RUN_ONCE,
                 success_outcome="completed",
                 failure_code="run_once_failed",
+                result_metadata=run_once_operation_metadata,
             )
 
 
-def _content_processor(settings: Settings, resources: _ImportResources):
+@contextmanager
+def open_project_run_once(
+    settings: Settings,
+    *,
+    project_id: int,
+    transport: httpx.BaseTransport | None = None,
+    analyzer_runner=None,
+    record_operation: bool = True,
+    context=None,
+):
+    """Открывает web/scheduler run из свежего project graph."""
+    from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
+    from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
+    from postify.adapters.http.public_url_policy import (
+        PublicHttpTransport,
+        PublicHttpUrlPolicy,
+    )
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.media.wikimedia import WikimediaImageSearch
+    from postify.adapters.sources.registry import SourceProviderRegistry
+    from postify.application.content.process_content import ProcessContent
+    from postify.application.ingestion.import_project_sources import ImportProjectSources
+    from postify.application.observability.record_operation import (
+        RecordedAction,
+        run_once_operation_metadata,
+    )
+    from postify.domain.content.models import AUTOMATIC_CONTEXT, ContentLimits
+    from postify.domain.observability.models import OperationKind
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_observability import (
+        SqlAlchemyOperationRunRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_projects import (
+        SqlAlchemyProjectRepository,
+    )
+
+    engine = create_engine_from_settings(settings)
+    client: httpx.Client | None = None
+    try:
+        sessions = sessionmaker(engine)
+        graph = SqlAlchemyProjectRepository(sessions).runtime_graph(project_id)
+        policy = PublicHttpUrlPolicy()
+        client = httpx.Client(
+            timeout=httpx.Timeout(10.0),
+            transport=transport or PublicHttpTransport(policy=policy),
+        )
+        sources = SourceProviderRegistry()
+        importer = ImportProjectSources(
+            graph.sources,
+            lambda connection: ImportCandidates(
+                sources.create(connection, client=client),
+                _for_project(SqlAlchemyCandidateRepository, sessions, project_id),
+            ),
+        )
+        profile = _selection_profile_from_project(graph.project)
+        effective = graph.effective_generation()
+        configuration = graph.project.configuration
+        analyzer = CodexContentAnalyzer(
+            analyzer_runner
+            or (lambda argv, **kwargs: subprocess.run(argv, check=False, **kwargs)),
+            Path.cwd(),
+            configuration.analysis_timeout_seconds,
+            _codex_work_dir(Path.cwd(), Path(settings.content_media_dir)),
+            model=configuration.analysis_model,
+            reasoning_effort=configuration.analysis_reasoning_effort,
+        )
+        content = ProcessContent(
+            SqlAlchemyContentRepository(sessions, project_id=project_id),
+            HttpArticleExtractor(
+                client=client,
+                max_bytes=configuration.article_max_bytes,
+                url_policy=policy,
+            ),
+            analyzer,
+            LocalMediaProvider(
+                client,
+                settings.content_media_dir,
+                configuration.media_max_bytes,
+                WikimediaImageSearch(client=client),
+                url_policy=policy,
+            ),
+            limits=ContentLimits(
+                configuration.daily_analysis_limit,
+                configuration.daily_package_limit,
+                configuration.priority_freshness_days,
+                configuration.fresh_share_percent,
+                configuration.reserve_share_percent,
+            ),
+            review_required=configuration.review_required,
+            timezone=graph.project.timezone,
+            generation_brief=effective.brief,
+            generation_snapshot=effective.snapshot,
+            codex_model=configuration.analysis_model,
+            codex_reasoning_effort=configuration.analysis_reasoning_effort,
+            context=context or AUTOMATIC_CONTEXT,
+            clock=lambda: datetime.now(UTC),
+        )
+        action = RunOnce(
+            importer,
+            SelectCandidates(
+                _for_project(SqlAlchemyDecisionRepository, sessions, project_id),
+                profile,
+                lambda: datetime.now(UTC),
+            ),
+            content,
+        )
+        if record_operation:
+            yield RecordedAction(
+                action,
+                _for_project(
+                    SqlAlchemyOperationRunRepository,
+                    sessions,
+                    project_id,
+                ),
+                operation=OperationKind.RUN_ONCE,
+                success_outcome="completed",
+                failure_code="run_once_failed",
+                execution_context=context or AUTOMATIC_CONTEXT,
+                result_metadata=run_once_operation_metadata,
+            )
+        else:
+            yield action
+    finally:
+        if client is not None:
+            client.close()
+        engine.dispose()
+
+
+def _selection_profile_from_project(project) -> SelectionProfile:
+    configuration = project.configuration
+    return SelectionProfile(
+        version=configuration.selection_policy_version,
+        language=project.language,
+        audience=project.audience,
+        rules=tuple(RejectionRule(rule) for rule in configuration.selection_rules),
+        topic_terms=configuration.topic_terms,
+        topic_exclusion_terms=configuration.topic_exclusion_terms,
+        advertising_terms=configuration.advertising_terms,
+        hiring_terms=configuration.hiring_terms,
+        technical_release_terms=configuration.technical_release_terms,
+        practical_terms=configuration.practical_terms,
+        freshness_window=timedelta(days=configuration.selection_freshness_days),
+    )
+
+
+def _content_processor(
+    settings: Settings, resources: _ImportResources, *, project_id: int = 1
+):
     from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
     from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
     from postify.adapters.media.local_media_provider import LocalMediaProvider
@@ -231,7 +583,7 @@ def _content_processor(settings: Settings, resources: _ImportResources):
 
     policy = getattr(resources, "url_policy", None) or PublicHttpUrlPolicy()
     return ProcessContent(
-        SqlAlchemyContentRepository(resources.session_factory),
+        SqlAlchemyContentRepository(resources.session_factory, project_id=project_id),
         HttpArticleExtractor(
             client=resources.client,
             max_bytes=settings.content_article_max_bytes,
@@ -242,6 +594,10 @@ def _content_processor(settings: Settings, resources: _ImportResources):
             Path.cwd(),
             settings.content_codex_timeout_seconds,
             _codex_work_dir(Path.cwd(), Path(settings.content_media_dir)),
+            model=getattr(settings, "content_codex_model", "gpt-5.6-luna"),
+            reasoning_effort=getattr(
+                settings, "content_codex_reasoning_effort", "high"
+            ),
         ),
         LocalMediaProvider(
             resources.client,
@@ -325,6 +681,13 @@ def candidate_count(settings: Settings) -> int:
         return SqlAlchemyCandidateRepository(sessionmaker(engine)).count()
     finally:
         engine.dispose()
+
+
+def _for_project(factory, session_factory, project_id: int):
+    """Retain default constructor compatibility while making non-default scope explicit."""
+    if project_id == 1:
+        return factory(session_factory)
+    return factory(session_factory, project_id=project_id)
 
 
 @contextmanager

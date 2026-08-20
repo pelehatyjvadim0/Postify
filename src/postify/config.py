@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     content_article_max_bytes: int = Field(gt=0)
     content_media_max_bytes: int = Field(gt=0)
     content_codex_timeout_seconds: int = Field(gt=0)
+    content_codex_model: str = Field(default="gpt-5.6-luna", min_length=1)
+    content_codex_reasoning_effort: Literal[
+        "low", "medium", "high", "xhigh", "max"
+    ] = "high"
+    postify_secret_key: SecretStr | None = None
 
     @field_validator(
         "selection_rules",

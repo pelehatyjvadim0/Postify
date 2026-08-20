@@ -8,12 +8,30 @@ from enum import StrEnum
 class OperationKind(StrEnum):
     RUN_ONCE = "run_once"
     PUBLISH_ONCE = "publish_once"
+    LOAD_MORE = "load_more"
+    RETRY_ANALYSIS = "retry_analysis"
+    RETURN_TO_ANALYSIS = "return_to_analysis"
+    REGENERATE_POST = "regenerate_post"
+    REPLACE_MEDIA = "replace_media"
+    PUBLISH_NOW = "publish_now"
+    RETRY_DELIVERY = "retry_delivery"
+    MANUAL_SEARCH = "manual_search"
 
 
 class OperationStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class OperationMode(StrEnum):
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
+
+
+class OperationActor(StrEnum):
+    SCHEDULER = "scheduler"
+    UI = "ui"
 
 
 OPERATION_OUTCOMES = {
@@ -29,11 +47,27 @@ OPERATION_OUTCOMES = {
             "uncertain",
         }
     ),
+    OperationKind.LOAD_MORE: frozenset({"completed", "empty"}),
+    OperationKind.RETRY_ANALYSIS: frozenset({"completed", "empty"}),
+    OperationKind.RETURN_TO_ANALYSIS: frozenset({"completed", "empty"}),
+    OperationKind.REGENERATE_POST: frozenset({"completed", "empty"}),
+    OperationKind.REPLACE_MEDIA: frozenset({"completed", "empty"}),
+    OperationKind.PUBLISH_NOW: frozenset({"empty", "published", "cleanup_completed", "cleanup_pending", "retryable", "failed", "uncertain"}),
+    OperationKind.RETRY_DELIVERY: frozenset({"empty", "published", "cleanup_completed", "cleanup_pending", "retryable", "failed", "uncertain"}),
+    OperationKind.MANUAL_SEARCH: frozenset({"completed"}),
 }
 
 OPERATION_FAILURE_CODES = {
     OperationKind.RUN_ONCE: "run_once_failed",
     OperationKind.PUBLISH_ONCE: "publish_once_failed",
+    OperationKind.LOAD_MORE: "load_more_failed",
+    OperationKind.RETRY_ANALYSIS: "retry_analysis_failed",
+    OperationKind.RETURN_TO_ANALYSIS: "return_to_analysis_failed",
+    OperationKind.REGENERATE_POST: "regenerate_post_failed",
+    OperationKind.REPLACE_MEDIA: "replace_media_failed",
+    OperationKind.PUBLISH_NOW: "publish_now_failed",
+    OperationKind.RETRY_DELIVERY: "retry_delivery_failed",
+    OperationKind.MANUAL_SEARCH: "manual_search_failed",
 }
 
 
@@ -115,6 +149,12 @@ class OperationRunSummary:
     failure_code: str | None
     finished_at: datetime | None
     started_at: datetime
+    mode: str = "automatic"
+    actor: str = "scheduler"
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
+    materials_taken: int = 0
+    packages_created: int = 0
 
     def __post_init__(self) -> None:
         _positive(self.run_id, "run_id")
@@ -122,8 +162,31 @@ class OperationRunSummary:
         _aware(self.finished_at, "finished_at")
         operation = OperationKind(self.operation)
         status = OperationStatus(self.status)
+        mode = OperationMode(self.mode)
+        actor = OperationActor(self.actor)
+        if (mode, actor) not in {
+            (OperationMode.AUTOMATIC, OperationActor.SCHEDULER),
+            (OperationMode.MANUAL, OperationActor.UI),
+        }:
+            raise ValueError("Некорректный context operation run")
+        for value, name in (
+            (self.materials_taken, "materials_taken"),
+            (self.packages_created, "packages_created"),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} не может быть отрицательным")
+        profile = (self.codex_model, self.codex_reasoning_effort)
+        if (profile[0] is None) != (profile[1] is None):
+            raise ValueError("Профиль Codex должен быть полным")
+        if profile[0] is not None and (
+            not profile[0].strip()
+            or profile[1] not in {"low", "medium", "high", "xhigh", "max"}
+        ):
+            raise ValueError("Некорректный профиль Codex")
         object.__setattr__(self, "operation", operation.value)
         object.__setattr__(self, "status", status.value)
+        object.__setattr__(self, "mode", mode.value)
+        object.__setattr__(self, "actor", actor.value)
         terminal = (self.outcome, self.failure_code, self.finished_at)
         if status is OperationStatus.RUNNING:
             valid = terminal == (None, None, None)
