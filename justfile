@@ -86,4 +86,4 @@ procs ADW_ID:
 
 # boot the trace UI, http://localhost:4601 (api on :4600)
 obs:
-    cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+    SSSF_SKILL="${CODEX_HOME:-$HOME/.codex}/skills/sssf"; cd "$SSSF_SKILL/apps/visualizer" && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
