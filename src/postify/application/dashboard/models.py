@@ -15,6 +15,8 @@ class DashboardOverview:
     published_today: int
     daily_analyses_started: int
     daily_packages_created: int
+    manual_analyses_started: int = 0
+    manual_packages_created: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,7 @@ class Material:
     decision_explanation: str | None
     decision_signals: Mapping[str, object] | None
     policy_version: str | None
+    retry_attempt_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +49,7 @@ class PackageSummary:
 @dataclass(frozen=True, slots=True)
 class PackageHistoryEntry:
     status: str
-    reason: str
+    reason: str | None
     created_at: datetime
 
 
@@ -65,6 +68,7 @@ class PackageDetail:
     generation_snapshot: Mapping[str, object]
     created_at: datetime
     updated_at: datetime
+    attempt_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,3 +119,9 @@ class Operation:
     started_at: datetime
     finished_at: datetime | None
     duration: timedelta | None
+    mode: str = "automatic"
+    actor: str = "scheduler"
+    codex_model: str | None = None
+    codex_reasoning_effort: str | None = None
+    materials_taken: int = 0
+    packages_created: int = 0

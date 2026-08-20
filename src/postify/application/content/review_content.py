@@ -26,7 +26,7 @@ class ReviewContent:
     def approve(self, id):
         return self.r.approve(id, now=self.clock())
 
-    def reject(self, id, *, reason: str = "review"):
-        p = self.r.reject(id, now=self.clock(), reason=reason)
+    def reject(self, id):
+        p = self.r.reject(id, now=self.clock(), reason=None)
         self.m.delete(p.media_path)
         return p

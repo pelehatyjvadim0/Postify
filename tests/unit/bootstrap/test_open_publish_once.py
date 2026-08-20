@@ -111,7 +111,10 @@ def test_open_publish_once_records_safe_publish_outcome_without_replacing_result
         def __init__(self, factory) -> None:
             events.append(("journal", factory))
 
-        def start(self, operation, *, now: datetime) -> int:
+        def start(
+            self, operation, *, now: datetime, mode: str, actor: str
+        ) -> int:
+            assert (mode, actor) == ("automatic", "scheduler")
             events.append(("start", operation.value))
             return 17
 

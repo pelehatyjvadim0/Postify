@@ -11,7 +11,14 @@ class MediaCleanupError(RuntimeError):
 
 
 class MediaProvider(Protocol):
-    def acquire(self, article: ExtractedArticle, query: str) -> StoredMedia: ...
+    def acquire(
+        self,
+        article: ExtractedArticle,
+        query: str,
+        *,
+        excluded_urls: set[str] = ...,
+        excluded_paths: set[str] = ...,
+    ) -> StoredMedia: ...
 
     def delete(self, local_path: str) -> None: ...
 

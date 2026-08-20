@@ -519,6 +519,96 @@ def test_operation_runs_constraint_rejects_failure_code_for_other_operation(
         engine.dispose()
 
 
+def test_wave_ten_head_has_complete_manual_journal_and_project_safe_versions(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    # Break caught: the final head omits polling metadata or permits cross-project lineage.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(isolated_database_url)
+    try:
+        inspector = inspect(engine)
+        operation_columns = {
+            column["name"]: column for column in inspector.get_columns("operation_runs")
+        }
+        assert {
+            "mode",
+            "actor",
+            "codex_model",
+            "codex_reasoning_effort",
+            "materials_taken",
+            "packages_created",
+        } <= operation_columns.keys()
+        assert operation_columns["materials_taken"]["nullable"] is False
+        assert operation_columns["packages_created"]["nullable"] is False
+        history_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("content_package_status_history")
+        }
+        assert history_columns["reason"]["nullable"] is True
+        package_foreign_keys = {
+            item["name"]: item for item in inspector.get_foreign_keys("content_packages")
+        }
+        assert package_foreign_keys[
+            "fk_content_packages_project_previous_package"
+        ]["constrained_columns"] == ["project_id", "previous_package_id"]
+        media_foreign_keys = {
+            item["name"]: item
+            for item in inspector.get_foreign_keys("content_package_media_versions")
+        }
+        assert media_foreign_keys[
+            "fk_content_package_media_versions_project_package"
+        ]["constrained_columns"] == ["project_id", "package_id"]
+        media_indexes = {
+            item["name"]: item
+            for item in inspector.get_indexes("content_package_media_versions")
+        }
+        assert media_indexes[
+            "ix_content_package_media_versions_project_package"
+        ]["column_names"] == ["project_id", "package_id"]
+        checks = {
+            item["name"] for item in inspector.get_check_constraints("operation_runs")
+        }
+        assert {"ck_operation_runs_metadata", "ck_operation_runs_outcome"} <= checks
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "20260817_15")
+    engine = create_engine(isolated_database_url)
+    try:
+        assert "codex_model" not in {
+            column["name"] for column in inspect(engine).get_columns("operation_runs")
+        }
+    finally:
+        engine.dispose()
+
+
+def test_wave_ten_downgrades_restore_exact_previous_terminal_constraints(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    command.upgrade(alembic_config, "head")
+    expectations = [
+        ("20260817_14", "retry_delivery_failed", "manual_search_failed"),
+        ("20260817_13", "replace_media_failed", "retry_delivery_failed"),
+        ("20260817_12", "return_to_analysis_failed", "regenerate_post_failed"),
+        ("20260817_11", "load_more_failed", "retry_analysis_failed"),
+        ("20260817_10", "publish_once_failed", "load_more_failed"),
+    ]
+
+    for revision, retained, removed in expectations:
+        command.downgrade(alembic_config, revision)
+        engine = create_engine(isolated_database_url)
+        try:
+            constraint = next(
+                item["sqltext"]
+                for item in inspect(engine).get_check_constraints("operation_runs")
+                if item["name"] == "ck_operation_runs_terminal_fields"
+            )
+            assert retained in constraint
+            assert removed not in constraint
+        finally:
+            engine.dispose()
+
+
 def test_project_migration_scopes_existing_rows_and_generalises_connections(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
@@ -690,3 +780,43 @@ def test_project_migration_downgrade_reports_project_scoped_duplicates(
         match="Нельзя откатить 20260812_06.*candidates",
     ):
         command.downgrade(alembic_config, "20260809_05")
+
+
+def test_codex_analysis_profile_migration_backfills_and_downgrades(
+    alembic_config: Config, isolated_database_url: str
+) -> None:
+    command.upgrade(alembic_config, "20260817_09")
+    engine = create_engine(isolated_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE content_projects SET configuration="
+                    "jsonb_build_object('analysis_timeout_seconds',600) WHERE id=1"
+                )
+            )
+    finally:
+        engine.dispose()
+    command.upgrade(alembic_config, "20260817_10")
+    engine = create_engine(isolated_database_url)
+    try:
+        with engine.connect() as connection:
+            configuration = connection.execute(
+                text("SELECT configuration FROM content_projects WHERE id=1")
+            ).scalar_one()
+        assert configuration["analysis_model"] == "gpt-5.6-luna"
+        assert configuration["analysis_reasoning_effort"] == "high"
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "20260817_09")
+    engine = create_engine(isolated_database_url)
+    try:
+        with engine.connect() as connection:
+            configuration = connection.execute(
+                text("SELECT configuration FROM content_projects WHERE id=1")
+            ).scalar_one()
+        assert "analysis_model" not in configuration
+        assert "analysis_reasoning_effort" not in configuration
+    finally:
+        engine.dispose()

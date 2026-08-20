@@ -59,6 +59,8 @@ def test_api_mutation_changes_next_real_project_run(
                 "article_max_bytes": 50_000,
                 "media_max_bytes": 10_000,
                 "analysis_timeout_seconds": 7,
+                "analysis_model": "gpt-5.6-luna",
+                "analysis_reasoning_effort": "high",
             },
         )
         first_source = client.put(
@@ -182,8 +184,10 @@ def test_api_mutation_changes_next_real_project_run(
 
         prompts: list[str] = []
         timeouts: list[float] = []
+        analyzer_argv: list[list[str]] = []
 
         def analyzer_runner(argv, **kwargs):
+            analyzer_argv.append(argv)
             prompts.append(kwargs["input"])
             timeouts.append(kwargs["timeout"])
             attempt_ids = tuple(
@@ -219,6 +223,8 @@ def test_api_mutation_changes_next_real_project_run(
             result = action.execute()
 
         assert result.import_result.created == 2
+        assert analyzer_argv[0][analyzer_argv[0].index("--model") + 1] == "gpt-5.6-luna"
+        assert 'model_reasoning_effort="high"' in analyzer_argv[0]
         if result.content_result.packages_created != 1:
             engine = create_engine(migrated_database_url)
             try:

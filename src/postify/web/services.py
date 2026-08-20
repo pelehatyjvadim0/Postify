@@ -15,11 +15,21 @@ from postify.adapters.channels.registry import ChannelProviderRegistry
 from postify.adapters.sources.registry import SourceProviderRegistry
 from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
 from postify.adapters.media.local_media_provider import LocalMediaProvider
-from postify.application.content.review_content import ReviewContent
+from postify.application.content.manual_operations import (
+    ManualContentOperations,
+    ReviewUnresolved,
+)
 from postify.application.dashboard.show_dashboard import ShowDashboard
+from postify.application.delivery.manual_operations import (
+    DeliveryNotRetryable,
+    ManualDeliveryRetry,
+)
 from postify.application.observability.show_status import (
     RuntimeSnapshot,
     ShowOperationalStatus,
+)
+from postify.application.observability.record_operation import (
+    content_operation_metadata,
 )
 from postify.application.projects.bootstrap_project import BootstrapProject
 from postify.application.projects.manage_project import ManageProject
@@ -30,11 +40,23 @@ from postify.application.scheduling.project_scheduler import (
     ProjectScheduler,
     ScheduledCommand,
 )
-from postify.bootstrap import open_project_publish_once, open_project_run_once
+from postify.bootstrap import (
+    open_project_publish_once,
+    open_project_replace_media,
+    open_project_run_once,
+    project_manual_content_operations,
+    project_manual_delivery_retry,
+    project_review_content,
+)
 from postify.config import Settings, TelegramSettings
 from postify.domain.observability.models import OperationKind
+from postify.domain.content.models import (
+    ExecutionActor,
+    ExecutionContext,
+    ExecutionMode,
+    ExecutionPurpose,
+)
 from postify.infrastructure.database.engine import create_engine_from_settings
-from postify.infrastructure.repositories.sqlalchemy_content import SqlAlchemyContentRepository
 from postify.infrastructure.repositories.sqlalchemy_dashboard import SqlAlchemyDashboardRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import SqlAlchemyProjectRepository
 from postify.infrastructure.repositories.sqlalchemy_observability import (
@@ -142,7 +164,10 @@ class WebApplication:
         day, start, end = _day_boundaries(project.timezone)
         return _values(
             ShowDashboard(self._dashboard).execute(project_id, day, start, end)
-        ) | self._operational(project)
+        ) | self._operational(project) | {
+            "automaticAnalysisLimit": project.configuration.daily_analysis_limit,
+            "automaticPackageLimit": project.configuration.daily_package_limit,
+        }
 
     def materials(self, project_id: int, **filters: object) -> dict[str, object]:
         self._projects.get(project_id)
@@ -158,11 +183,13 @@ class WebApplication:
 
     def approve(self, project_id: int, package_id: int) -> dict[str, object]:
         with self._review(project_id) as action:
-            return _values(action.approve(package_id))
+            action.approve(package_id)
+        return _values(self._dashboard.package(project_id, package_id))
 
-    def reject(self, project_id: int, package_id: int, reason: str) -> dict[str, object]:
+    def reject(self, project_id: int, package_id: int) -> dict[str, object]:
         with self._review(project_id) as action:
-            return _values(action.reject(package_id, reason=reason))
+            action.reject(package_id)
+        return _values(self._dashboard.package(project_id, package_id))
 
     def queue(self, project_id: int) -> dict[str, object]:
         project = self._projects.get(project_id)
@@ -183,15 +210,110 @@ class WebApplication:
             "operational": self._operational(project),
         }
 
+    def operation(self, project_id: int, operation_run_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        return _values(self._dashboard.operation(project_id, operation_run_id))
+
     def run_once(self, project_id: int) -> dict[str, object]:
         self._projects.get(project_id)
-        self._submit_operation(project_id, "run_once")
+        self._submit_operation(
+            project_id,
+            "run_once",
+            context=ExecutionContext(
+                mode=ExecutionMode.MANUAL,
+                actor=ExecutionActor.UI,
+                purpose=ExecutionPurpose.RUN_ONCE,
+            ),
+        )
         return {"status": "accepted"}
+
+    def manual_search(self, project_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = ExecutionContext(
+            mode=ExecutionMode.MANUAL,
+            actor=ExecutionActor.UI,
+            purpose=ExecutionPurpose.MANUAL_SEARCH,
+        )
+        run_id = self._submit_operation(project_id, "manual_search", context=context)
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def load_more(self, project_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        try:
+            context = self._manual_content_for(project_id).load_more()
+        except ReviewUnresolved as error:
+            from postify.web.errors import ConflictError
+
+            raise ConflictError(
+                "review_unresolved",
+                {"unresolvedPackageIds": list(error.package_ids)},
+            ) from error
+        run_id = self._submit_operation(project_id, "load_more", context=context)
+        return {"status": "accepted", "requested": 3, "operationRunId": run_id}
+
+    def retry_analysis(self, project_id: int, attempt_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = self._manual_content_for(project_id).retry_analysis(attempt_id)
+        run_id = self._submit_operation(project_id, "retry_analysis", context=context)
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def return_to_analysis(self, project_id: int, package_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = self._manual_content_for(project_id).return_to_analysis(package_id)
+        run_id = self._submit_operation(project_id, "return_to_analysis", context=context)
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def regenerate_post(self, project_id: int, package_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = self._manual_content_for(project_id).regenerate_post(package_id)
+        run_id = self._submit_operation(project_id, "regenerate_post", context=context)
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def replace_media(self, project_id: int, package_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = self._manual_content_for(project_id).replace_media(package_id)
+        run_id = self._submit_operation(
+            project_id, "replace_media", package_id=package_id, context=context
+        )
+        return {"status": "accepted", "operationRunId": run_id}
 
     def publish_once(self, project_id: int) -> dict[str, object]:
         self._projects.get(project_id)
-        self._submit_operation(project_id, "publish_once")
-        return {"status": "accepted"}
+        run_id = self._submit_operation(
+            project_id,
+            "publish_once",
+            context=ExecutionContext(
+                mode=ExecutionMode.MANUAL,
+                actor=ExecutionActor.UI,
+                purpose=ExecutionPurpose.PUBLISH_ONCE,
+            ),
+        )
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def publish_now(self, project_id: int, package_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        context = self._manual_content_for(project_id).publish_now(package_id)
+        run_id = self._submit_operation(
+            project_id, "publish_now", package_id=package_id, context=context
+        )
+        return {"status": "accepted", "operationRunId": run_id}
+
+    def retry_delivery(self, project_id: int, delivery_id: int) -> dict[str, object]:
+        self._projects.get(project_id)
+        try:
+            route_id, context = self._manual_delivery_for(project_id).prepare(delivery_id)
+        except DeliveryNotRetryable as error:
+            from postify.web.errors import ConflictError
+
+            raise ConflictError("delivery_not_retryable") from error
+        run_id = self._submit_operation(
+            project_id,
+            "retry_delivery",
+            route_id=route_id,
+            delivery_id=delivery_id,
+            context=context,
+        )
+        return {"status": "accepted", "operationRunId": run_id}
 
     def settings(self, project_id: int) -> dict[str, object]:
         return {
@@ -257,6 +379,12 @@ class WebApplication:
                 for row in session.scalars(select(ContentFormatModel).where(ContentFormatModel.project_id == project_id)).all()
             ]
 
+    def _manual_content_for(self, project_id: int) -> ManualContentOperations:
+        return project_manual_content_operations(self._sessions, project_id)
+
+    def _manual_delivery_for(self, project_id: int) -> ManualDeliveryRetry:
+        return project_manual_delivery_retry(self._sessions, project_id)
+
     def _operational(self, project) -> dict[str, object]:
         configuration = project.configuration
         report = ShowOperationalStatus(
@@ -288,21 +416,23 @@ class WebApplication:
     def _review(self, project_id: int):
         client = httpx.Client()
         try:
-            yield ReviewContent(
-                SqlAlchemyContentRepository(self._sessions, project_id=project_id),
+            yield project_review_content(
+                self._sessions,
+                project_id,
                 LocalMediaProvider(client, self._settings.content_media_dir, self._settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy()),
                 clock=lambda: datetime.now(UTC),
             )
         finally:
             client.close()
 
-    def _run_once(self, project_id: int) -> None:
+    def _run_once(self, project_id: int, *, context: ExecutionContext):
         with open_project_run_once(
             self._settings,
             project_id=project_id,
             record_operation=False,
+            context=context,
         ) as action:
-            action.execute()
+            return action.execute()
 
     def _publish_once(self, project_id: int, route_id: int | None = None) -> None:
         with open_project_publish_once(
@@ -321,6 +451,11 @@ class WebApplication:
             accepted_run_id=command.operation_run_id,
             route_id=command.route_id,
             scheduled_job_id=command.job_id,
+            context=ExecutionContext(
+                mode=ExecutionMode.AUTOMATIC,
+                actor=ExecutionActor.SCHEDULER,
+                purpose=ExecutionPurpose(command.kind),
+            ),
         )
 
     def _submit_operation(
@@ -331,21 +466,60 @@ class WebApplication:
         accepted_run_id: int | None = None,
         route_id: int | None = None,
         scheduled_job_id: int | None = None,
-    ) -> None:
+        package_id: int | None = None,
+        delivery_id: int | None = None,
+        context: ExecutionContext,
+    ) -> int:
         operation_kind = OperationKind(kind)
         journal = SqlAlchemyOperationRunRepository(
-            getattr(self, "_sessions", None), project_id=project_id
+            self._sessions, project_id=project_id
         )
         run_id = (
             accepted_run_id
             if accepted_run_id is not None
-            else journal.start(operation_kind, now=datetime.now(UTC))
+            else journal.start(
+                operation_kind, now=datetime.now(UTC),
+                mode=(context.mode if context else "automatic"),
+                actor=(context.actor if context else "scheduler"),
+            )
         )
 
         def operation() -> None:
+            metadata = {
+                "codex_model": None,
+                "codex_reasoning_effort": None,
+                "materials_taken": 0,
+                "packages_created": 0,
+            }
             try:
-                if kind == "run_once":
-                    self._run_once(project_id)
+                if kind in {"run_once", "manual_search"}:
+                    result = self._run_once(project_id, context=context)
+                    content_result = result.content_result
+                    metadata = content_operation_metadata(content_result)
+                    if (
+                        context.is_manual
+                        and content_result is not None
+                        and content_result.failed
+                    ):
+                        raise RuntimeError("manual_content_failed")
+                    outcome = "completed"
+                elif kind in {"load_more", "retry_analysis", "return_to_analysis", "regenerate_post"}:
+                    from postify.bootstrap import open_project_run_once
+                    with open_project_run_once(
+                        self._settings, project_id=project_id, record_operation=False,
+                        context=context,
+                    ) as action:
+                        result = action.process_content()
+                    metadata = content_operation_metadata(result)
+                    if result.failed:
+                        raise RuntimeError("manual_content_failed")
+                    outcome = "completed" if result.packages_created else "empty"
+                elif kind == "replace_media":
+                    with open_project_replace_media(
+                        self._settings, project_id=project_id
+                    ) as action:
+                        action.execute(package_id)
+                    metadata["materials_taken"] = 1
                     outcome = "completed"
                 else:
                     with open_project_publish_once(
@@ -353,14 +527,17 @@ class WebApplication:
                         project_id=project_id,
                         route_id=route_id,
                         record_operation=False,
+                        package_id=package_id,
+                        delivery_id=delivery_id,
                     ) as action:
-                        outcome = action.execute().outcome
+                        outcome = action.execute(package_id=package_id, delivery_id=delivery_id).outcome
             except BaseException:
                 try:
                     journal.fail(
                         run_id,
                         failure_code=f"{kind}_failed",
                         now=datetime.now(UTC),
+                        **metadata,
                     )
                 except BaseException:
                     pass
@@ -369,7 +546,9 @@ class WebApplication:
                         scheduled_job_id, succeeded=False, now=datetime.now(UTC)
                     )
                 raise
-            journal.succeed(run_id, outcome=outcome, now=datetime.now(UTC))
+            journal.succeed(
+                run_id, outcome=outcome, now=datetime.now(UTC), **metadata
+            )
             if scheduled_job_id is not None:
                 self._schedule_repository.acknowledge(
                     scheduled_job_id, succeeded=True, now=datetime.now(UTC)
@@ -387,6 +566,7 @@ class WebApplication:
             except BaseException:
                 pass
             raise
+        return run_id
 
 
 def build_web_api() -> WebApplication:

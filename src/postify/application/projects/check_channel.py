@@ -24,4 +24,8 @@ class CheckChannel:
         self._repository.set_channel_status(
             project_id, channel_id, status, self._clock()
         )
-        return {"id": channel_id, "connectionStatus": status}
+        return {
+            "id": channel_id,
+            "connectionStatus": status,
+            "reason": getattr(self._checker, "last_reason", ""),
+        }

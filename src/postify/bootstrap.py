@@ -34,6 +34,44 @@ from postify.infrastructure.repositories.sqlalchemy_decisions import (
 )
 
 
+def project_manual_content_operations(session_factory, project_id: int):
+    """Compose project-scoped owner eligibility around the shared content port."""
+    from postify.application.content.manual_operations import ManualContentOperations
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    return ManualContentOperations(
+        SqlAlchemyContentRepository(session_factory, project_id=project_id)
+    )
+
+
+def project_manual_delivery_retry(session_factory, project_id: int):
+    """Compose project-scoped delivery retry eligibility around its shared port."""
+    from postify.application.delivery.manual_operations import ManualDeliveryRetry
+    from postify.infrastructure.repositories.sqlalchemy_delivery import (
+        SqlAlchemyDeliveryRepository,
+    )
+
+    return ManualDeliveryRetry(
+        SqlAlchemyDeliveryRepository(session_factory, project_id=project_id)
+    )
+
+
+def project_review_content(session_factory, project_id: int, media, *, clock):
+    """Compose the shared review action without leaking persistence into web."""
+    from postify.application.content.review_content import ReviewContent
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+
+    return ReviewContent(
+        SqlAlchemyContentRepository(session_factory, project_id=project_id),
+        media,
+        clock=clock,
+    )
+
+
 def open_content_review(settings: Settings):
     """Открывает review-зависимости; фабрика отделена для CLI и тестов."""
     from contextlib import contextmanager
@@ -65,6 +103,51 @@ def open_content_review(settings: Settings):
             engine.dispose()
 
     return opened()
+
+
+@contextmanager
+def open_project_replace_media(settings: Settings, *, project_id: int):
+    """Build the shared project-scoped media replacement action."""
+    from postify.adapters.articles.http_article_extractor import HttpArticleExtractor
+    from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
+    from postify.adapters.media.local_media_provider import LocalMediaProvider
+    from postify.adapters.media.wikimedia import WikimediaImageSearch
+    from postify.application.content.replace_media import ReplacePackageMedia
+    from postify.infrastructure.repositories.sqlalchemy_content import (
+        SqlAlchemyContentRepository,
+    )
+    from postify.infrastructure.repositories.sqlalchemy_projects import (
+        SqlAlchemyProjectRepository,
+    )
+
+    engine = create_engine_from_settings(settings)
+    client: httpx.Client | None = None
+    try:
+        sessions = sessionmaker(engine)
+        graph = SqlAlchemyProjectRepository(sessions).runtime_graph(project_id)
+        configuration = graph.project.configuration
+        policy = PublicHttpUrlPolicy()
+        client = httpx.Client(timeout=configuration.analysis_timeout_seconds)
+        yield ReplacePackageMedia(
+            SqlAlchemyContentRepository(sessions, project_id=project_id),
+            HttpArticleExtractor(
+                client=client,
+                max_bytes=configuration.article_max_bytes,
+                url_policy=policy,
+            ),
+            LocalMediaProvider(
+                client,
+                settings.content_media_dir,
+                configuration.media_max_bytes,
+                WikimediaImageSearch(client=client),
+                url_policy=policy,
+            ),
+            clock=lambda: datetime.now(UTC),
+        )
+    finally:
+        if client is not None:
+            client.close()
+        engine.dispose()
 
 
 @contextmanager
@@ -117,6 +200,8 @@ def open_project_publish_once(
     route_id: int | None = None,
     transport: httpx.BaseTransport | None = None,
     record_operation: bool = True,
+    package_id: int | None = None,
+    delivery_id: int | None = None,
 ):
     """Открывает publish из свежего project graph без env-секретов."""
     from postify.adapters.channels.registry import ChannelProviderRegistry
@@ -147,6 +232,8 @@ def open_project_publish_once(
             raise RuntimeError("secret_storage_unavailable")
         if runtime_channel.encrypted_secret is None:
             raise RuntimeError("publication_secret_unavailable")
+        if runtime_channel.connection.connection_status not in {"configured", "ok"}:
+            raise RuntimeError("publication_channel_unavailable")
         cipher = SecretCipher(settings.postify_secret_key.get_secret_value())
         secret = cipher.decrypt(runtime_channel.encrypted_secret)
         channel = runtime_channel.connection
@@ -170,6 +257,8 @@ def open_project_publish_once(
                 route_id=route.id,
                 channel_id=channel.id,
                 channel_snapshot=channel_snapshot,
+                package_id=package_id,
+                delivery_id=delivery_id,
             ),
             publisher,
             LocalMediaProvider(
@@ -283,7 +372,10 @@ def open_run_once(
     project_id: int = 1,
     transport: httpx.BaseTransport | None = None,
 ) -> Iterator[RunOnce]:
-    from postify.application.observability.record_operation import RecordedAction
+    from postify.application.observability.record_operation import (
+        RecordedAction,
+        run_once_operation_metadata,
+    )
     from postify.domain.observability.models import OperationKind
     from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
     profile = selection_profile_from_settings(settings)
@@ -324,6 +416,7 @@ def open_run_once(
                 operation=OperationKind.RUN_ONCE,
                 success_outcome="completed",
                 failure_code="run_once_failed",
+                result_metadata=run_once_operation_metadata,
             )
 
 
@@ -335,6 +428,7 @@ def open_project_run_once(
     transport: httpx.BaseTransport | None = None,
     analyzer_runner=None,
     record_operation: bool = True,
+    context=None,
 ):
     """Открывает web/scheduler run из свежего project graph."""
     from postify.adapters.ai.codex_content_analyzer import CodexContentAnalyzer
@@ -348,8 +442,11 @@ def open_project_run_once(
     from postify.adapters.sources.registry import SourceProviderRegistry
     from postify.application.content.process_content import ProcessContent
     from postify.application.ingestion.import_project_sources import ImportProjectSources
-    from postify.application.observability.record_operation import RecordedAction
-    from postify.domain.content.models import ContentLimits
+    from postify.application.observability.record_operation import (
+        RecordedAction,
+        run_once_operation_metadata,
+    )
+    from postify.domain.content.models import AUTOMATIC_CONTEXT, ContentLimits
     from postify.domain.observability.models import OperationKind
     from postify.infrastructure.repositories.sqlalchemy_content import (
         SqlAlchemyContentRepository,
@@ -388,6 +485,8 @@ def open_project_run_once(
             Path.cwd(),
             configuration.analysis_timeout_seconds,
             _codex_work_dir(Path.cwd(), Path(settings.content_media_dir)),
+            model=configuration.analysis_model,
+            reasoning_effort=configuration.analysis_reasoning_effort,
         )
         content = ProcessContent(
             SqlAlchemyContentRepository(sessions, project_id=project_id),
@@ -415,6 +514,9 @@ def open_project_run_once(
             timezone=graph.project.timezone,
             generation_brief=effective.brief,
             generation_snapshot=effective.snapshot,
+            codex_model=configuration.analysis_model,
+            codex_reasoning_effort=configuration.analysis_reasoning_effort,
+            context=context or AUTOMATIC_CONTEXT,
             clock=lambda: datetime.now(UTC),
         )
         action = RunOnce(
@@ -437,6 +539,8 @@ def open_project_run_once(
                 operation=OperationKind.RUN_ONCE,
                 success_outcome="completed",
                 failure_code="run_once_failed",
+                execution_context=context or AUTOMATIC_CONTEXT,
+                result_metadata=run_once_operation_metadata,
             )
         else:
             yield action
@@ -490,6 +594,10 @@ def _content_processor(
             Path.cwd(),
             settings.content_codex_timeout_seconds,
             _codex_work_dir(Path.cwd(), Path(settings.content_media_dir)),
+            model=getattr(settings, "content_codex_model", "gpt-5.6-luna"),
+            reasoning_effort=getattr(
+                settings, "content_codex_reasoning_effort", "high"
+            ),
         ),
         LocalMediaProvider(
             resources.client,

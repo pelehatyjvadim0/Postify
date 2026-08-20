@@ -58,6 +58,56 @@ def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
         engine.dispose()
 
 
+def test_component_load_more_returns_project_scoped_unresolved_identifiers(
+    migrated_database_url: str,
+) -> None:
+    settings = configured_settings(migrated_database_url)
+    engine = create_engine_from_settings(settings)
+    api = WebApplication(settings, None)
+    client = ApiClient(create_app(WebContainer(api=api)))
+    now = datetime(2026, 8, 17, 10, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            candidate_id = connection.execute(
+                text(
+                    """INSERT INTO candidates
+                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                    VALUES (1,'source','component-unresolved','Unresolved',
+                            'https://example.test/unresolved',:now,'{}') RETURNING id"""
+                ),
+                {"now": now},
+            ).scalar_one()
+            attempt_id = connection.execute(
+                text(
+                    """INSERT INTO content_attempts
+                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
+                    VALUES (1,:candidate,1,'fresh','packaged',
+                            'https://example.test/unresolved',:now) RETURNING id"""
+                ),
+                {"candidate": candidate_id, "now": now},
+            ).scalar_one()
+            package_id = connection.execute(
+                text(
+                    """INSERT INTO content_packages
+                    (project_id,attempt_id,source_url,context,analysis,post_text,
+                     review_required,status,generation_snapshot,created_at,updated_at)
+                    VALUES (1,:attempt,'https://example.test/unresolved','Context',
+                            'Анализ','Post',true,'awaiting_review','{}',:now,:now)
+                    RETURNING id"""
+                ),
+                {"attempt": attempt_id, "now": now},
+            ).scalar_one()
+
+        response = client.post("/api/v1/projects/1/packages/load-more")
+
+        assert response.status_code == 409
+        assert response.json()["code"] == "review_unresolved"
+        assert response.json()["unresolvedPackageIds"] == [package_id]
+    finally:
+        api.close()
+        engine.dispose()
+
+
 def test_real_bootstrap_drives_channel_secret_create_replace_and_remove(
     migrated_database_url: str,
 ) -> None:
@@ -198,6 +248,73 @@ def test_component_media_uses_persisted_mime(
         assert response.headers["content-type"] == "image/webp"
         assert response.content == b"RIFF-component-webp"
     finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_status"),
+    [("approve", "approved"), ("reject", "rejected")],
+)
+def test_component_review_returns_the_committed_package_status(
+    migrated_database_url: str,
+    tmp_path: Path,
+    action: str,
+    expected_status: str,
+) -> None:
+    # Break caught: the transition commits, but reconstructing the domain package
+    # raises afterwards and the real API reports a false 422 to the browser.
+    settings = configured_settings(migrated_database_url).model_copy(
+        update={"content_media_dir": tmp_path}
+    )
+    engine = create_engine_from_settings(settings)
+    api = WebApplication(settings, None)
+    client = ApiClient(create_app(WebContainer(api=api)))
+    media = tmp_path / f"review-{action}.png"
+    media.write_bytes(b"review-media")
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            candidate_id = connection.execute(
+                text(
+                    """INSERT INTO candidates
+                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                    VALUES (1,'source',:source_id,'Review package',
+                            'https://example.test/review',:now,'{}'::jsonb)
+                    RETURNING id"""
+                ),
+                {"source_id": f"component-review-{action}", "now": now},
+            ).scalar_one()
+            attempt_id = connection.execute(
+                text(
+                    """INSERT INTO content_attempts
+                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
+                    VALUES (1,:candidate,1,'fresh','packaged',
+                            'https://example.test/review',:now) RETURNING id"""
+                ),
+                {"candidate": candidate_id, "now": now},
+            ).scalar_one()
+            package_id = connection.execute(
+                text(
+                    """INSERT INTO content_packages
+                    (project_id,attempt_id,source_url,context,analysis,post_text,
+                     media_path,media_mime,media_source_type,media_source_url,
+                     review_required,status,generation_snapshot,created_at,updated_at)
+                    VALUES (1,:attempt,'https://example.test/review','Context','Analysis',
+                            'Generated post without source link',:path,'image/png','og',
+                            'https://cdn.test/review.png',true,'awaiting_review','{}'::jsonb,
+                            :now,:now) RETURNING id"""
+                ),
+                {"attempt": attempt_id, "path": str(media), "now": now},
+            ).scalar_one()
+
+        response = client.post(
+            f"/api/v1/projects/1/packages/{package_id}/{action}"
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == expected_status
+    finally:
+        api.close()
         engine.dispose()
 
 

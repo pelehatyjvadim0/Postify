@@ -15,6 +15,10 @@ def _models_api():
         BatchAnalysis,
         ContentAttempt,
         ContentPackage,
+        ExecutionActor,
+        ExecutionContext,
+        ExecutionMode,
+        ExecutionPurpose,
         ContentValidationError,
         ExtractedArticle,
         PackageStatus,
@@ -27,11 +31,54 @@ def _models_api():
         "BatchAnalysis": BatchAnalysis,
         "ContentAttempt": ContentAttempt,
         "ContentPackage": ContentPackage,
+        "ExecutionActor": ExecutionActor,
+        "ExecutionContext": ExecutionContext,
+        "ExecutionMode": ExecutionMode,
+        "ExecutionPurpose": ExecutionPurpose,
         "ContentValidationError": ContentValidationError,
         "ExtractedArticle": ExtractedArticle,
         "PackageStatus": PackageStatus,
         "validate_transition": validate_transition,
     }
+
+
+def test_manual_execution_context_has_server_owned_target_and_rejects_mixed_targets() -> None:
+    api = _models_api()
+    context = api["ExecutionContext"](
+        mode="manual",
+        actor="ui",
+        purpose="retry_analysis",
+        batch_size=1,
+        target_attempt_id=17,
+    )
+
+    assert context.is_manual
+    assert context.mode is api["ExecutionMode"].MANUAL
+    assert context.actor is api["ExecutionActor"].UI
+    assert context.purpose is api["ExecutionPurpose"].RETRY_ANALYSIS
+    assert context.target_attempt_id == 17
+    with pytest.raises(api["ContentValidationError"]):
+        api["ExecutionContext"](
+            mode="manual",
+            actor="ui",
+            purpose="retry_analysis",
+            target_attempt_id=17,
+            target_package_id=9,
+        )
+
+
+def test_execution_context_enforces_operation_specific_server_policy() -> None:
+    api = _models_api()
+
+    with pytest.raises(api["ContentValidationError"]):
+        api["ExecutionContext"](
+            mode="manual", actor="ui", purpose="load_more", batch_size=2
+        )
+    with pytest.raises(api["ContentValidationError"]):
+        api["ExecutionContext"](
+            mode="automatic", actor="scheduler", purpose="retry_analysis",
+            batch_size=1, target_attempt_id=7,
+        )
 
 
 def test_extracted_article_requires_body_beyond_title_and_snippet() -> None:
@@ -47,9 +94,9 @@ def test_extracted_article_requires_body_beyond_title_and_snippet() -> None:
         )
 
 
-@pytest.mark.parametrize("attempt_no", [0, 3])
-def test_attempt_allows_only_first_or_single_retry_attempt(attempt_no: int) -> None:
-    # Поломка (gate 5): появляется нулевая или бесконечная попытка.
+@pytest.mark.parametrize("attempt_no", [0, -1])
+def test_attempt_requires_positive_append_only_number(attempt_no: int) -> None:
+    # Break caught: an invalid zero/negative attempt number enters append-only history.
     api = _models_api()
 
     with pytest.raises(api["ContentValidationError"]):
@@ -62,6 +109,17 @@ def test_attempt_allows_only_first_or_single_retry_attempt(attempt_no: int) -> N
             source_url="https://source.test/post",
             started_at=NOW,
         )
+
+
+def test_attempt_allows_manual_history_beyond_automatic_retry_limit() -> None:
+    api = _models_api()
+
+    attempt = api["ContentAttempt"](
+        id=1, candidate_id=7, attempt_no=3, tier="manual", status="processing",
+        source_url="https://source.test/post", started_at=NOW,
+    )
+
+    assert attempt.attempt_no == 3
 
 
 def test_batch_rejects_duplicate_or_unknown_attempt_ids() -> None:
@@ -152,6 +210,28 @@ def test_post_text_must_not_contain_source_url() -> None:
             review_required=True,
             status=api["PackageStatus"].AWAITING_REVIEW,
         )
+
+
+def test_post_text_may_contain_source_url_for_source_cta() -> None:
+    api = _models_api()
+    source_url = "https://source.test/article"
+
+    package = api["ContentPackage"](
+        id=1,
+        attempt_id=1,
+        source_url=source_url,
+        context="Полный контекст",
+        analysis="Анализ",
+        post_text=f"Читайте {source_url}",
+        media_path="/var/lib/postify/media/one.jpg",
+        media_source_type="og",
+        media_source_url="https://cdn.test/one.jpg",
+        review_required=True,
+        status=api["PackageStatus"].AWAITING_REVIEW,
+        source_url_allowed=True,
+    )
+
+    assert package.source_url_allowed is True
 
 
 @pytest.mark.parametrize(

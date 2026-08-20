@@ -7,7 +7,13 @@ class ChannelProviderRegistry:
             "code": "telegram",
             "label": "Telegram",
             "fields": (
-                {"name": "chat_id", "label": "ID чата", "type": "text", "required": True},
+                {
+                    "name": "chat_id",
+                    "label": "@username канала",
+                    "type": "text",
+                    "required": True,
+                    "placeholder": "@aioiai_ai_news",
+                },
             ),
             "credential": {
                 "name": "token",
@@ -26,7 +32,7 @@ class ChannelProviderRegistry:
             raise ValueError("Неизвестные параметры Telegram")
         chat_id = " ".join(str(configuration.get("chat_id", "")).split())
         if not chat_id:
-            raise ValueError("Нужен chat_id")
+            raise ValueError("Нужен @username канала")
         return {"chat_id": chat_id}
 
     def create_publisher(self, channel, *, decrypted_secret: str, client):

@@ -8,6 +8,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 
+pytestmark = pytest.mark.integration
+
+
 NOW = datetime(2026, 8, 12, 10, tzinfo=UTC)
 DAY = date(2026, 8, 12)
 DAY_START = datetime(2026, 8, 11, 21, tzinfo=UTC)
@@ -348,6 +351,27 @@ def test_dashboard_reads_persisted_package_publication_and_operation_fields(
         assert operation.outcome == "published"
         assert operation.duration == timedelta(minutes=3)
         assert overview.published_today == 1
+    finally:
+        engine.dispose()
+
+
+def test_dashboard_separates_manual_usage_and_operation_context(
+    migrated_database_url: str,
+) -> None:
+    # Break caught: manual work leaks into scheduler counters or loses UI context.
+    engine = create_engine(migrated_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("INSERT INTO content_daily_usage(project_id,day,analyses_started,packages_created,manual_analyses_started,manual_packages_created) VALUES (1,:day,12,3,18,6)"), {"day": DAY})
+            connection.execute(text("INSERT INTO operation_runs(project_id,operation,status,outcome,mode,actor,codex_model,codex_reasoning_effort,materials_taken,packages_created,started_at,finished_at) VALUES (1,'manual_search','succeeded','completed','manual','ui','gpt-5.6-luna','high',3,2,:now,:now)"), {"now": NOW})
+        repository = _repository(engine, 1)
+        overview = repository.overview(1, DAY, DAY_START, DAY_END)
+        operation = repository.operations(1)[0]
+        assert (overview.daily_analyses_started, overview.daily_packages_created) == (12, 3)
+        assert (overview.manual_analyses_started, overview.manual_packages_created) == (18, 6)
+        assert (operation.mode, operation.actor, operation.kind) == ("manual", "ui", "manual_search")
+        assert (operation.codex_model, operation.codex_reasoning_effort) == ("gpt-5.6-luna", "high")
+        assert (operation.materials_taken, operation.packages_created) == (3, 2)
     finally:
         engine.dispose()
 

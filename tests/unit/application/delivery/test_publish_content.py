@@ -41,7 +41,7 @@ class RepositoryFake:
         self.events.append("cleanup:find")
         return self.cleanup
 
-    def reserve_next(self, *, now: datetime):
+    def reserve_next(self, *, now: datetime, package_id: int | None = None, delivery_id: int | None = None):
         package = getattr(self.claim, "package_id", "none")
         self.events.append(f"reserve:{package}")
         return self.claim
@@ -174,6 +174,21 @@ def test_pending_cleanup_is_completed_before_claim_without_telegram() -> None:
     assert result == Result("cleanup_completed", package_id=41)
     assert events[-3:] == ["cleanup:find", "delete:/media/41.png", "deleted:11"]
     assert not any(item.startswith(("reserve:", "telegram:")) for item in events)
+
+
+def test_targeted_publish_skips_unrelated_cleanup() -> None:
+    # Break caught: publish-now turns into cleanup for an unrelated delivery.
+    _, _, Result, *_ = _api()
+    events: list[str] = []
+
+    result = _action(
+        RepositoryFake(events, claim=approved_claim(), cleanup=approved_claim()),
+        PublisherFake(events),
+        MediaFake(events),
+    ).execute(package_id=41)
+
+    assert result == Result("published", package_id=41, message_id=731)
+    assert "cleanup:find" not in events
 
 
 def test_failed_cleanup_remains_pending_without_telegram_or_failure_attempt() -> None:

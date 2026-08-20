@@ -1,8 +1,8 @@
 import {
-  approvePackage, checkChannel, createResource, deleteResource, getBootstrap,
-  getDashboard, getMaterials, getOperations, getPackage, getPackages, getPublications,
+  ApiError, approvePackage, checkChannel, createResource, deleteResource, getBootstrap,
+  getDashboard, getMaterials, getOperation, getOperations, getPackage, getPackages, getPublications,
   getQueue, getSettings, publishOnce, rejectPackage, removeChannelSecret,
-  runOnce, updateResource, updateSettings,
+  manualSearch, loadMorePackages, retryAnalysis, returnToAnalysis, regeneratePost, replacePackageMedia, publishNow, retryDelivery, updateResource, updateSettings,
 } from "./api.js";
 import {dateTime, escapeHtml, externalLink, label, screens, statusBadge} from "./screens.js";
 import {renderProviderConfiguration, renderSettings, serializeSettingsSection, showSettingsError, validateSettingsSection} from "./settings.js";
@@ -25,6 +25,8 @@ let projectId = null;
 let currentRoute = "overview";
 let currentData = null;
 let loadController = null;
+let operationController = null;
+let reviewLoadMoreState = {status: "default"};
 let lastOpener = null;
 let materialFilter = "all";
 let providers = {sources: [], channels: []};
@@ -62,9 +64,12 @@ async function loadRoute() {
     currentData = currentRoute === "materials"
       ? await ROUTES[currentRoute].load(projectId, signal, materialFilter)
       : await ROUTES[currentRoute].load(projectId, signal);
-    if (!signal.aborted) root.innerHTML = currentRoute === "settings"
-      ? renderSettings(currentData, providers)
-      : screens[currentRoute](currentData);
+    if (!signal.aborted) {
+      if (currentRoute === "review") currentData = {...currentData, loadMoreState: reviewLoadMoreState};
+      root.innerHTML = currentRoute === "settings"
+        ? renderSettings(currentData, providers)
+        : screens[currentRoute](currentData);
+    }
   } catch (error) {
     if (error.name !== "AbortError" && !signal.aborted) root.innerHTML = errorMarkup();
   }
@@ -93,6 +98,33 @@ function showToast(message) {
   window.setTimeout(() => toast.remove(), 3500);
 }
 
+const operationPause = (signal) => new Promise((resolve, reject) => {
+  const timer = window.setTimeout(resolve, 250);
+  signal.addEventListener("abort", () => {
+    window.clearTimeout(timer);
+    reject(new DOMException("Aborted", "AbortError"));
+  }, {once: true});
+});
+
+async function waitForOperation(operationRunId) {
+  operationController?.abort();
+  operationController = new AbortController();
+  const {signal} = operationController;
+  while (true) {
+    const run = await getOperation(projectId, operationRunId, signal);
+    if (run.status !== "running") return run;
+    await operationPause(signal);
+  }
+}
+
+async function finishAcceptedOperation(start) {
+  const accepted = await start();
+  if (!accepted?.operationRunId) return null;
+  const run = await waitForOperation(accepted.operationRunId);
+  if (run.status === "failed") throw new Error(run.failure_code || "operation_failed");
+  return run;
+}
+
 function itemBy(kind, id) {
   const key = {material: "candidate_id", package: "package_id", delivery: "delivery_id", run: "run_id"}[kind];
   return (currentData?.items || []).find((item) => String(item[key]) === String(id));
@@ -117,7 +149,8 @@ async function openPackage(node) {
   openDetail(`Пакет № ${summary.package_id}`, `<p class="section-kicker">Загрузка пакета…</p>`, "", node);
   try {
     const item = await getPackage(projectId, summary.package_id);
-    const actions = item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="show-reject-form" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : "";
+    const manual = item.status !== "published" && item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Перегенерировать пост</button><button class="button button--quiet" type="button" data-action="replace-media" data-id="${escapeHtml(item.package_id)}">Заменить медиа</button>${item.status === "approved" ? `<button class="button button--primary" type="button" data-action="publish-now" data-id="${escapeHtml(item.package_id)}">Опубликовать сейчас</button>` : ""}` : "";
+    const actions = (item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Вернуть в анализ</button>` : item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить анализ</button>` : "") + manual;
     const media = item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Медиа пакета № ${escapeHtml(item.package_id)}">` : "";
     const history = (item.history || []).map((entry) => `<li>${statusBadge(entry.status)} <span>${escapeHtml(entry.reason)}</span> <time>${escapeHtml(dateTime(entry.created_at))}</time></li>`).join("") || "<li>История пока пуста</li>";
     openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose">${media}<p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd>${externalLink(item.source_url)}</dd><dt>Анализ</dt><dd>${escapeHtml(item.analysis)}</dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl><h3>История</h3><ol class="package-history">${history}</ol></article>`, actions, node);
@@ -129,30 +162,26 @@ async function openPackage(node) {
 function openMaterial(node) {
   const item = itemBy("material", node.dataset.id);
   if (!item) return;
-  openDetail(`Материал № ${item.candidate_id}`, `<article class="detail-prose"><h3>${escapeHtml(item.title)}</h3><dl><dt>Источник</dt><dd>${escapeHtml(item.source_name)}</dd><dt>Решение</dt><dd>${statusBadge(item.decision_status)}</dd><dt>Причина</dt><dd>${escapeHtml(label(item.decision_reason))}</dd><dt>Объяснение</dt><dd>${escapeHtml(item.decision_explanation || "—")}</dd><dt>Политика</dt><dd>${escapeHtml(item.policy_version || "—")}</dd></dl></article>`, "", node);
+  const actions = item.retry_attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.retry_attempt_id)}">Повторить анализ</button>` : "";
+  openDetail(`Материал № ${item.candidate_id}`, `<article class="detail-prose"><h3>${escapeHtml(item.title)}</h3><dl><dt>Источник</dt><dd>${escapeHtml(item.source_name)}</dd><dt>Решение</dt><dd>${statusBadge(item.decision_status)}</dd><dt>Причина</dt><dd>${escapeHtml(label(item.decision_reason))}</dd><dt>Объяснение</dt><dd>${escapeHtml(item.decision_explanation || "—")}</dd><dt>Политика</dt><dd>${escapeHtml(item.policy_version || "—")}</dd></dl></article>`, actions, node);
 }
 
 function openDelivery(node) {
   const item = itemBy("delivery", node.dataset.id);
   if (!item) return;
   const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>${escapeHtml(label(attempt.code))}</span><span>${escapeHtml(attempt.reason || "—")}</span><span>message ID: ${escapeHtml(attempt.message_id || "—")}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
-  openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempt_count ?? item.attempts?.length ?? item.attempts ?? 0)}</dd><dt>Сообщение</dt><dd>${escapeHtml(item.message_id || "—")}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl><h3>Попытки</h3><ol class="package-history">${attempts}</ol></article>`, "", node);
+  const actions = item.status === "retryable" ? `<button class="button button--primary" type="button" data-action="retry-delivery" data-id="${escapeHtml(item.delivery_id)}">Повторить отправку</button>` : "";
+  openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempt_count ?? item.attempts?.length ?? item.attempts ?? 0)}</dd><dt>Сообщение</dt><dd>${escapeHtml(item.message_id || "—")}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl><h3>Попытки</h3><ol class="package-history">${attempts}</ol></article>`, actions, node);
 }
 
 function openRun(node) {
   const item = itemBy("run", node.dataset.id);
   if (!item) return;
-  openDetail("Подробности запуска", `<article class="detail-prose"><dl><dt>Запуск</dt><dd>№ ${escapeHtml(item.run_id)}</dd><dt>Операция</dt><dd>${escapeHtml(label(item.kind))}</dd><dt>Состояние</dt><dd>${statusBadge(item.status)}</dd><dt>Итог</dt><dd>${escapeHtml(label(item.outcome))}</dd><dt>Начало</dt><dd>${escapeHtml(dateTime(item.started_at))}</dd><dt>Длительность</dt><dd>${escapeHtml(item.duration ?? "—")} сек.</dd></dl></article>`, "", node);
+  openDetail("Подробности запуска", `<article class="detail-prose"><dl><dt>Запуск</dt><dd>№ ${escapeHtml(item.run_id)}</dd><dt>Операция</dt><dd>${escapeHtml(label(item.kind))}</dd><dt>Режим</dt><dd>${escapeHtml(label(item.mode))}</dd><dt>Источник</dt><dd>${escapeHtml(label(item.actor))}</dd><dt>Состояние</dt><dd>${statusBadge(item.status)}</dd><dt>Итог</dt><dd>${escapeHtml(label(item.outcome))}</dd><dt>Код ошибки</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Модель Codex</dt><dd>${escapeHtml(item.codex_model || "—")}</dd><dt>Reasoning effort</dt><dd>${escapeHtml(item.codex_reasoning_effort || "—")}</dd><dt>Материалов взято</dt><dd>${escapeHtml(item.materials_taken ?? 0)}</dd><dt>Пакетов создано</dt><dd>${escapeHtml(item.packages_created ?? 0)}</dd><dt>Начало</dt><dd>${escapeHtml(dateTime(item.started_at))}</dd><dt>Длительность</dt><dd>${escapeHtml(item.duration ?? "—")} сек.</dd></dl></article>`, "", node);
 }
 
 function openMobileMenu(node) {
   openDetail("Разделы", `<nav class="mobile-more" aria-label="Дополнительная навигация"><a href="#publications">Публикации <span>→</span></a><a href="#journal">Журнал <span>→</span></a><a href="#settings">Настройки <span>→</span></a></nav>`, "", node);
-}
-
-function showRejectForm(node) {
-  const actions = detailContent.querySelector(".detail-actions");
-  actions.innerHTML = `<form class="reject-form" data-reject-form><label for="reject-reason">Причина отклонения</label><textarea id="reject-reason" minlength="3" maxlength="500" required placeholder="Что нужно исправить?"></textarea><button class="button button--danger button--full" type="button" data-action="reject-package" data-id="${escapeHtml(node.dataset.id)}">Подтвердить отклонение</button></form>`;
-  actions.querySelector("textarea").focus();
 }
 
 async function mutate(node) {
@@ -164,22 +193,63 @@ async function mutate(node) {
       closeDetail();
       showToast("Пост одобрен");
     } else if (action === "reject-package") {
-      const reason = detailContent.querySelector("#reject-reason")?.value.trim() || "";
-      if (reason.length < 3) { showToast("Укажите причину отклонения"); node.disabled = false; return; }
-      await rejectPackage(projectId, node.dataset.id, reason);
+      await rejectPackage(projectId, node.dataset.id);
       closeDetail();
       showToast("Пост отклонён");
     } else if (action === "new-run") {
-      await runOnce(projectId);
-      showToast("Поиск запущен");
+      await finishAcceptedOperation(() => manualSearch(projectId));
+      showToast("Поиск завершён");
     } else if (action === "publish-once") {
-      await publishOnce(projectId);
-      showToast("Публикация запущена");
+      await finishAcceptedOperation(() => publishOnce(projectId));
+      showToast("Публикация завершена");
+    } else if (action === "load-more") {
+      reviewLoadMoreState = {status: "running"};
+      currentData = {...currentData, loadMoreState: reviewLoadMoreState};
+      root.innerHTML = screens.review(currentData);
+      const accepted = await loadMorePackages(projectId);
+      const run = await waitForOperation(accepted.operationRunId);
+      if (run.status === "failed") throw new Error(run.failure_code || "load_more_failed");
+      reviewLoadMoreState = {status: run.outcome === "empty" ? "empty" : "default"};
+      if (run.outcome !== "empty") showToast("Новые посты готовы к проверке");
+    } else if (action === "retry-analysis") {
+      await finishAcceptedOperation(() => retryAnalysis(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Анализ повторяется");
+    } else if (action === "return-to-analysis") {
+      await finishAcceptedOperation(() => returnToAnalysis(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Материал возвращён в анализ");
+    } else if (action === "regenerate-post") {
+      await finishAcceptedOperation(() => regeneratePost(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Новая версия поста готова");
+    } else if (action === "replace-media") {
+      await finishAcceptedOperation(() => replacePackageMedia(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Медиа обновлено");
+    } else if (action === "publish-now") {
+      await finishAcceptedOperation(() => publishNow(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Публикация завершена");
+    } else if (action === "retry-delivery") {
+      await finishAcceptedOperation(() => retryDelivery(projectId, node.dataset.id));
+      closeDetail();
+      showToast("Отправка повторяется");
     }
     await loadRoute();
-  } catch (_) {
-    showToast("Команда не выполнена. Повторите попытку.");
-    node.disabled = false;
+  } catch (error) {
+    if (action === "load-more") {
+      reviewLoadMoreState = error instanceof ApiError && error.code === "review_unresolved"
+        ? {status: "unresolved", unresolvedPackageIds: error.unresolvedPackageIds}
+        : {status: "failed"};
+      await loadRoute();
+    } else {
+      showToast("Команда не выполнена. Повторите попытку.");
+      node.disabled = false;
+      if (["new-run", "publish-once", "retry-analysis", "return-to-analysis", "regenerate-post", "replace-media", "publish-now", "retry-delivery"].includes(action)) {
+        await loadRoute();
+      }
+    }
   }
 }
 
@@ -248,8 +318,18 @@ async function settingsCommand(node) {
   try {
     if (node.matches("[data-settings-delete]")) await deleteResource(projectId, form.dataset.resource, form.dataset.resourceId);
     else if (node.matches("[data-settings-secret-remove]")) await removeChannelSecret(projectId, form.dataset.resourceId);
-    else if (node.matches("[data-settings-channel-check]")) await checkChannel(projectId, form.dataset.resourceId);
-    await refreshSettings(node.matches("[data-settings-channel-check]") ? "Канал проверен" : "Изменение сохранено");
+    else if (node.matches("[data-settings-channel-check]")) {
+      const channelId = form.dataset.resourceId;
+      const result = await checkChannel(projectId, channelId);
+      await refreshSettings(result.connectionStatus === "ok" ? "Канал готов к публикации" : "Проверка завершена");
+      if (result.connectionStatus !== "ok") {
+        const refreshedForm = root.querySelector(`[data-settings-form="channels"][data-resource-id="${channelId}"]`);
+        const checkButton = refreshedForm?.querySelector("[data-settings-channel-check]");
+        if (refreshedForm) showSettingsError(refreshedForm, result.reason || "Не удалось подключиться к каналу. Проверьте настройки.", checkButton);
+      }
+      return;
+    }
+    await refreshSettings("Изменение сохранено");
   } catch (_) {
     showSettingsError(form, "Команда не выполнена. Повторите позже.", node);
     setSettingsBusy(form, false);
@@ -269,8 +349,7 @@ document.addEventListener("click", (event) => {
   else if (action === "open-run") openRun(node);
   else if (action === "open-mobile-menu") openMobileMenu(node);
   else if (action === "close-detail") closeDetail();
-  else if (action === "show-reject-form") showRejectForm(node);
-  else if (["approve-package", "reject-package", "new-run", "publish-once"].includes(action)) mutate(node);
+  else if (["approve-package", "reject-package", "new-run", "publish-once", "load-more", "retry-analysis", "return-to-analysis", "regenerate-post", "replace-media", "publish-now", "retry-delivery"].includes(action)) mutate(node);
 });
 
 document.addEventListener("submit", (event) => {
@@ -304,7 +383,11 @@ document.addEventListener("click", (event) => {
 });
 
 detailLayer.addEventListener("click", (event) => { if (event.target === detailLayer) closeDetail(); });
-detailLayer.addEventListener("close", () => { lastOpener?.focus(); });
+detailLayer.addEventListener("close", () => {
+  detailContent.innerHTML = "";
+  lastOpener?.focus();
+  lastOpener = null;
+});
 window.addEventListener("hashchange", loadRoute);
 window.addEventListener("hashchange", () => { if (detailLayer.open) closeDetail(); });
 document.querySelector("#today-label").textContent = new Intl.DateTimeFormat("ru-RU", {day: "numeric", month: "long", year: "numeric"}).format(new Date());

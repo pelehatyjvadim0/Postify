@@ -26,6 +26,8 @@ def test_check_channel_decrypts_configured_secret_and_persists_actual_result() -
             return "token"
 
     class Checker:
+        last_reason = ""
+
         def check(self, configuration: dict[str, object], secret: str) -> str:
             assert configuration == {"chat_id": "-100"}
             assert secret == "token"
@@ -33,5 +35,5 @@ def test_check_channel_decrypts_configured_secret_and_persists_actual_result() -
 
     result = CheckChannel(Repository(), Cipher(), Checker(), clock=lambda: NOW).execute(1, 2)
 
-    assert result == {"id": 2, "connectionStatus": "ok"}
+    assert result == {"id": 2, "connectionStatus": "ok", "reason": ""}
     assert events == [(1, 2, "ok", NOW)]

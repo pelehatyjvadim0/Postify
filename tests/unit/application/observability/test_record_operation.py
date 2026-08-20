@@ -59,19 +59,36 @@ class FakeJournal:
         self.succeed_error = succeed_error
         self.fail_error = fail_error
 
-    def start(self, operation, *, now: datetime) -> int:
-        self.events.append(("start", operation.value, now))
+    def start(
+        self,
+        operation,
+        *,
+        now: datetime,
+        mode: str = "automatic",
+        actor: str = "scheduler",
+    ) -> int:
+        self.events.append(("start", operation.value, mode, actor, now))
         if self.start_error is not None:
             raise self.start_error
         return 41
 
-    def succeed(self, run_id: int, *, outcome: str, now: datetime) -> None:
-        self.events.append(("succeed", run_id, outcome, now))
+    def succeed(
+        self, run_id: int, *, outcome: str, now: datetime, **metadata: object
+    ) -> None:
+        event: tuple[object, ...] = ("succeed", run_id, outcome, now)
+        if metadata:
+            event += (metadata,)
+        self.events.append(event)
         if self.succeed_error is not None:
             raise self.succeed_error
 
-    def fail(self, run_id: int, *, failure_code: str, now: datetime) -> None:
-        self.events.append(("fail", run_id, failure_code, now))
+    def fail(
+        self, run_id: int, *, failure_code: str, now: datetime, **metadata: object
+    ) -> None:
+        event: tuple[object, ...] = ("fail", run_id, failure_code, now)
+        if metadata:
+            event += (metadata,)
+        self.events.append(event)
         if self.fail_error is not None:
             raise self.fail_error
 
@@ -88,6 +105,7 @@ def _recorded(
     operation: str = "publish_once",
     success_outcome: str | Any = "empty",
     failure_code: str = "publish_once_failed",
+    result_metadata=None,
 ):
     RecordedAction, OperationKind = _api()
     kind = {
@@ -100,6 +118,7 @@ def _recorded(
         operation=kind,
         success_outcome=success_outcome,
         failure_code=failure_code,
+        result_metadata=result_metadata,
         clock=_clock(STARTED, FINISHED),
     )
 
@@ -117,7 +136,7 @@ def test_recorded_action_preserves_result_and_saves_safe_outcome() -> None:
 
     assert result is expected_result
     assert events == [
-        ("start", "publish_once", STARTED),
+        ("start", "publish_once", "automatic", "scheduler", STARTED),
         ("action",),
         ("succeed", 41, "empty", FINISHED),
     ]
@@ -160,7 +179,7 @@ def test_action_failure_saves_only_fixed_code_and_reraises_original_exception() 
 
     assert raised.value is original
     assert events == [
-        ("start", "publish_once", STARTED),
+        ("start", "publish_once", "automatic", "scheduler", STARTED),
         ("action",),
         ("fail", 41, "publish_once_failed", FINISHED),
     ]
@@ -197,7 +216,9 @@ def test_start_failure_prevents_underlying_action() -> None:
     with pytest.raises(JournalFailure, match="start unavailable"):
         recorded.execute()
 
-    assert events == [("start", "publish_once", STARTED)]
+    assert events == [
+        ("start", "publish_once", "automatic", "scheduler", STARTED)
+    ]
 
 
 def test_success_journal_failure_does_not_repeat_underlying_action() -> None:
@@ -230,7 +251,13 @@ def test_run_once_uses_its_own_operation_and_failure_codes() -> None:
     with pytest.raises(SourceFailure):
         recorded.execute()
 
-    assert events[0] == ("start", "run_once", STARTED)
+    assert events[0] == (
+        "start",
+        "run_once",
+        "automatic",
+        "scheduler",
+        STARTED,
+    )
     assert events[-1] == ("fail", 41, "run_once_failed", FINISHED)
 
 
@@ -247,7 +274,55 @@ def test_invalid_callable_success_outcome_does_not_reach_journal() -> None:
     with pytest.raises(ValueError, match="outcome"):
         recorded.execute()
 
-    assert events == [("start", "publish_once", STARTED), ("action",)]
+    assert events == [
+        ("start", "publish_once", "automatic", "scheduler", STARTED),
+        ("action",),
+    ]
+
+
+def test_run_once_records_codex_profile_and_counts_from_shared_result() -> None:
+    from postify.application.content.process_content import ProcessContentResult
+    from postify.application.ingestion.import_candidates import ImportResult
+    from postify.application.jobs.run_once import RunOnceResult
+    from postify.application.observability.record_operation import (
+        run_once_operation_metadata,
+    )
+    from postify.application.selection.select_candidates import SelectionResult
+
+    events: list[tuple[object, ...]] = []
+    result = RunOnceResult(
+        ImportResult(3, 2, 1),
+        SelectionResult(2, 2, 0, 0),
+        ProcessContentResult(
+            claimed=2,
+            packages_created=1,
+            materials_taken=2,
+            codex_model="gpt-5.6-luna",
+            codex_reasoning_effort="high",
+        ),
+    )
+
+    _recorded(
+        FakeAction(events, result=result),
+        FakeJournal(events),
+        operation="run_once",
+        success_outcome="completed",
+        failure_code="run_once_failed",
+        result_metadata=run_once_operation_metadata,
+    ).execute()
+
+    assert events[-1] == (
+        "succeed",
+        41,
+        "completed",
+        FINISHED,
+        {
+            "codex_model": "gpt-5.6-luna",
+            "codex_reasoning_effort": "high",
+            "materials_taken": 2,
+            "packages_created": 1,
+        },
+    )
 
 
 def test_invalid_failure_code_is_rejected_before_action_starts() -> None:

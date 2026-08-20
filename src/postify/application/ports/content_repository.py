@@ -9,6 +9,7 @@ from postify.domain.content.models import (
     BatchAnalysis,
     ContentAttempt,
     ContentLimits,
+    ExecutionContext,
     ContentPackage,
     ExtractedArticle,
     StoredMedia,
@@ -24,15 +25,20 @@ class PackageDraft:
 
 
 class ContentRepository(Protocol):
+    def attempt_status(self, attempt_id: int) -> str | None: ...
+
+    def awaiting_review_package_ids(self, *, limit: int) -> Sequence[int]: ...
+
     def claim(
-        self, *, now: datetime, day: date, limits: ContentLimits
+        self, *, now: datetime, day: date, limits: ContentLimits,
+        context: ExecutionContext = ...
     ) -> Sequence[ContentAttempt]: ...
     def schedule_article_retry(
         self, attempt_id: int, *, retry_at: datetime, now: datetime
     ) -> None: ...
     def fail_attempt(self, attempt_id: int, *, code: str, now: datetime) -> None: ...
     def save_extracted(self, attempt_id: int, article: ExtractedArticle) -> None: ...
-    def package_slots_remaining(self, *, day: date, limit: int) -> int: ...
+    def package_slots_remaining(self, *, day: date, limit: int, context: ExecutionContext = ...) -> int: ...
     def save_analysis_and_create_packages(
         self,
         batch: BatchAnalysis,
@@ -43,6 +49,7 @@ class ContentRepository(Protocol):
         now: datetime,
         day: date,
         package_limit: int,
+        context: ExecutionContext = ...,
     ) -> Sequence[PackageDraft]: ...
     def complete_package(
         self, package_id: int, *, media: StoredMedia, status: str, now: datetime
@@ -53,5 +60,6 @@ class ContentRepository(Protocol):
     def get_package(self, package_id: int) -> ContentPackage: ...
     def approve(self, package_id: int, *, now: datetime) -> ContentPackage: ...
     def reject(
-        self, package_id: int, *, now: datetime, reason: str = "review"
+        self, package_id: int, *, now: datetime, reason: str | None = None
     ) -> ContentPackage: ...
+    def replace_media(self, package_id: int, *, media: StoredMedia, now: datetime) -> None: ...

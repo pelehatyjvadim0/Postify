@@ -37,7 +37,7 @@ class ReviewRepository:
         self.package.history.append(("approved", now))
         return self.package
 
-    def reject(self, package_id: int, *, now: datetime, reason: str = "review"):
+    def reject(self, package_id: int, *, now: datetime, reason: str | None = None):
         self.events.append(("reject", package_id, now, reason))
         if self.package.status != "awaiting_review":
             _, InvalidContentTransition = _api()
@@ -105,15 +105,15 @@ def test_reject_commits_status_before_media_delete() -> None:
     assert media.deleted == ["/media/7.jpg"]
 
 
-def test_reject_records_user_reason_in_history() -> None:
-    # Поломка: причина из UI теряется и журнал содержит неотличимый технический текст.
+def test_reject_records_no_user_reason_in_history() -> None:
+    # Break caught: package rejection records untrusted feedback from the UI.
     ReviewContent, _ = _api()
     package = _package()
     repository = ReviewRepository(package)
 
-    ReviewContent(repository, DeletingMedia(), clock=lambda: NOW).reject(7, reason="Не подходит теме")
+    ReviewContent(repository, DeletingMedia(), clock=lambda: NOW).reject(7)
 
-    assert repository.events == [("reject", 7, NOW, "Не подходит теме")]
+    assert repository.events == [("reject", 7, NOW, None)]
 
 
 def test_failed_reject_delete_keeps_rejected_package_recoverable() -> None:

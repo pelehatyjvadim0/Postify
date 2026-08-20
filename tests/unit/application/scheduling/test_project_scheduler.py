@@ -265,6 +265,7 @@ def test_scheduled_publish_uses_persisted_web_boundary_without_env_telegram_gate
     application._operations = Operations()
     application._telegram = None
     application._settings = object()
+    application._sessions = object()
 
     application._submit_scheduled(
         ScheduledCommand(

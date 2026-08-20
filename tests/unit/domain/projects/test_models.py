@@ -48,6 +48,11 @@ def test_project_configuration_rejects_package_limit_above_analysis_limit() -> N
         configuration(daily_analysis_limit=2, daily_package_limit=3)
 
 
+def test_project_configuration_rejects_unknown_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="reasoning effort"):
+        configuration(analysis_reasoning_effort="extreme")
+
+
 def test_project_configuration_requires_markers_for_enabled_rule() -> None:
     with pytest.raises(ValueError, match="маркеры"):
         configuration(advertising_terms=())

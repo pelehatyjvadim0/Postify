@@ -335,11 +335,12 @@ def test_empty_snapshot_has_all_fixed_zero_entity_groups_in_design_order() -> No
     assert tuple(item.code for item in result.content_attempts) == (
         "processing",
         "retry_scheduled",
+        "retried",
         "failed",
         "analyzed_not_selected",
         "packaged",
     )
-    assert tuple(item.count for item in result.content_attempts) == (0, 0, 0, 0, 0)
+    assert tuple(item.count for item in result.content_attempts) == (0, 0, 0, 0, 0, 0)
     assert tuple(item.code for item in result.packages) == (
         "processing",
         "awaiting_review",

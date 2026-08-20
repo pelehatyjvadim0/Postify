@@ -15,6 +15,8 @@ class SqlAlchemyDeliveryRepository:
         *,
         route_id: int | None = None,
         channel_id: int | None = None,
+        package_id: int | None = None,
+        delivery_id: int | None = None,
         channel_snapshot: dict[str, object] | None = None,
     ) -> None:
         self.sf = session_factory
@@ -22,8 +24,22 @@ class SqlAlchemyDeliveryRepository:
         self.route_id = route_id
         self.channel_id = channel_id
         self.channel_snapshot = channel_snapshot or {}
+        self.package_id = package_id or -1
+        self.delivery_id = delivery_id or -1
 
-    def reserve_next(self, *, now):
+    def retryable_route_id(self, delivery_id: int) -> int | None:
+        with self.sf() as session:
+            return session.execute(
+                text(
+                    "SELECT route_id FROM deliveries WHERE project_id=:project "
+                    "AND id=:delivery AND status='retryable'"
+                ),
+                {"project": self.project_id, "delivery": delivery_id},
+            ).scalar_one_or_none()
+
+    def reserve_next(self, *, now, package_id: int | None = None, delivery_id: int | None = None):
+        package_id = self.package_id if package_id is None else package_id
+        delivery_id = self.delivery_id if delivery_id is None else delivery_id
         with self.sf() as session:
             try:
                 row = session.execute(text("""
@@ -32,13 +48,15 @@ class SqlAlchemyDeliveryRepository:
                     FROM content_packages p
                     LEFT JOIN deliveries d ON d.package_id = p.id AND d.project_id=p.project_id
                     WHERE p.project_id=:project AND p.status = 'approved'
+                      AND (:package_id < 1 OR p.id=:package_id)
+                      AND (:delivery_id < 1 OR d.id=:delivery_id)
                       AND (d.id IS NULL OR
                            (d.status = 'retryable'
                             AND d.route_id IS NOT DISTINCT FROM :route_id
                             AND d.channel_id IS NOT DISTINCT FROM :channel_id))
                     ORDER BY p.created_at, p.id
                     FOR UPDATE OF p SKIP LOCKED LIMIT 1
-                """), {"project": self.project_id, "route_id": self.route_id, "channel_id": self.channel_id}).mappings().first()
+                """), {"project": self.project_id, "route_id": self.route_id, "channel_id": self.channel_id, "package_id": package_id, "delivery_id": delivery_id}).mappings().first()
                 if row is None:
                     session.commit()
                     return None

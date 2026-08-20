@@ -91,7 +91,9 @@ def create_app(
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, error: ApiError) -> JSONResponse:
-        return error_response(request, error.status_code, error.code)
+        return error_response(
+            request, error.status_code, error.code, details=error.details
+        )
 
     @app.exception_handler(LookupError)
     async def not_found(request: Request, error: LookupError) -> JSONResponse:

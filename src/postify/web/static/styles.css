@@ -181,8 +181,22 @@ h2, h3 { margin: 0; }
 .resource-heading { margin-bottom: 13px; display: flex; align-items: center; gap: 10px; }
 .resource-heading strong { margin-right: auto; }
 .connection-state { padding: 4px 7px; border-radius: 999px; background: #e4e8d6; color: var(--forest); font-size: 11px; font-weight: 800; }
+.connection-state--failed { background: #f3dfda; color: #9d352b; }
+.connection-state--ok { background: #dfeadd; color: #376344; }
 .secret-field { margin-top: 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: end; }
+.resource-form { padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 5px 16px rgb(40 54 44 / 4%); }
+.resource-form + .resource-form { margin-top: 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+.resource-heading strong { font-family: Georgia, "Times New Roman", serif; font-size: 17px; }
+.resource-heading .button { min-height: 36px; padding-inline: 13px; }
+.channel-form .provider-fields > .settings-field:only-child { grid-column: 1 / -1; }
+.route-form .settings-grid > .settings-field:last-child { grid-column: 1 / -1; }
+.resource-footer { min-height: 46px; margin-top: 14px; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #ebe7dc; }
+.resource-footer .settings-check { min-height: 42px; margin-top: 0; }
+.route-resource-actions { margin-top: 20px; padding-top: 20px; display: grid; gap: 12px; border-top: 1px solid var(--line); }
+.route-resource-actions > strong { font-family: Georgia, "Times New Roman", serif; font-size: 19px; }
+.route-resource-actions .add-resource { justify-self: start; }
 .settings-error { min-height: 18px; margin: 10px 0 0; color: var(--danger); font-size: 12px; font-weight: 700; }
+.settings-error:not(:empty) { padding: 12px 14px; border: 1px solid #dfa79e; border-radius: 10px; background: #fff6f3; line-height: 1.45; }
 .settings-savebar { position: sticky; z-index: 5; bottom: 12px; margin: 10px -8px -8px; padding: 10px 10px 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #b9c3ad; border-radius: 13px; background: rgb(244 245 236 / 96%); box-shadow: 0 12px 28px rgb(23 51 36 / 16%); backdrop-filter: blur(9px); }
 .settings-savebar span { color: var(--muted); font-size: 11px; }
 .add-resource { margin-top: 15px; }
@@ -191,11 +205,12 @@ h2, h3 { margin: 0; }
 .skeleton-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 @keyframes shimmer { to { background-position-x: -220%; } }
 
-.detail-layer { width: min(660px, calc(100vw - 42px)); max-height: min(860px, calc(100vh - 42px)); padding: 0; border: 0; border-radius: 21px; background: var(--surface); color: var(--ink); box-shadow: 0 35px 90px rgb(14 25 18 / 32%); }
+.detail-layer { width: min(660px, calc(100vw - 42px)); height: min(860px, calc(100dvh - 42px)); max-height: none; padding: 0; overflow: hidden; border: 0; border-radius: 21px; background: var(--surface); color: var(--ink); box-shadow: 0 35px 90px rgb(14 25 18 / 32%); }
 .detail-layer::backdrop { background: rgb(22 34 27 / 46%); backdrop-filter: blur(2px); }
+#detail-content { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .detail-head { padding: 20px 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .detail-head h2 { font-family: Georgia, serif; font-size: 25px; }
-.detail-body { max-height: 62vh; padding: 22px; overflow: auto; }
+.detail-body { min-height: 0; max-height: none; padding: 22px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .detail-prose > p { white-space: pre-wrap; line-height: 1.65; }
 .detail-prose h3 { margin-bottom: 18px; line-height: 1.45; }
 .detail-prose dl { margin: 0; display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 13px 18px; }
@@ -215,7 +230,7 @@ h2, h3 { margin: 0; }
 .mobile-more { display: grid; }
 .mobile-more a { min-height: 54px; padding: 0 4px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; font-weight: 700; }
 .mobile-more a:last-child { border-bottom: 0; }
-.detail-actions { padding: 17px 22px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); }
+.detail-actions { position: relative; z-index: 1; padding: 17px 22px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); background: var(--surface); }
 .reject-form { width: 100%; display: grid; gap: 9px; }
 .reject-form label { font-size: 13px; font-weight: 800; }
 .reject-form textarea { min-height: 90px; padding: 12px; resize: vertical; border: 1px solid var(--line); border-radius: 11px; background: white; }
@@ -270,8 +285,8 @@ h2, h3 { margin: 0; }
   .journal-row .status-badge, .journal-row > span:nth-child(4) { grid-column: 2; }
   .journal-row > span:last-child { grid-column: 3; grid-row: 1; }
   .skeleton-grid { grid-template-columns: 1fr; }
-  .detail-layer { width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; border-radius: 0; }
-  .detail-body { max-height: calc(100vh - 176px); }
+  .detail-layer { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border-radius: 0; }
+  .detail-body { max-height: none; }
   .detail-actions { min-height: 78px; }
   .detail-actions .button { min-width: 0; flex: 1; }
   .detail-prose dl { grid-template-columns: 1fr; gap: 5px; }
@@ -287,6 +302,12 @@ h2, h3 { margin: 0; }
   .secret-field { grid-template-columns: 1fr 1fr; }
   .secret-field .settings-field { grid-column: 1 / -1; }
   .secret-field .button { padding-inline: 9px; }
+  .resource-form { padding: 14px; }
+  .resource-heading { align-items: flex-start; flex-wrap: wrap; }
+  .resource-heading strong { width: 100%; }
+  .resource-heading .connection-state { margin-right: auto; }
+  .resource-footer { align-items: stretch; flex-direction: column; }
+  .resource-footer .button { width: 100%; }
   .settings-savebar { bottom: 70px; }
   .settings-savebar span { display: none; }
   .settings-savebar .button { width: 100%; }

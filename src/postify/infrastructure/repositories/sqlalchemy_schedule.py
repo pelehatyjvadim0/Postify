@@ -148,8 +148,8 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO operation_runs
-                            (project_id,operation,status,started_at)
-                        VALUES (:project_id,:kind,'running',CURRENT_TIMESTAMP)
+                            (project_id,operation,status,mode,actor,started_at)
+                        VALUES (:project_id,:kind,'running','automatic','scheduler',CURRENT_TIMESTAMP)
                         ON CONFLICT (project_id,operation) WHERE status='running'
                         DO NOTHING RETURNING id
                         """

@@ -21,15 +21,15 @@ class SqlAlchemyOperationRunRepository:
         self.sf = session_factory
         self.project_id = project_id
 
-    def start(self, operation: OperationKind, *, now) -> int:
+    def start(self, operation: OperationKind, *, now, mode: str = "automatic", actor: str = "scheduler") -> int:
         with self.sf() as session:
             try:
                 run_id = session.execute(text("""
-                    INSERT INTO operation_runs(project_id,operation,status,started_at)
-                    VALUES (:project,:operation,'running',:now)
+                    INSERT INTO operation_runs(project_id,operation,status,mode,actor,started_at)
+                    VALUES (:project,:operation,'running',:mode,:actor,:now)
                     ON CONFLICT (project_id,operation) WHERE status='running'
                     DO NOTHING RETURNING id
-                """), {"project": self.project_id, "operation": OperationKind(operation).value, "now": now}).scalar_one_or_none()
+                """), {"project": self.project_id, "operation": OperationKind(operation).value, "mode": mode, "actor": actor, "now": now}).scalar_one_or_none()
                 if run_id is None:
                     session.rollback()
                     raise RuntimeError("operation_busy")
@@ -39,20 +39,47 @@ class SqlAlchemyOperationRunRepository:
                 session.rollback()
                 raise
 
-    def succeed(self, run_id: int, *, outcome: str, now) -> None:
-        self._finish(run_id, "succeeded", outcome=outcome, now=now)
+    def succeed(self, run_id: int, *, outcome: str, now, **metadata) -> None:
+        self._finish(run_id, "succeeded", outcome=outcome, now=now, **metadata)
 
-    def fail(self, run_id: int, *, failure_code: str, now) -> None:
-        self._finish(run_id, "failed", failure_code=failure_code, now=now)
+    def fail(self, run_id: int, *, failure_code: str, now, **metadata) -> None:
+        self._finish(run_id, "failed", failure_code=failure_code, now=now, **metadata)
 
-    def _finish(self, run_id: int, status: str, *, now, outcome: str | None = None, failure_code: str | None = None) -> None:
+    def _finish(
+        self,
+        run_id: int,
+        status: str,
+        *,
+        now,
+        outcome: str | None = None,
+        failure_code: str | None = None,
+        codex_model: str | None = None,
+        codex_reasoning_effort: str | None = None,
+        materials_taken: int = 0,
+        packages_created: int = 0,
+    ) -> None:
         with self.sf() as session:
             try:
                 result = session.execute(text("""
                     UPDATE operation_runs SET status=:status, outcome=:outcome,
-                    failure_code=:failure_code, finished_at=:now
+                    failure_code=:failure_code, finished_at=:now,
+                    codex_model=:codex_model,
+                    codex_reasoning_effort=:codex_reasoning_effort,
+                    materials_taken=:materials_taken,
+                    packages_created=:packages_created
                     WHERE project_id=:project AND id=:id AND status='running'
-                """), {"project": self.project_id, "id": run_id, "status": status, "outcome": outcome, "failure_code": failure_code, "now": now})
+                """), {
+                    "project": self.project_id,
+                    "id": run_id,
+                    "status": status,
+                    "outcome": outcome,
+                    "failure_code": failure_code,
+                    "now": now,
+                    "codex_model": codex_model,
+                    "codex_reasoning_effort": codex_reasoning_effort,
+                    "materials_taken": materials_taken,
+                    "packages_created": packages_created,
+                })
                 if result.rowcount != 1:
                     raise InvalidOperationRunTransition("Operation run больше не running")
                 session.commit()
@@ -114,7 +141,7 @@ class SqlAlchemyOperationalStatusRepository:
                     WHERE a.project_id=:project
                     ORDER BY a.finished_at DESC,a.id DESC LIMIT :limit
                 """), {"project": self.project_id, "limit": limit}).mappings())
-                latest_runs = tuple(OperationRunSummary(row.id,row.operation,row.status,row.outcome,row.failure_code,row.finished_at,row.started_at) for row in session.execute(text("SELECT id,operation,status,outcome,failure_code,started_at,finished_at FROM operation_runs WHERE project_id=:project ORDER BY COALESCE(finished_at,started_at) DESC,id DESC LIMIT :limit"), {"project": self.project_id, "limit": limit}).mappings())
+                latest_runs = tuple(OperationRunSummary(row.id,row.operation,row.status,row.outcome,row.failure_code,row.finished_at,row.started_at,row.mode,row.actor,row.codex_model,row.codex_reasoning_effort,row.materials_taken,row.packages_created) for row in session.execute(text("SELECT id,operation,status,outcome,failure_code,started_at,finished_at,mode,actor,codex_model,codex_reasoning_effort,materials_taken,packages_created FROM operation_runs WHERE project_id=:project ORDER BY COALESCE(finished_at,started_at) DESC,id DESC LIMIT :limit"), {"project": self.project_id, "limit": limit}).mappings())
                 session.commit()
                 return RawOperationalSnapshot(candidate_total, tuple(undecided), decisions, rejected, attempts, packages, delivery, tuple(ready), tuple(cleanup), usage[0], usage[1], published, tuple(selected_without), latest_packages, latest_attempts, latest_runs)
             except BaseException:

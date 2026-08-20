@@ -41,9 +41,9 @@ class ApiStub:
         self.calls.append(("approve", (project_id, package_id)))
         return {"id": package_id, "status": "approved"}
 
-    def reject(self, project_id: int, package_id: int, reason: str):
-        self.calls.append(("reject", (project_id, package_id, reason)))
-        return {"id": package_id, "status": "rejected", "reason": reason}
+    def reject(self, project_id: int, package_id: int):
+        self.calls.append(("reject", (project_id, package_id)))
+        return {"id": package_id, "status": "rejected"}
 
     def queue(self, project_id: int):
         return {"projectId": project_id, "items": []}
@@ -54,6 +54,54 @@ class ApiStub:
     def operations(self, project_id: int, **filters: object):
         return {"projectId": project_id, "items": [], "filters": filters}
 
+    def operation(self, project_id: int, operation_run_id: int):
+        self.calls.append(("operation", (project_id, operation_run_id)))
+        return {
+            "run_id": operation_run_id,
+            "kind": "load_more",
+            "mode": "manual",
+            "actor": "ui",
+            "status": "succeeded",
+            "outcome": "completed",
+            "failure_code": None,
+            "codex_model": "gpt-5.3-codex",
+            "codex_reasoning_effort": "high",
+            "materials_taken": 3,
+            "packages_created": 3,
+            "started_at": NOW,
+            "finished_at": NOW,
+            "duration": 0,
+            "raw_prompt": "must not cross the HTTP boundary",
+        }
+
+    def _accepted(self, name: str, *values: int):
+        self.calls.append((name, values))
+        return {"status": "accepted", "operationRunId": 17}
+
+    def manual_search(self, project_id: int):
+        return self._accepted("manual_search", project_id)
+
+    def load_more(self, project_id: int):
+        return self._accepted("load_more", project_id) | {"requested": 3}
+
+    def retry_analysis(self, project_id: int, attempt_id: int):
+        return self._accepted("retry_analysis", project_id, attempt_id)
+
+    def return_to_analysis(self, project_id: int, package_id: int):
+        return self._accepted("return_to_analysis", project_id, package_id)
+
+    def regenerate_post(self, project_id: int, package_id: int):
+        return self._accepted("regenerate_post", project_id, package_id)
+
+    def replace_media(self, project_id: int, package_id: int):
+        return self._accepted("replace_media", project_id, package_id)
+
+    def publish_now(self, project_id: int, package_id: int):
+        return self._accepted("publish_now", project_id, package_id)
+
+    def retry_delivery(self, project_id: int, delivery_id: int):
+        return self._accepted("retry_delivery", project_id, delivery_id)
+
     def run_once(self, project_id: int):
         if self.run_once_busy:
             raise RuntimeError("operation_busy")
@@ -61,8 +109,7 @@ class ApiStub:
         return {"status": "accepted"}
 
     def publish_once(self, project_id: int):
-        self.calls.append(("publish_once", (project_id,)))
-        return {"outcome": "empty"}
+        return self._accepted("publish_once", project_id)
 
     def settings(self, project_id: int):
         return {
@@ -350,7 +397,7 @@ def test_settings_never_serializes_channel_secret_and_forbids_unknown_request_fi
     settings = client.get("/api/v1/projects/1/settings")
     invalid = client.post(
         "/api/v1/projects/1/packages/7/reject",
-        json={"reason": "Не подходит", "unexpected": True},
+        json={"unexpected": True},
     )
 
     assert settings.status_code == 200
@@ -359,17 +406,17 @@ def test_settings_never_serializes_channel_secret_and_forbids_unknown_request_fi
     assert invalid.status_code == 422
 
 
-def test_reject_enforces_reason_boundaries_before_calling_review_action() -> None:
-    # Break caught: blank/oversized reject reasons enter package history instead of being rejected at the HTTP boundary.
+def test_reject_accepts_no_reason_and_rejects_reason_payloads() -> None:
+    # Break caught: a package rejection records untrusted feedback or requires a second confirmation step.
     stub = ApiStub()
     client = client_for(stub)
 
-    too_short = client.post("/api/v1/projects/1/packages/7/reject", json={"reason": "не"})
-    valid = client.post("/api/v1/projects/1/packages/7/reject", json={"reason": "Не подходит"})
+    with_reason = client.post("/api/v1/projects/1/packages/7/reject", json={"reason": "Не подходит"})
+    valid = client.post("/api/v1/projects/1/packages/7/reject")
 
-    assert too_short.status_code == 422
+    assert with_reason.status_code == 422
     assert valid.status_code == 200
-    assert stub.calls == [("reject", (1, 7, "Не подходит"))]
+    assert stub.calls == [("reject", (1, 7))]
 
 
 def test_operations_return_accepted_and_map_duplicate_run_to_conflict() -> None:
@@ -384,6 +431,80 @@ def test_operations_return_accepted_and_map_duplicate_run_to_conflict() -> None:
     assert accepted.status_code == 202
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "operation_busy"
+
+
+def test_operation_polling_is_project_scoped() -> None:
+    stub = ApiStub()
+    response = client_for(stub).get("/api/v1/projects/1/operations/17")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": 17,
+        "kind": "load_more",
+        "mode": "manual",
+        "actor": "ui",
+        "status": "succeeded",
+        "outcome": "completed",
+        "failure_code": None,
+        "codex_model": "gpt-5.3-codex",
+        "codex_reasoning_effort": "high",
+        "materials_taken": 3,
+        "packages_created": 3,
+        "started_at": "2026-08-12T09:00:00Z",
+        "finished_at": "2026-08-12T09:00:00Z",
+    }
+    assert stub.calls == [("operation", (1, 17))]
+
+
+def test_all_manual_commands_are_accepted_server_owned_empty_body_mutations() -> None:
+    stub = ApiStub()
+    client = client_for(stub)
+    paths = (
+        "/api/v1/projects/1/operations/search",
+        "/api/v1/projects/1/packages/load-more",
+        "/api/v1/projects/1/attempts/8/retry-analysis",
+        "/api/v1/projects/1/packages/7/return-to-analysis",
+        "/api/v1/projects/1/packages/7/regenerate",
+        "/api/v1/projects/1/packages/7/media/replace",
+        "/api/v1/projects/1/packages/7/publish-now",
+        "/api/v1/projects/1/deliveries/6/retry",
+    )
+
+    accepted = [client.post(path) for path in paths]
+    hostile = client.post(paths[1], json={"bypass_quotas": True, "mode": "manual"})
+
+    assert all(response.status_code == 202 for response in accepted)
+    assert all(response.json()["operationRunId"] == 17 for response in accepted)
+    assert accepted[1].json()["requested"] == 3
+    assert hostile.status_code == 422
+    assert [name for name, _ in stub.calls] == [
+        "manual_search",
+        "load_more",
+        "retry_analysis",
+        "return_to_analysis",
+        "regenerate_post",
+        "replace_media",
+        "publish_now",
+        "retry_delivery",
+    ]
+
+
+def test_load_more_conflict_returns_only_safe_unresolved_package_ids() -> None:
+    from postify.web.errors import ConflictError
+
+    stub = ApiStub()
+
+    def unresolved(project_id: int):
+        raise ConflictError(
+            "review_unresolved", {"unresolvedPackageIds": [7, 8]}
+        )
+
+    stub.load_more = unresolved
+    response = client_for(stub).post("/api/v1/projects/1/packages/load-more")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "review_unresolved"
+    assert response.json()["unresolvedPackageIds"] == [7, 8]
 
 
 def test_invalid_review_transition_is_a_conflict_not_validation_error() -> None:
@@ -410,7 +531,7 @@ def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     client = client_for(stub)
 
     assert client.post("/api/v1/projects/1/packages/7/approve").status_code == 200
-    assert client.post("/api/v1/projects/1/operations/publish-once").status_code == 200
+    assert client.post("/api/v1/projects/1/operations/publish-once").status_code == 202
     assert client.put(
         "/api/v1/projects/1/settings/main",
         json={"name": "Новая редакция", "topic": "AI", "language": "ru", "audience": "Команды", "timezone": "Europe/Moscow"},
@@ -425,6 +546,16 @@ def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     assert [call[0] for call in stub.calls] == [
         "approve", "publish_once", "update_settings", "create_resource", "check_channel", "delete_resource"
     ]
+
+
+def test_publish_once_returns_the_background_operation_identifier() -> None:
+    # Break caught: the browser cannot observe a failed Telegram publish and reports false success.
+    response = client_for(ApiStub()).post(
+        "/api/v1/projects/1/operations/publish-once"
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "accepted", "operationRunId": 17}
 
 
 def test_mutations_require_same_origin_session_capability_and_trusted_host() -> None:

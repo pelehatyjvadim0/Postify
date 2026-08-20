@@ -5,6 +5,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from postify.domain.observability.models import (
+    OperationActor,
+    OperationKind,
+    OperationMode,
+    OperationStatus,
+)
 from postify.domain.projects.cron import normalize_cron
 
 
@@ -66,8 +72,42 @@ class BootstrapResponse(ResponseSchema):
     providers: ProviderCatalogResponse
 
 
-class RejectRequest(RequestSchema):
-    reason: str = Field(min_length=3, max_length=500)
+class OperationPollingResponse(ResponseSchema):
+    run_id: int = Field(gt=0)
+    kind: OperationKind
+    mode: OperationMode
+    actor: OperationActor
+    status: OperationStatus
+    outcome: Literal[
+        "completed",
+        "empty",
+        "published",
+        "cleanup_completed",
+        "cleanup_pending",
+        "retryable",
+        "failed",
+        "uncertain",
+    ] | None = None
+    failure_code: Literal[
+        "run_once_failed",
+        "publish_once_failed",
+        "load_more_failed",
+        "retry_analysis_failed",
+        "return_to_analysis_failed",
+        "regenerate_post_failed",
+        "replace_media_failed",
+        "publish_now_failed",
+        "retry_delivery_failed",
+        "manual_search_failed",
+    ] | None = None
+    codex_model: str | None = Field(default=None, min_length=1)
+    codex_reasoning_effort: Literal[
+        "low", "medium", "high", "xhigh", "max"
+    ] | None = None
+    materials_taken: int = Field(ge=0)
+    packages_created: int = Field(ge=0)
+    started_at: datetime
+    finished_at: datetime | None = None
 
 
 class MainSettingsRequest(RequestSchema):
@@ -96,6 +136,10 @@ class ConfigurationSettingsRequest(RequestSchema):
     article_max_bytes: int | None = Field(default=None, gt=0)
     media_max_bytes: int | None = Field(default=None, gt=0)
     analysis_timeout_seconds: int | None = Field(default=None, gt=0)
+    analysis_model: str | None = Field(default=None, min_length=1)
+    analysis_reasoning_effort: Literal[
+        "low", "medium", "high", "xhigh", "max"
+    ] | None = None
 
 
 class SourceRequest(RequestSchema):

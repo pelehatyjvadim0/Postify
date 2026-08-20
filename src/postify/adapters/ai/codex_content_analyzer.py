@@ -6,7 +6,11 @@ import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel, ValidationError
+
+from postify.adapters.ai.codex_output import batch_output_model, batch_output_schema
 
 from postify.domain.content.models import (
     AnalysisInput,
@@ -21,6 +25,7 @@ class CodexAnalysisError(RuntimeError):
     def __init__(self, code: str = "codex_failed", message: str = "") -> None:
         super().__init__(code)
         self.code = code
+        self.reason = message
 
 
 class CodexContentAnalyzer:
@@ -30,11 +35,19 @@ class CodexContentAnalyzer:
         repository_cwd: Path,
         timeout_seconds: float,
         work_dir: Path,
+        model: str = "gpt-5.6-luna",
+        reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high",
     ) -> None:
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("model не может быть пустой")
+        if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("Неизвестный reasoning effort")
         self.runner = runner
         self.cwd = Path(repository_cwd)
         self.timeout = timeout_seconds
         self.work = Path(work_dir)
+        self.model = model.strip()
+        self.reasoning_effort = reasoning_effort
 
     def analyze(
         self,
@@ -49,6 +62,7 @@ class CodexContentAnalyzer:
         try:
             schema = invocation / "schema.json"
             output = invocation / "output.json"
+            output_model = batch_output_model(len(materialized))
             schema.write_text(
                 json.dumps(self._schema(len(materialized)), ensure_ascii=False),
                 encoding="utf-8",
@@ -58,7 +72,14 @@ class CodexContentAnalyzer:
             )
             if done.returncode:
                 raise CodexAnalysisError()
-            result = self._parse_output(output, materialized, package_limit)
+            result = self._parse_output(
+                output,
+                materialized,
+                package_limit,
+                output_model,
+                allow_source_url=brief is not None
+                and brief.cta_link_mode == "source",
+            )
         except CodexAnalysisError as error:
             failure = error
         except Exception:
@@ -96,6 +117,10 @@ class CodexContentAnalyzer:
         argv = [
             "codex",
             "exec",
+            "--model",
+            self.model,
+            "--config",
+            f'model_reasoning_effort="{self.reasoning_effort}"',
             "--ephemeral",
             "--sandbox",
             "read-only",
@@ -124,54 +149,7 @@ class CodexContentAnalyzer:
 
     @staticmethod
     def _schema(article_count: int) -> dict[str, object]:
-        common_properties = {
-            "attempt_id": {"type": "integer", "minimum": 1},
-            "analysis": {"type": "string", "minLength": 1},
-            "usefulness": {"type": "integer", "minimum": 0, "maximum": 100},
-        }
-        required = [
-            "attempt_id",
-            "analysis",
-            "usefulness",
-            "selected",
-            "post_text",
-            "media_query",
-        ]
-        selected_topic = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": required,
-            "properties": {
-                **common_properties,
-                "selected": {"type": "boolean", "const": True},
-                "post_text": {"type": "string", "minLength": 1},
-                "media_query": {"type": "string", "minLength": 1},
-            },
-        }
-        unselected_topic = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": required,
-            "properties": {
-                **common_properties,
-                "selected": {"type": "boolean", "const": False},
-                "post_text": {"type": "null"},
-                "media_query": {"type": "null"},
-            },
-        }
-        return {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["topics"],
-            "properties": {
-                "topics": {
-                    "type": "array",
-                    "minItems": article_count,
-                    "maxItems": article_count,
-                    "items": {"anyOf": [selected_topic, unselected_topic]},
-                }
-            },
-        }
+        return batch_output_schema(article_count)
 
     @staticmethod
     def _prompt(
@@ -214,36 +192,50 @@ class CodexContentAnalyzer:
 
     @staticmethod
     def _parse_output(
-        output: Path, articles: tuple[AnalysisInput, ...], package_limit: int
+        output: Path,
+        articles: tuple[AnalysisInput, ...],
+        package_limit: int,
+        output_model: type[BaseModel] | None = None,
+        *,
+        allow_source_url: bool = False,
     ) -> BatchAnalysis:
         try:
-            payload: Any = json.loads(output.read_text(encoding="utf-8"))
-            raw_topics = payload["topics"]
-            if not isinstance(raw_topics, list):
-                raise ValueError
+            raw_output = output.read_text(encoding="utf-8")
+        except OSError:
+            raise CodexAnalysisError("codex_output_unavailable") from None
+        model = output_model or batch_output_model(len(articles))
+        try:
+            payload = model.model_validate_json(raw_output)
+        except ValidationError as error:
+            first = error.errors(include_url=False)[0]
+            code = (
+                "codex_output_not_json"
+                if first.get("type") == "json_invalid"
+                else "codex_output_schema_mismatch"
+            )
+            location = ".".join(str(item) for item in first.get("loc", ()))
+            raise CodexAnalysisError(code, location) from None
+        try:
             topics = tuple(
                 AnalyzedTopic(
-                    attempt_id=item["attempt_id"],
-                    analysis=item["analysis"],
-                    usefulness=item["usefulness"],
-                    selected=item["selected"],
-                    post_text=item["post_text"],
-                    media_query=item["media_query"],
+                    **item.model_dump()
                 )
-                for item in raw_topics
+                for item in payload.topics
             )
             batch = BatchAnalysis(
                 topics, tuple(item.attempt_id for item in articles), package_limit
             )
-            if any(
+            if not allow_source_url and any(
                 topic.post_text is not None and article.source_url in topic.post_text
                 for article in articles
                 for topic in topics
             ):
-                raise ContentValidationError
+                raise CodexAnalysisError("codex_output_source_url_forbidden")
             return batch
-        except (OSError, ValueError, KeyError, TypeError, ContentValidationError):
-            raise CodexAnalysisError("codex_invalid_output") from None
+        except CodexAnalysisError:
+            raise
+        except (ValueError, TypeError, ContentValidationError):
+            raise CodexAnalysisError("codex_output_domain_invalid") from None
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:

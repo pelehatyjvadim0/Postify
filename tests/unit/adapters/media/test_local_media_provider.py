@@ -109,6 +109,48 @@ def test_media_uses_first_valid_article_candidate_without_wikimedia(tmp_path: Pa
     assert Path(media.local_path).read_bytes() == b"valid-png-bytes"
 
 
+def test_media_replacement_skips_current_url_and_identical_bytes(tmp_path: Path) -> None:
+    # Поломка Wave 10: replace_media сохраняет новый файл с тем же OG-изображением.
+    ExtractedArticle, LocalMediaProvider, _ = _api()
+    old = tmp_path / "old.png"
+    old.write_bytes(b"same-image")
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        body = b"different-image" if request.url.host == "wiki.test" else b"same-image"
+        return httpx.Response(
+            200,
+            content=body,
+            headers={"content-type": "image/png"},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        media = LocalMediaProvider(
+            client,
+            tmp_path,
+            1000,
+            FakeWikimedia(("wikimedia", "https://wiki.test/fallback.png")),
+            url_policy=AllowingPolicy(),
+        ).acquire(
+            _article(
+                ExtractedArticle,
+                (
+                    ("og", "https://cdn.test/current.png"),
+                    ("twitter", "https://cdn.test/duplicate.png"),
+                ),
+            ),
+            "article",
+            excluded_urls={"https://cdn.test/current.png"},
+            excluded_paths={str(old)},
+        )
+
+    assert requests == ["https://cdn.test/duplicate.png", "https://wiki.test/fallback.png"]
+    assert media.source_type == "wikimedia"
+    assert Path(media.local_path).read_bytes() == b"different-image"
+
+
 def test_media_falls_back_once_to_wikimedia_after_all_article_candidates(tmp_path: Path) -> None:
     # Поломка (gate 8): fallback перемешан с article-источниками или вызван не один раз.
     ExtractedArticle, LocalMediaProvider, _ = _api()

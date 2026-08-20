@@ -268,6 +268,71 @@ def test_retry_is_reserved_only_by_its_persisted_route_and_channel(
         engine.dispose()
 
 
+def test_manual_delivery_retry_action_resolves_only_project_owned_retryable_route(
+    migrated_database_url: str,
+) -> None:
+    from postify.application.delivery.manual_operations import (
+        DeliveryNotRetryable,
+        ManualDeliveryRetry,
+    )
+
+    FailureKind, Repository = _api()
+    engine = create_engine(migrated_database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO content_formats
+                (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (711,1,'Manual','post','manual',true,:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO channel_connections
+                (id,project_id,provider,name,enabled,configuration,connection_status,
+                 created_at,updated_at)
+                VALUES (811,1,'telegram','Manual',true,'{}','ok',:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO publication_routes
+                (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
+                VALUES (911,1,711,811,true,'{}',:now,:now)"""
+            ),
+            {"now": NOW},
+        )
+    package_id = _seed_package(engine, marker="manual-delivery-retry")
+    repository = Repository(
+        sessionmaker(engine), project_id=1, route_id=911, channel_id=811
+    )
+    try:
+        claim = repository.reserve_next(now=NOW, package_id=package_id)
+        assert claim is not None
+        repository.record_failure(
+            claim,
+            kind=FailureKind.RETRYABLE,
+            code="telegram_retryable",
+            reason="safe",
+            now=NOW,
+        )
+
+        route_id, context = ManualDeliveryRetry(
+            Repository(sessionmaker(engine), project_id=1)
+        ).prepare(claim.delivery_id)
+
+        assert route_id == 911
+        assert context.target_delivery_id == claim.delivery_id
+        with pytest.raises(DeliveryNotRetryable):
+            ManualDeliveryRetry(
+                Repository(sessionmaker(engine), project_id=2)
+            ).prepare(claim.delivery_id)
+    finally:
+        engine.dispose()
+
+
 def test_stale_sending_becomes_uncertain_with_one_attempt(
     migrated_database_url: str,
 ) -> None:

@@ -83,6 +83,12 @@ class BootstrapProject:
             article_max_bytes=settings.content_article_max_bytes,
             media_max_bytes=settings.content_media_max_bytes,
             analysis_timeout_seconds=settings.content_codex_timeout_seconds,
+            analysis_model=getattr(
+                settings, "content_codex_model", "gpt-5.6-luna"
+            ),
+            analysis_reasoning_effort=getattr(
+                settings, "content_codex_reasoning_effort", "high"
+            ),
         )
         project = ContentProject(
             1,

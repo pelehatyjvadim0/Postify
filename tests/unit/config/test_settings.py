@@ -310,6 +310,8 @@ def test_settings_exposes_complete_content_profile(monkeypatch: pytest.MonkeyPat
     assert settings.content_article_max_bytes == 2_000_000
     assert settings.content_media_max_bytes == 10_000_000
     assert settings.content_codex_timeout_seconds == 600
+    assert settings.content_codex_model == "gpt-5.6-luna"
+    assert settings.content_codex_reasoning_effort == "high"
 
 
 @pytest.mark.parametrize("missing_name", CONTENT_REQUIRED_NAMES)

@@ -18,6 +18,7 @@ def _api():
         AnalyzedTopic,
         BatchAnalysis,
         ContentLimits,
+        ExecutionContext,
         ExtractedArticle,
         StoredMedia,
     )
@@ -30,6 +31,7 @@ def _api():
         AnalyzedTopic=AnalyzedTopic,
         BatchAnalysis=BatchAnalysis,
         ContentLimits=ContentLimits,
+        ExecutionContext=ExecutionContext,
         ExtractedArticle=ExtractedArticle,
         StoredMedia=StoredMedia,
     )
@@ -46,11 +48,11 @@ class FakeRepository:
         self.events.append(("active_media_paths",))
         return set(self.protected)
 
-    def claim(self, *, now: datetime, day: date, limits: object):
+    def claim(self, *, now: datetime, day: date, limits: object, context=None):
         self.events.append(("claim", now, day, limits))
         return tuple(self.attempts)
 
-    def package_slots_remaining(self, *, day: date, limit: int) -> int:
+    def package_slots_remaining(self, *, day: date, limit: int, context=None) -> int:
         self.events.append(("package_slots", day, limit))
         return limit - self.package_usage
 
@@ -75,6 +77,7 @@ class FakeRepository:
         now: datetime,
         day: date,
         package_limit: int,
+        context=None,
     ):
         self.events.append(
             (
@@ -276,6 +279,31 @@ def test_second_article_failure_is_terminal_and_never_schedules_third_attempt() 
     assert result.failed == 1
 
 
+def test_manual_article_failure_is_terminal_and_never_enters_automatic_retry_queue() -> None:
+    # Break caught: a manual owner command creates a scheduled retry that automation later consumes.
+    api = _api()
+    attempt = _attempt(1)
+    repository = FakeRepository([attempt])
+    processor = api.ProcessContent(
+        repository,
+        FakeExtractor({attempt.source_url: api.ArticleExtractionError("raw secret")}),
+        FakeAnalyzer(_batch(api, ())),
+        FakeMedia(None),
+        limits=_limits(api),
+        review_required=True,
+        timezone="UTC",
+        context=api.ExecutionContext(mode="manual", actor="ui", batch_size=1),
+        clock=lambda: NOW,
+    )
+
+    result = processor.execute()
+
+    assert not [event for event in repository.events if event[0] == "retry"]
+    assert ("fail_attempt", 1, "article_unavailable", NOW) in repository.events
+    assert result.retry_scheduled == 0
+    assert result.failed == 1
+
+
 def test_codex_failure_finishes_all_extracted_attempts_with_safe_code() -> None:
     # Поломка (gate 10): Codex-сбой оставляет processing или сохраняет stderr.
     api = _api()
@@ -455,11 +483,18 @@ def test_process_passes_effective_generation_brief_and_persists_its_snapshot() -
         timezone="UTC",
         generation_brief=brief,
         generation_snapshot=snapshot,
+        codex_model="gpt-5.6-luna",
+        codex_reasoning_effort="high",
         clock=lambda: NOW,
     )
 
-    processor.execute()
+    result = processor.execute()
 
     assert analyzer.briefs == [brief]
     draft = next(event for event in repository.events if event[0] == "drafts")
     assert draft[4] == snapshot
+    assert result.materials_taken == 1
+    assert (result.codex_model, result.codex_reasoning_effort) == (
+        "gpt-5.6-luna",
+        "high",
+    )

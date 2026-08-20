@@ -16,6 +16,10 @@ class ShellCollector(HTMLParser):
         self.brand_mark_tag: str | None = None
         self.brand_leaf_count = 0
         self.settings_href: str | None = None
+        self.routes: set[str] = set()
+        self.skip_href: str | None = None
+        self.detail_labelledby: str | None = None
+        self.module_scripts: list[str] = []
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -38,6 +42,14 @@ class ShellCollector(HTMLParser):
             self.brand_leaf_count += 1
         if values.get("data-route") == "settings":
             self.settings_href = values.get("href")
+        if values.get("data-route"):
+            self.routes.add(values["data-route"] or "")
+        if tag == "a" and "skip-link" in classes:
+            self.skip_href = values.get("href")
+        if tag == "dialog":
+            self.detail_labelledby = values.get("aria-labelledby")
+        if tag == "script" and values.get("type") == "module":
+            self.module_scripts.append(values.get("src") or "")
 
 
 def test_production_frontend_exposes_the_approved_application_shell() -> None:
@@ -54,6 +66,10 @@ def test_production_frontend_exposes_the_approved_application_shell() -> None:
     assert parser.brand_mark_tag == "svg"
     assert parser.brand_leaf_count == 3
     assert parser.settings_href == "#settings"
+    assert parser.routes == {"overview", "materials", "review", "queue", "publications", "journal", "settings"}
+    assert parser.skip_href == "#screen-root"
+    assert parser.detail_labelledby == "detail-title"
+    assert parser.module_scripts == ["app.js"]
 
 
 def test_frontend_uses_api_without_demo_state() -> None:

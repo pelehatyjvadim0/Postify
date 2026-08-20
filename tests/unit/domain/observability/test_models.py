@@ -35,7 +35,7 @@ def test_operation_enums_expose_only_supported_safe_codes() -> None:
     # Поломка: журнал принимает произвольный action/status или теряет один из двух action.
     _, _, OperationKind, _, OperationStatus, _, _ = _models()
 
-    assert tuple(item.value for item in OperationKind) == ("run_once", "publish_once")
+    assert tuple(item.value for item in OperationKind) == ("run_once", "publish_once", "load_more", "retry_analysis", "return_to_analysis", "regenerate_post", "replace_media", "publish_now", "retry_delivery", "manual_search")
     assert tuple(item.value for item in OperationStatus) == (
         "running",
         "succeeded",
@@ -201,3 +201,60 @@ def test_operation_run_summary_rejects_failure_code_outside_operation_vocabulary
 
     with pytest.raises(ValueError, match="failure"):
         OperationRun(4, operation, "failed", None, failure_code, NOW, started_at=NOW)
+
+
+def test_manual_operation_summary_keeps_complete_codex_and_count_metadata() -> None:
+    _, _, _, OperationRun, *_ = _models()
+
+    run = OperationRun(
+        4,
+        "load_more",
+        "succeeded",
+        "completed",
+        None,
+        NOW,
+        started_at=NOW,
+        mode="manual",
+        actor="ui",
+        codex_model="gpt-5.6-luna",
+        codex_reasoning_effort="high",
+        materials_taken=3,
+        packages_created=2,
+    )
+
+    assert (run.mode, run.actor) == ("manual", "ui")
+    assert (run.codex_model, run.codex_reasoning_effort) == (
+        "gpt-5.6-luna",
+        "high",
+    )
+    assert (run.materials_taken, run.packages_created) == (3, 2)
+
+
+@pytest.mark.parametrize(
+    ("mode", "actor", "materials_taken", "packages_created"),
+    [
+        ("manual", "scheduler", 0, 0),
+        ("automatic", "ui", 0, 0),
+        ("manual", "ui", -1, 0),
+        ("manual", "ui", 0, -1),
+    ],
+)
+def test_operation_summary_rejects_invalid_context_or_counts(
+    mode: str, actor: str, materials_taken: int, packages_created: int
+) -> None:
+    _, _, _, OperationRun, *_ = _models()
+
+    with pytest.raises(ValueError):
+        OperationRun(
+            4,
+            "load_more",
+            "succeeded",
+            "empty",
+            None,
+            NOW,
+            started_at=NOW,
+            mode=mode,
+            actor=actor,
+            materials_taken=materials_taken,
+            packages_created=packages_created,
+        )

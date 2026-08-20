@@ -61,6 +61,8 @@ def settings():
         content_article_max_bytes=2_000_000,
         content_media_max_bytes=10_000_000,
         content_codex_timeout_seconds=600,
+        content_codex_model="gpt-5.6-luna",
+        content_codex_reasoning_effort="high",
     )
 
 
@@ -84,6 +86,8 @@ def test_bootstrap_is_idempotent_and_creates_provider_neutral_graph() -> None:
     assert repository.formats[0].name == "Практический разбор B"
     assert repository.channels == []
     assert repository.routes == []
+    assert first.configuration.analysis_model == "gpt-5.6-luna"
+    assert first.configuration.analysis_reasoning_effort == "high"
 
 
 def test_bootstrap_encrypts_telegram_token_and_keeps_it_out_of_configuration() -> None:

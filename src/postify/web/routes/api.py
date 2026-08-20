@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
@@ -13,7 +13,7 @@ from postify.web.schemas import (
     ConfigurationSettingsRequest,
     CtaRequest,
     MainSettingsRequest,
-    RejectRequest,
+    OperationPollingResponse,
     RouteRequest,
     ScheduleSettingsRequest,
     SourceRequest,
@@ -115,11 +115,57 @@ def approve(project_id: int, package_id: int, container: Container):
     return _response(container.api.approve(project_id, package_id))
 
 
+async def _require_empty_body(request: Request) -> None:
+    if await request.body():
+        raise HTTPException(status_code=422, detail="request_body_not_allowed")
+
+
+@router.post("/projects/{project_id}/packages/load-more", status_code=202)
+async def load_more(project_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.load_more(project_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/attempts/{attempt_id}/retry-analysis", status_code=202)
+async def retry_analysis(project_id: int, attempt_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.retry_analysis(project_id, attempt_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/packages/{package_id}/return-to-analysis", status_code=202)
+async def return_to_analysis(project_id: int, package_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.return_to_analysis(project_id, package_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/packages/{package_id}/regenerate", status_code=202)
+async def regenerate_post(project_id: int, package_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.regenerate_post(project_id, package_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/packages/{package_id}/media/replace", status_code=202)
+async def replace_media(project_id: int, package_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.replace_media(project_id, package_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/packages/{package_id}/publish-now", status_code=202)
+async def publish_now(project_id: int, package_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.publish_now(project_id, package_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/deliveries/{delivery_id}/retry", status_code=202)
+async def retry_delivery(project_id: int, delivery_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.retry_delivery(project_id, delivery_id), status_code=202)
+
+
 @router.post("/projects/{project_id}/packages/{package_id}/reject")
-def reject(
-    project_id: int, package_id: int, body: RejectRequest, container: Container
-):
-    return _response(container.api.reject(project_id, package_id, body.reason))
+async def reject(project_id: int, package_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.reject(project_id, package_id))
 
 
 @router.get("/projects/{project_id}/queue")
@@ -141,14 +187,32 @@ def operations(
     return _response(container.api.operations(project_id, limit=limit, offset=offset))
 
 
+@router.get(
+    "/projects/{project_id}/operations/{operation_run_id}",
+    response_model=OperationPollingResponse,
+)
+def operation(
+    project_id: int, operation_run_id: int, container: Container
+) -> OperationPollingResponse:
+    return OperationPollingResponse.model_validate(
+        container.api.operation(project_id, operation_run_id)
+    )
+
+
 @router.post("/projects/{project_id}/operations/run-once", status_code=202)
 def run_once(project_id: int, container: Container):
     return _response(container.api.run_once(project_id), status_code=202)
 
 
-@router.post("/projects/{project_id}/operations/publish-once")
+@router.post("/projects/{project_id}/operations/search", status_code=202)
+async def manual_search(project_id: int, request: Request, container: Container):
+    await _require_empty_body(request)
+    return _response(container.api.manual_search(project_id), status_code=202)
+
+
+@router.post("/projects/{project_id}/operations/publish-once", status_code=202)
 def publish_once(project_id: int, container: Container):
-    return _response(container.api.publish_once(project_id))
+    return _response(container.api.publish_once(project_id), status_code=202)
 
 
 @router.get("/projects/{project_id}/settings")

@@ -81,7 +81,11 @@ class SqlAlchemyDashboardRepository:
                         COALESCE((SELECT analyses_started FROM content_daily_usage
                                   WHERE project_id=:project AND day=:day), 0) AS daily_analyses_started,
                         COALESCE((SELECT packages_created FROM content_daily_usage
-                                  WHERE project_id=:project AND day=:day), 0) AS daily_packages_created"""
+                                  WHERE project_id=:project AND day=:day), 0) AS daily_packages_created,
+                        COALESCE((SELECT manual_analyses_started FROM content_daily_usage
+                                  WHERE project_id=:project AND day=:day), 0) AS manual_analyses_started,
+                        COALESCE((SELECT manual_packages_created FROM content_daily_usage
+                                  WHERE project_id=:project AND day=:day), 0) AS manual_packages_created"""
                         ),
                         {
                             "project": project_id,
@@ -128,7 +132,10 @@ class SqlAlchemyDashboardRepository:
                     text(
                         f"""SELECT c.id AS candidate_id,c.source_name,c.title,c.url,c.discovered_at,
                     d.status AS decision_status,d.reason AS decision_reason,
-                    d.explanation AS decision_explanation,d.signals AS decision_signals,d.policy_version
+                    d.explanation AS decision_explanation,d.signals AS decision_signals,d.policy_version,
+                    (SELECT a.id FROM content_attempts a WHERE a.project_id=c.project_id
+                     AND a.candidate_id=c.id AND a.status IN ('failed','retry_scheduled')
+                     ORDER BY a.id DESC LIMIT 1) AS retry_attempt_id
                     FROM candidates c LEFT JOIN candidate_decisions d
                     ON d.project_id=c.project_id AND d.candidate_id=c.id
                     WHERE {" AND ".join(clauses)}
@@ -153,6 +160,7 @@ class SqlAlchemyDashboardRepository:
                 if row.decision_signals is None
                 else _mapping(row.decision_signals),
                 row.policy_version,
+                row.retry_attempt_id,
             )
             for row in rows
         )
@@ -206,7 +214,7 @@ class SqlAlchemyDashboardRepository:
             row = (
                 session.execute(
                     text(
-                        """SELECT id,status,source_url,post_text,analysis,media_path,media_deleted_at,
+                        """SELECT id,attempt_id,status,source_url,post_text,analysis,media_path,media_deleted_at,
                     media_source_type,media_source_url,generation_snapshot,created_at,updated_at
                     FROM content_packages WHERE project_id=:project AND id=:package"""
                     ),
@@ -244,6 +252,7 @@ class SqlAlchemyDashboardRepository:
             _mapping(row.generation_snapshot),
             row.created_at,
             row.updated_at,
+            row.attempt_id,
         )
 
     def package_media_path(self, project_id: int, package_id: int) -> tuple[str, str]:
@@ -417,7 +426,8 @@ class SqlAlchemyDashboardRepository:
             rows = (
                 session.execute(
                     text(
-                        """SELECT id,operation,status,outcome,failure_code,started_at,finished_at
+                        """SELECT id,operation,status,outcome,failure_code,started_at,finished_at,mode,actor,
+                        codex_model,codex_reasoning_effort,materials_taken,packages_created
                     FROM operation_runs WHERE project_id=:project
                     ORDER BY COALESCE(finished_at,started_at) DESC,id DESC LIMIT :limit OFFSET :offset"""
                     ),
@@ -436,6 +446,32 @@ class SqlAlchemyDashboardRepository:
                 row.started_at,
                 row.finished_at,
                 None if row.finished_at is None else row.finished_at - row.started_at,
+                row.mode,
+                row.actor,
+                row.codex_model,
+                row.codex_reasoning_effort,
+                row.materials_taken,
+                row.packages_created,
             )
             for row in rows
+        )
+
+    def operation(self, project_id: int, run_id: int) -> Operation:
+        with self._session_factory() as session:
+            row = session.execute(
+                text(
+                    """SELECT id,operation,status,outcome,failure_code,started_at,finished_at,mode,actor,
+                    codex_model,codex_reasoning_effort,materials_taken,packages_created
+                    FROM operation_runs WHERE project_id=:project AND id=:run"""
+                ),
+                {"project": project_id, "run": run_id},
+            ).mappings().first()
+        if row is None:
+            raise LookupError(run_id)
+        return Operation(
+            row.id, row.operation, row.status, row.outcome, row.failure_code,
+            row.started_at, row.finished_at,
+            None if row.finished_at is None else row.finished_at - row.started_at,
+            row.mode, row.actor, row.codex_model, row.codex_reasoning_effort,
+            row.materials_taken, row.packages_created,
         )

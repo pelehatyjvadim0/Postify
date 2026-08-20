@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from threading import Event, get_ident
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine, event, text
@@ -26,7 +27,11 @@ def _api():
         SqlAlchemyOperationRunRepository,
     )
 
-    return OperationKind, SqlAlchemyOperationalStatusRepository, SqlAlchemyOperationRunRepository
+    return (
+        OperationKind,
+        SqlAlchemyOperationalStatusRepository,
+        SqlAlchemyOperationRunRepository,
+    )
 
 
 def _repositories(engine):
@@ -54,7 +59,9 @@ def _seed_candidate(connection, marker: str, *, decision: str | None = None) -> 
             {
                 "id": candidate_id,
                 "status": decision,
-                "reason": "eligible_for_ai" if decision == "selected" else "advertising",
+                "reason": "eligible_for_ai"
+                if decision == "selected"
+                else "advertising",
                 "now": NOW,
             },
         )
@@ -130,8 +137,12 @@ def _seed_delivery(
             "now": NOW,
             "confirmed_at": confirmed_at,
             "media_deleted_at": media_deleted_at,
-            "failure_code": f"safe_{status}" if status in {"retryable", "failed", "uncertain"} else None,
-            "failure_reason": "SENTINEL-PRIVATE-REASON" if status in {"retryable", "failed", "uncertain"} else None,
+            "failure_code": f"safe_{status}"
+            if status in {"retryable", "failed", "uncertain"}
+            else None,
+            "failure_reason": "SENTINEL-PRIVATE-REASON"
+            if status in {"retryable", "failed", "uncertain"}
+            else None,
         },
     ).scalar_one()
 
@@ -172,14 +183,87 @@ def test_operation_run_start_and_success_are_independently_committed(
                 {"id": run_id},
             ).one() == ("run_once", "running", None, None, NOW, None)
 
-        repository.succeed(run_id, outcome="completed", now=NOW + timedelta(seconds=2))
+        repository.succeed(
+            run_id,
+            outcome="completed",
+            now=NOW + timedelta(seconds=2),
+            codex_model="gpt-5.6-luna",
+            codex_reasoning_effort="high",
+            materials_taken=3,
+            packages_created=2,
+        )
         with engine.connect() as connection:
             assert connection.execute(
                 text(
-                    "SELECT status,outcome,failure_code,finished_at FROM operation_runs WHERE id=:id"
+                    "SELECT status,outcome,failure_code,finished_at,codex_model,"
+                    "codex_reasoning_effort,materials_taken,packages_created "
+                    "FROM operation_runs WHERE id=:id"
                 ),
                 {"id": run_id},
-            ).one() == ("succeeded", "completed", None, NOW + timedelta(seconds=2))
+            ).one() == (
+                "succeeded",
+                "completed",
+                None,
+                NOW + timedelta(seconds=2),
+                "gpt-5.6-luna",
+                "high",
+                3,
+                2,
+            )
+    finally:
+        engine.dispose()
+
+
+def test_manual_usage_keeps_automatic_status_and_journal_context_separate(
+    migrated_database_url: str,
+) -> None:
+    # Поломка: ручная работа исчерпывает автоматические лимиты или теряет mode/actor в журнале.
+    from postify.application.observability.show_status import (
+        RuntimeSnapshot,
+        ShowOperationalStatus,
+    )
+
+    engine = create_engine(migrated_database_url)
+    repository, _ = _repositories(engine)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO content_daily_usage
+                    (project_id,day,analyses_started,packages_created,
+                     manual_analyses_started,manual_packages_created)
+                    VALUES (1,:day,0,0,18,6)"""
+                ),
+                {"day": DAY},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO operation_runs
+                    (project_id,operation,status,outcome,mode,actor,started_at,finished_at)
+                    VALUES (1,'manual_search','succeeded','completed','manual','ui',:now,:now)"""
+                ),
+                {"now": NOW},
+            )
+
+        status = ShowOperationalStatus(
+            repository,
+            timezone=ZoneInfo("Europe/Moscow"),
+            daily_target=3,
+            analysis_limit=1,
+            package_limit=1,
+            clock=lambda: NOW,
+        ).execute(RuntimeSnapshot())
+
+        assert (
+            status.snapshot.daily_analyses_started,
+            status.snapshot.daily_packages_created,
+        ) == (0, 0)
+        assert status.deficit == 3
+        assert status.deficit_reasons == ("eligible_source_shortage",)
+        assert (
+            status.latest_operation_runs[0].mode,
+            status.latest_operation_runs[0].actor,
+        ) == ("manual", "ui")
     finally:
         engine.dispose()
 
@@ -226,14 +310,20 @@ def test_operation_run_rejects_second_terminal_transition(
     _, repository = _repositories(engine)
     try:
         run_id = repository.start(OperationKind.PUBLISH_ONCE, now=NOW)
-        repository.fail(run_id, failure_code="publish_once_failed", now=NOW + timedelta(seconds=1))
+        repository.fail(
+            run_id, failure_code="publish_once_failed", now=NOW + timedelta(seconds=1)
+        )
 
         with pytest.raises(ValueError, match="running"):
-            repository.succeed(run_id, outcome="published", now=NOW + timedelta(seconds=2))
+            repository.succeed(
+                run_id, outcome="published", now=NOW + timedelta(seconds=2)
+            )
 
         with engine.connect() as connection:
             assert connection.execute(
-                text("SELECT status,outcome,failure_code FROM operation_runs WHERE id=:id"),
+                text(
+                    "SELECT status,outcome,failure_code FROM operation_runs WHERE id=:id"
+                ),
                 {"id": run_id},
             ).one() == ("failed", None, "publish_once_failed")
     finally:
@@ -265,11 +355,15 @@ def test_operation_terminal_sql_failure_rolls_back_to_running(
             )
 
         with pytest.raises(DBAPIError):
-            repository.succeed(run_id, outcome="published", now=NOW + timedelta(seconds=1))
+            repository.succeed(
+                run_id, outcome="published", now=NOW + timedelta(seconds=1)
+            )
 
         with engine.connect() as connection:
             assert connection.execute(
-                text("SELECT status,outcome,failure_code,finished_at FROM operation_runs WHERE id=:id"),
+                text(
+                    "SELECT status,outcome,failure_code,finished_at FROM operation_runs WHERE id=:id"
+                ),
                 {"id": run_id},
             ).one() == ("running", None, None, None)
     finally:
@@ -299,7 +393,9 @@ def test_snapshot_uses_exact_ready_predicate_and_local_day_interval(
                 ("published-end", DAY_END - timedelta(microseconds=1)),
                 ("published-after", DAY_END),
             ):
-                package_id = _seed_package(connection, marker, package_status="published")
+                package_id = _seed_package(
+                    connection, marker, package_status="published"
+                )
                 _seed_delivery(
                     connection,
                     package_id,
@@ -417,7 +513,9 @@ def test_snapshot_remains_consistent_when_a_complete_graph_is_committed_mid_read
     paused = False
 
     @event.listens_for(engine, "after_cursor_execute")
-    def pause_after_first_select(connection, cursor, statement, parameters, context, executemany):
+    def pause_after_first_select(
+        connection, cursor, statement, parameters, context, executemany
+    ):
         nonlocal paused
         if (
             snapshot_thread
@@ -443,9 +541,25 @@ def test_snapshot_remains_consistent_when_a_complete_graph_is_committed_mid_read
             snapshot = future.result(timeout=5)
 
         # Новый graph либо целиком виден, либо целиком не виден; внутри snapshot нет torn read.
-        selected = next((item.count for item in snapshot.candidate_decisions if item.code == "selected"), 0)
-        packaged = next((item.count for item in snapshot.content_attempts if item.code == "packaged"), 0)
-        approved = next((item.count for item in snapshot.packages if item.code == "approved"), 0)
+        selected = next(
+            (
+                item.count
+                for item in snapshot.candidate_decisions
+                if item.code == "selected"
+            ),
+            0,
+        )
+        packaged = next(
+            (
+                item.count
+                for item in snapshot.content_attempts
+                if item.code == "packaged"
+            ),
+            0,
+        )
+        approved = next(
+            (item.count for item in snapshot.packages if item.code == "approved"), 0
+        )
         assert snapshot.candidate_total == selected == packaged == approved
     finally:
         event.remove(engine, "after_cursor_execute", pause_after_first_select)
@@ -477,7 +591,17 @@ def test_snapshot_counts_only_requested_project(migrated_database_url: str) -> N
         first = StatusRepository(sessionmaker(engine), project_id=1)
         second = StatusRepository(sessionmaker(engine), project_id=2)
 
-        assert first.snapshot(day=DAY, day_start=DAY_START, day_end=DAY_END).candidate_total == 1
-        assert second.snapshot(day=DAY, day_start=DAY_START, day_end=DAY_END).candidate_total == 1
+        assert (
+            first.snapshot(
+                day=DAY, day_start=DAY_START, day_end=DAY_END
+            ).candidate_total
+            == 1
+        )
+        assert (
+            second.snapshot(
+                day=DAY, day_start=DAY_START, day_end=DAY_END
+            ).candidate_total
+            == 1
+        )
     finally:
         engine.dispose()

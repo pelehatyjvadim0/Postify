@@ -27,7 +27,7 @@ def test_two_web_instances_share_durable_operation_ownership(
         def execute(self):
             started.set()
             assert release.wait(timeout=2)
-            return object()
+            return type("RunResult", (), {"content_result": None})()
 
     @contextmanager
     def opened(*args, **kwargs):
@@ -77,7 +77,7 @@ def test_restarted_web_worker_executes_accepted_scheduler_job_exactly_once(
     class Run:
         def execute(self):
             executions.append("run_once")
-            return object()
+            return type("RunResult", (), {"content_result": None})()
 
     @contextmanager
     def opened(*args, **kwargs):

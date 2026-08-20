@@ -145,12 +145,19 @@ def test_open_run_once_yields_recorded_action_and_preserves_execute_result(monke
         def __init__(self, factory) -> None:
             assert factory is resources.session_factory
 
-        def start(self, operation, *, now):
+        def start(self, operation, *, now, mode, actor):
+            assert (mode, actor) == ("automatic", "scheduler")
             events.append(("start", operation.value))
             return 71
 
-        def succeed(self, run_id, *, outcome, now):
+        def succeed(self, run_id, *, outcome, now, **metadata):
             assert run_id == 71
+            assert metadata == {
+                "codex_model": None,
+                "codex_reasoning_effort": None,
+                "materials_taken": 0,
+                "packages_created": 0,
+            }
             events.append(("succeed", outcome))
 
         def fail(self, run_id, *, failure_code, now):
