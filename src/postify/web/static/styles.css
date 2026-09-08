@@ -262,7 +262,8 @@ h2, h3 { margin: 0; }
 .work-views .is-active, .work-filters .is-active { background: var(--forest); color: white; }
 .work-filters .is-active span { color: #d8e2d4; }
 .work-hint { margin: 0; font-size: 12px; color: var(--muted); }
-.work-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(350px, .9fr); gap: 20px; align-items: start; }
+.work-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.work-layout.work-layout-editor-open { grid-template-columns: minmax(0, 1.1fr) minmax(350px, .9fr); }
 .work-list { min-width: 0; overflow: hidden; }
 .work-search { display: block; padding: 16px; border-bottom: 1px solid var(--line); }
 .work-search input { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: var(--surface); color: var(--ink); font: inherit; }
