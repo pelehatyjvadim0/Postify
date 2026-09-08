@@ -9,6 +9,7 @@ from fastapi import Request
 
 
 SESSION_COOKIE = "postify_session"
+ACCESS_COOKIE = "postify_access"
 CSRF_HEADER = "x-postify-csrf"
 MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -19,6 +20,10 @@ def new_session() -> str:
 
 def capability(secret: bytes, session: str) -> str:
     return hmac.new(secret, session.encode("utf-8"), sha256).hexdigest()
+
+
+def access_token(secret: bytes, password: str) -> str:
+    return hmac.new(secret, password.encode("utf-8"), sha256).hexdigest()
 
 
 def valid_capability(request: Request) -> bool:

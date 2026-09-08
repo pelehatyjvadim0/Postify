@@ -10,6 +10,11 @@ from cryptography.fernet import Fernet
 
 
 def main() -> None:
+    bind = os.environ.get("AUTOPOST_BIND", "127.0.0.1")
+    if bind not in {"127.0.0.1", "::1", "localhost"} and not os.environ.get(
+        "POSTIFY_ACCESS_PASSWORD"
+    ):
+        raise RuntimeError("Внешний доступ требует POSTIFY_ACCESS_PASSWORD")
     # Ключ принадлежит этому контуру и переживает перезапуск вместе с volume.
     if not os.environ.get("POSTIFY_SECRET_KEY"):
         key_path = Path("/data/secret.key")

@@ -63,6 +63,17 @@ ssh -L 8000:127.0.0.1:8000 user@server
 
 После подключения откройте [http://localhost:8000](http://localhost:8000).
 
+Чтобы открыть UI с обязательным входом по паролю, задайте в `.env`:
+
+```dotenv
+AUTOPOST_BIND=0.0.0.0
+POSTIFY_ACCESS_PASSWORD=случайный-пароль
+POSTIFY_TRUSTED_HOSTS=IP-или-домен-сервера,127.0.0.1,localhost
+```
+
+После `docker compose up -d app` интерфейс будет доступен на порту `8000`.
+Успешный вход сохраняется в HTTP-only cookie браузера на один год.
+
 ## Первичная настройка
 
 ### 1. Подключите AI

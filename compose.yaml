@@ -30,8 +30,11 @@ services:
       CONTENT_MODEL: ${CONTENT_MODEL:-gpt-5.6-terra}
       CODEX_HOME: /data/codex
       AUTOPOST_RELOAD: "1"
+      AUTOPOST_BIND: ${AUTOPOST_BIND:-127.0.0.1}
+      POSTIFY_ACCESS_PASSWORD: ${POSTIFY_ACCESS_PASSWORD:-}
+      POSTIFY_TRUSTED_HOSTS: ${POSTIFY_TRUSTED_HOSTS:-}
     ports:
-      - "127.0.0.1:${AUTOPOST_PORT:-8000}:8000"
+      - "${AUTOPOST_BIND:-127.0.0.1}:${AUTOPOST_PORT:-8000}:8000"
     volumes:
       - app-data:/data
       - ./src:/app/src:ro
