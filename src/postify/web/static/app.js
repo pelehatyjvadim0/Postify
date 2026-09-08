@@ -279,21 +279,38 @@ async function savePlan(form) {
   button.disabled = true;
   button.textContent = "Сохраняем…";
   error.textContent = "";
+  let item;
+  const payload = {scheduled_at: date.toISOString(), route_id: Number(form.elements.route_id.value)};
   try {
-    const item = await savePackagePlan(projectId, form.dataset.id, {scheduled_at: date.toISOString(), route_id: Number(form.elements.route_id.value)});
-    if (!form.isConnected || (!detailLayer.open && !root.contains(form))) return;
-    currentData.items = currentData.items.map((entry) => entry.package_id === item.package_id ? {...entry, ...item} : entry);
+    item = await savePackagePlan(projectId, form.dataset.id, payload);
+  } catch (requestError) {
+    if (requestError instanceof TypeError) {
+      try { item = await savePackagePlan(projectId, form.dataset.id, payload); }
+      catch (retryError) { requestError = retryError; }
+    }
+    if (!item) {
+      error.textContent = requestError.code === "invalid_transition"
+        ? "План этого поста уже нельзя изменить. Обновите список."
+        : requestError.code === "validation_error"
+          ? "План не сохранён: проверьте дату и канал."
+          : "План не сохранён из-за сбоя соединения. Повторите попытку.";
+      controls.forEach(([control, disabled]) => { control.disabled = disabled; });
+      button.textContent = "Подтвердить дату";
+      return;
+    }
+  }
+  showToast("План сохранён");
+  if (!form.isConnected || (!detailLayer.open && !root.contains(form))) return;
+  currentData.items = currentData.items.map((entry) => entry.package_id === item.package_id ? {...entry, ...item} : entry);
+  try {
     renderPackage(item, lastOpener);
     detailContent.querySelectorAll(".detail-disclosure").forEach((section, index) => { section.open = opened[index]; });
     detailContent.querySelector(".detail-body").scrollTop = scrollTop;
     detailContent.querySelector('[data-action="edit-package-plan"], [data-package-plan] [type="submit"]')?.focus({preventScroll: true});
     paintCurrent();
     lastOpener = root.querySelector('[data-action="open-package"][data-id="' + item.package_id + '"]');
-    showToast("План сохранён");
   } catch (_) {
-    error.textContent = "План не сохранён. Обновите карточку и проверьте дату и канал.";
-    controls.forEach(([control, disabled]) => { control.disabled = disabled; });
-    button.textContent = "Сохранить план";
+    await loadRoute();
   }
 }
 
