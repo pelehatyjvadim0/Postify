@@ -36,7 +36,7 @@ def test_codex_mvp_prompt_contains_brief_and_isolates_untrusted_input(tmp_path: 
     assert "CTA" not in prompt and "cta" not in prompt
     argv = captured["argv"]
     assert "--strict-config" in argv
-    assert "--ignore-user-config" in argv
+    assert "--ignore-user-config" not in argv
     assert "--ignore-rules" in argv
     assert "--ephemeral" in argv
     for feature in (

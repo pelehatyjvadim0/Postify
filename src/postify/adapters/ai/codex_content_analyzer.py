@@ -173,7 +173,6 @@ class CodexContentAnalyzer:
             "--ephemeral",
             "--sandbox",
             "read-only",
-            "--ignore-user-config",
             "--ignore-rules",
             "--skip-git-repo-check",
             "--cd",
