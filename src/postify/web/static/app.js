@@ -185,9 +185,9 @@ async function openPackage(node) {
 
 function renderPackage(item, node) {
     const delivery = currentData?.publications?.find(entry => entry.package_id === item.package_id);
-    const published = item.status === "published" || delivery?.status === "published";
+    const published = item.status === "published" || item.delivery_status === "published" || delivery?.status === "published";
     const manual = published ? "" : item.status === "approved" ? `<div class="detail-action-note"><button class="button button--quiet" type="button" disabled aria-describedby="regenerate-note-${escapeHtml(item.package_id)}">Переписать пост</button><small id="regenerate-note-${escapeHtml(item.package_id)}">Доступно до одобрения</small></div>` : item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Переписать пост</button>` : "";
-    const actions = (item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}"${!item.scheduled_at || !item.route_id ? " disabled" : ""}>✓ Одобрить пост</button>` : item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Подготовить заново</button>` : item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить подготовку</button>` : "") + manual;
+    const actions = (!published && item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}"${!item.scheduled_at || !item.route_id ? " disabled" : ""}>✓ Одобрить пост</button>` : !published && item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Подготовить заново</button>` : !published && item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить подготовку</button>` : "") + manual;
     const media = (delivery ? `<p><button class="button button--quiet" data-action="open-delivery" data-id="${delivery.delivery_id}">Результат отправки</button></p>` : "") + (item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Вложение поста № ${escapeHtml(item.package_id)}">` : "");
 
     openDetail(shortTitle(item.post_text), `<article class="detail-prose">${statusBadge(published ? "published" : item.status)}${media}<div class="rewrite-region"><p class="post-text">${escapeHtml(item.post_text)}</p><div class="rewrite-progress" role="status" hidden>✍️ Пишем новый пост…</div></div>${packagePlanForm({...item, delivery_status: delivery?.status || item.delivery_status, confirmed_at: delivery?.confirmed_at || item.confirmed_at})}<details class="detail-disclosure"><summary>Оригинал</summary><p class="post-text" dir="auto">${escapeHtml(item.original_text || "Оригинал недоступен")}</p>${item.source_url ? externalLink(item.source_url) : ""}</details>${item.analysis ? `<details class="detail-disclosure"><summary>Почему выбран этот материал</summary><p>${escapeHtml(item.analysis)}</p></details>` : ""}</article>`, actions, node);
@@ -284,7 +284,12 @@ async function savePlan(form) {
   try {
     item = await savePackagePlan(projectId, form.dataset.id, payload);
   } catch (requestError) {
-    if (requestError instanceof TypeError) {
+    if (requestError?.code === "csrf_required") {
+      try {
+        await getBootstrap();
+        item = await savePackagePlan(projectId, form.dataset.id, payload);
+      } catch (retryError) { requestError = retryError; }
+    } else if (requestError instanceof TypeError) {
       try { item = await savePackagePlan(projectId, form.dataset.id, payload); }
       catch (retryError) { requestError = retryError; }
     }

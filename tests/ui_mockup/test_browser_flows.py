@@ -157,3 +157,19 @@ def test_published_post_has_no_rewrite_or_date_controls(page_factory, base_url):
     expect(page.locator('[data-action="regenerate-post"]')).to_have_count(0)
     expect(page.locator('[data-action="edit-package-plan"]')).to_have_count(0)
     expect(page.locator('[name="scheduled_local"]')).to_have_count(0)
+
+
+def test_published_delivery_overrides_stale_package_review_status(page_factory, base_url):
+    fixtures = fixture_payloads()
+    fixtures[f"{PROJECT}/packages/9001"].update(
+        status="awaiting_review", delivery_status="published", scheduled_at="2026-09-05T12:00:00Z", route_id=1
+    )
+    page = page_factory()
+    install_api(page, fixtures=fixtures)
+    page.goto(f"{base_url}/#review")
+    page.locator('[data-action="open-package"]').click()
+    expect(page.locator('#detail-content .status-badge--published')).to_have_count(1)
+    expect(page.locator('#detail-content').get_by_text("Ждёт проверки", exact=True)).to_have_count(0)
+    expect(page.locator('#detail-content [data-action="approve-package"]')).to_have_count(0)
+    expect(page.locator('#detail-content [data-action="reject-package"]')).to_have_count(0)
+    expect(page.locator('#detail-content [data-action="edit-package-plan"]')).to_have_count(0)

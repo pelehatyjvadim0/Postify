@@ -73,7 +73,7 @@ def test_new_search_completes_once_and_journal_remains_accessible(page_factory, 
     expect(page.locator('[data-action="open-run"][data-id="9001"]')).to_contain_text("Успешно")
 
 
-def install_plan_api(page, *, fail_save=False, fail_network_once=False):
+def install_plan_api(page, *, fail_save=False, fail_network_once=False, fail_csrf_once=False):
     fixtures = fixture_payloads()
     detail = fixtures[f"{PROJECT}/packages/9001"]
     detail.update(original_text="نشر الفريق 12 تحديثًا", post_text="Команда выпустила 12 обновлений.",
@@ -81,9 +81,10 @@ def install_plan_api(page, *, fail_save=False, fail_network_once=False):
                   routes=[{"id": 8, "name": "Новости"}], media_available=False)
     calls = []
     network_failed = False
+    csrf_failed = False
 
     def handle(route):
-        nonlocal network_failed
+        nonlocal network_failed, csrf_failed
         path = urlsplit(route.request.url).path
         method = route.request.method
         if method != "GET":
@@ -93,6 +94,13 @@ def install_plan_api(page, *, fail_save=False, fail_network_once=False):
                 network_failed = True
                 route.abort("connectionreset")
                 return
+            if fail_csrf_once and not csrf_failed:
+                csrf_failed = True
+                fixtures["/api/v1/bootstrap"]["csrfToken"] = "refreshed-capability"
+                route.fulfill(status=403, json={"code": "csrf_required"})
+                return
+            if fail_csrf_once:
+                assert route.request.headers["x-postify-csrf"] == "refreshed-capability"
             if fail_save:
                 route.fulfill(status=409, json={"code": "plan_conflict"})
                 return
@@ -158,6 +166,21 @@ def test_failed_plan_save_preserves_draft_and_disabled_approval(page_factory, ba
 def test_plan_save_retries_one_transient_network_failure(page_factory, base_url):
     page = page_factory()
     calls = install_plan_api(page, fail_network_once=True)
+    page.goto(f"{base_url}/#review")
+    page.locator('[data-action="open-package"]').click()
+    page.locator('[name="scheduled_local"]').fill("2099-09-05T12:30")
+    page.locator('[name="route_id"]').select_option("8")
+    page.get_by_role("button", name="Подтвердить дату").click()
+    expect(page.get_by_text("План сохранён", exact=True)).to_be_visible()
+    assert [call[:2] for call in calls] == [
+        ("PATCH", f"{PROJECT}/packages/9001/plan"),
+        ("PATCH", f"{PROJECT}/packages/9001/plan"),
+    ]
+
+
+def test_plan_save_refreshes_expired_csrf_capability(page_factory, base_url):
+    page = page_factory()
+    calls = install_plan_api(page, fail_csrf_once=True)
     page.goto(f"{base_url}/#review")
     page.locator('[data-action="open-package"]').click()
     page.locator('[name="scheduled_local"]').fill("2099-09-05T12:30")
