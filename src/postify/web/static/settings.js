@@ -30,6 +30,20 @@ function selectField(label, name, current, options, attrs = "") {
   return `<label class="settings-field"><span>${escapeHtml(label)}</span><select name="${escapeHtml(name)}" ${attrs}>${options.map((option) => `<option value="${escapeHtml(option.value)}"${selected(option.value, current)}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`;
 }
 
+function scheduleSelect(label, name, current, attrs = "") {
+  const options = [
+    {value: "*/5 * * * *", label: "Каждые 5 минут"},
+    {value: "*/10 * * * *", label: "Каждые 10 минут"},
+    {value: "*/15 * * * *", label: "Каждые 15 минут"},
+    {value: "*/30 * * * *", label: "Каждые 30 минут"},
+    {value: "0 * * * *", label: "Каждый час"},
+    {value: "0 */3 * * *", label: "Каждые 3 часа"},
+    ...Array.from({length: 24}, (_, hour) => ({value: `0 ${hour} * * *`, label: `Каждый день в ${String(hour).padStart(2, "0")}:00`})),
+  ];
+  if (current && !options.some((option) => option.value === current)) options.push({value: current, label: "Текущее расписание"});
+  return selectField(label, name, current || "0 * * * *", options, attrs);
+}
+
 function savebar() {
   return `<p class="settings-error" data-settings-error role="alert"></p><footer class="settings-savebar" hidden><span>Есть несохранённые изменения</span><button class="button button--primary" type="submit">Сохранить</button></footer>`;
 }
@@ -69,7 +83,7 @@ function sourceForm(source, providers, mode = "update") {
   const provider = source.provider || catalogFor(providers, "sources")[0]?.code || "";
   return `<form class="settings-form resource-form" data-settings-form="sources" data-resource="sources" data-resource-id="${escapeHtml(source.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate>
     <div class="resource-heading"><strong>${mode === "create" ? "Новый источник" : escapeHtml(source.name)}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить</button>` : ""}</div>
-    <div class="settings-grid">${providerSelect(providers, "sources", provider)}${input("Название источника", "name", source.name, {required: true})}<div class="provider-fields" data-provider-fields>${renderProviderConfiguration(providers, "sources", provider, source.configuration)}</div>${input("Расписание получения", "schedule", source.schedule, {required: true})}</div>
+    <div class="settings-grid">${providerSelect(providers, "sources", provider)}${input("Название источника", "name", source.name, {required: true})}<div class="provider-fields" data-provider-fields>${renderProviderConfiguration(providers, "sources", provider, source.configuration)}</div>${scheduleSelect("Расписание получения", "schedule", source.schedule, "required")}</div>
     ${checkbox("Источник включён", "enabled", source.enabled ?? true)}${savebar()}</form>`;
 }
 
@@ -83,20 +97,13 @@ function channelForm(channel, providers, mode = "update") {
   return `<form class="settings-form resource-form channel-form" data-settings-form="channels" data-resource="channels" data-resource-id="${escapeHtml(channel.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новый канал" : escapeHtml(channel.name)}</strong><span class="connection-state connection-state--${connectionTone}">${escapeHtml(({ok: "Подключён", failed: "Не подключён", unavailable: "Недоступен", untested: "Не проверен"})[connectionStatus] || "Не проверен")}</span>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить</button>` : ""}</div><div class="settings-grid">${providerSelect(providers, "channels", provider)}${input("Название канала", "name", channel.name, {required: true})}<div class="provider-fields" data-provider-fields>${renderProviderConfiguration(providers, "channels", provider, channel.configuration)}</div></div>${token}<div class="resource-footer">${checkbox("Канал включён", "enabled", channel.enabled ?? true)}${mode === "update" ? `<button class="button button--secondary" type="button" data-settings-channel-check>Проверить канал</button>` : ""}</div>${savebar()}</form>`;
 }
 
-function routeForm(route, settings, mode = "update") {
-  const formats = settings.formats.map((item) => ({value: item.id, label: item.name}));
-  const channels = settings.channels.map((item) => ({value: item.id, label: item.name}));
-  const referenceIds = (options) => escapeHtml(options.map((item) => item.value).filter(String).join(","));
-  return `<form class="settings-form resource-form route-form" data-settings-form="route" data-resource="routes" data-resource-id="${escapeHtml(route.id || "")}" data-resource-mode="${mode}"${mode === "create" ? " hidden" : ""} novalidate><div class="resource-heading"><strong>${mode === "create" ? "Новое правило публикации" : `Правило № ${escapeHtml(route.id)}`}</strong>${mode === "update" ? `<button class="button button--quiet" type="button" data-settings-delete>Удалить правило</button>` : ""}</div><div class="settings-grid">${selectField("Формат", "format_id", route.format_id || formats[0]?.value || "", formats, `required data-reference-ids="${referenceIds(formats)}"`)}${selectField("Канал", "channel_id", route.channel_id || channels[0]?.value || "", channels, `required data-reference-ids="${referenceIds(channels)}"`)}</div><div class="resource-footer">${checkbox("Правило включено", "enabled", route.enabled ?? true)}</div>${savebar()}</form>`;
-}
-
 function scheduleForm(settings) {
-  const sourceFields = settings.sources.map((source) => input(
+  const sourceFields = settings.sources.map((source) => scheduleSelect(
     settings.sources.length === 1 ? "Расписание получения" : `Расписание получения — ${source.name}`,
     `source_schedule_${source.id}`,
     source.schedule,
-    {required: true},
-  ).replace("<input ", `<input data-source-schedule-id="${escapeHtml(source.id)}" `)).join("");
+    `required data-source-schedule-id="${escapeHtml(source.id)}"`,
+  )).join("");
   const comingSoon = `<aside class="coming-soon-card" aria-label="Автопубликация скоро"><span>Скоро</span><div><strong>Автопубликация</strong><p>Настройка автоматического расписания появится позже.</p></div></aside>`;
   if (!sourceFields) return `<p class="resource-empty">Расписание появится после добавления источника.</p>${comingSoon}`;
   return `<form class="settings-form" data-settings-form="schedule" novalidate><div class="timezone-ribbon">Время проекта: <strong>${escapeHtml(settings.project.timezone)}</strong></div><div class="settings-grid">${sourceFields}</div>${comingSoon}${savebar()}</form>`;
@@ -111,15 +118,13 @@ export function renderSettings(settings, providers, connections = false) {
   const config = project.configuration || {};
   const sources = settings.sources || [];
   const channels = settings.channels || [];
-  const routes = settings.routes || [];
   const sourceEditors = sources.map((source) => sourceForm(source, providers)).join("") || `<p class="resource-empty">Источники не настроены</p>`;
   const channelEditors = channels.map((channel) => channelForm(channel, providers)).join("") || `<p class="resource-empty">Каналы не настроены</p>`;
-  const routeEditors = routes.map((route) => routeForm(route, settings)).join("") || `<p class="resource-empty">Правила публикации не настроены</p>`;
   const html = `<section class="screen settings-screen ${connections ? "connections-screen" : ""}" data-screen="${connections ? "connections" : "settings"}">
     <div class="settings-accordion">
     ${!connections ? details("main", "Основное", `${project.name || "Без названия"} · ${project.language || "—"}`, mainForm(project), true) : ""}
     ${connections ? details("sources", "Откуда брать материалы", `${sources.length} · ${sources.filter((item) => item.enabled).length} включено`, `${sourceEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="sources">Добавить источник</button>${sourceForm({enabled: true, configuration: {}}, providers, "create")}`) : ""}
-    ${connections ? details("channels", "Куда публиковать", `${channels.length} канала · ${routes.length} правила`, `${channelEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="channels">Добавить канал</button>${channelForm({enabled: true, configuration: {}, secretConfigured: false}, providers, "create")}<div class="route-resource-actions"><strong>Правила публикации</strong>${routeEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="routes">Добавить правило</button>${routeForm({enabled: true}, settings, "create")}</div>`) : ""}
+    ${connections ? details("channels", "Куда публиковать", `${channels.length} канала`, `${channelEditors}<button class="button button--secondary add-resource" type="button" data-settings-add="channels">Добавить канал</button>${channelForm({enabled: true, configuration: {}, secretConfigured: false}, providers, "create")}`) : ""}
     ${!connections ? details("schedule", "Расписание", `Получение материалов · ${project.timezone || "—"}`, scheduleForm(settings)) : ""}
     ${!connections ? details("advanced", "Дополнительно", `Стиль поста`, advancedForm(config)) : ""}
   </div></section>`;
@@ -196,13 +201,6 @@ export function validateSettingsSection(form, payload) {
   if (form.dataset.settingsForm === "main") {
     try { new Intl.DateTimeFormat("ru", {timeZone: payload.timezone}).format(); }
     catch (_) { return showSettingsError(form, "Укажите действующий часовой пояс.", form.elements.timezone); }
-  }
-  if (form.dataset.settingsForm === "route") {
-    for (const field of ["format_id", "channel_id"]) {
-      const select = form.elements[field];
-      const referenceIds = new Set((select?.dataset.referenceIds || "").split(",").filter(Boolean));
-      if (!referenceIds.has(String(payload[field]))) return showSettingsError(form, "Выберите доступный канал и формат.", select);
-    }
   }
   return true;
 }

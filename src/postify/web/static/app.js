@@ -69,11 +69,6 @@ async function loadRoute() {
     if (!signal.aborted && currentRoute === route) {
       currentData = data;
       paintCurrent();
-      if (route === "review" && matchMedia("(min-width: 1101px)").matches) {
-        const first = root.querySelector('[data-work-key]');
-        if (first?.dataset.action === "open-package") await openPackage(first);
-        else if (first) openMaterial(first);
-      }
     }
   } catch (error) {
     if (error.name !== "AbortError" && !signal.aborted && currentRoute === route) root.innerHTML = errorMarkup();
@@ -148,7 +143,7 @@ function itemBy(kind, id) {
 function openDetail(title, body, actions, opener) {
   lastOpener = opener;
   detailContent.innerHTML = `<div class="detail-head"><div><h2 id="detail-title">${escapeHtml(title)}</h2></div><button class="icon-button" type="button" data-action="close-detail" aria-label="Закрыть">×</button></div><div class="detail-body">${body}</div>${actions ? `<div class="detail-actions">${actions}</div>` : ""}`;
-  const pane = currentRoute === "review" && matchMedia("(min-width: 1101px)").matches && root.querySelector("#work-editor");
+  const pane = currentRoute === "review" && workState.view === "calendar" && root.querySelector("#work-editor");
   if (pane) pane.replaceChildren(detailContent);
   else { detailLayer.append(detailContent); detailLayer.showModal(); }
   detailContent.querySelector("button")?.focus();
@@ -170,12 +165,13 @@ function closeDetail({repaint = true} = {}) {
 
 async function openPackage(node) {
   if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
-  workState.selected = node.dataset.workKey || `post-${node.dataset.id}`;
-  workState.editorOpen = true;
+  const packageId = node.dataset.id;
+  workState.selected = node.dataset.workKey || `post-${packageId}`;
+  workState.editorOpen = workState.view === "calendar";
   paintCurrent();
   node = root.querySelector(`[data-work-key="${workState.selected}"]`) || node;
   root.querySelectorAll("[data-work-key]").forEach(row => row.classList.toggle("is-selected", row.dataset.workKey === workState.selected));
-  const summary = itemBy("package", node.dataset.id);
+  const summary = itemBy("package", packageId);
   if (!summary) return;
   openDetail(`Пост № ${summary.package_id}`, `<p class="section-kicker">Загрузка…</p>`, "", node);
   try {
@@ -189,11 +185,12 @@ async function openPackage(node) {
 
 function renderPackage(item, node) {
     const delivery = currentData?.publications?.find(entry => entry.package_id === item.package_id);
-    const manual = item.status === "approved" ? `<div><button class="button button--quiet" type="button" disabled aria-describedby="regenerate-note-${escapeHtml(item.package_id)}">Переписать пост</button><p id="regenerate-note-${escapeHtml(item.package_id)}">Переписывание доступно до одобрения</p></div>` : item.status !== "published" && item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Переписать пост</button>` : "";
+    const published = item.status === "published" || delivery?.status === "published";
+    const manual = published ? "" : item.status === "approved" ? `<div class="detail-action-note"><button class="button button--quiet" type="button" disabled aria-describedby="regenerate-note-${escapeHtml(item.package_id)}">Переписать пост</button><small id="regenerate-note-${escapeHtml(item.package_id)}">Доступно до одобрения</small></div>` : item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Переписать пост</button>` : "";
     const actions = (item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}"${!item.scheduled_at || !item.route_id ? " disabled" : ""}>✓ Одобрить пост</button>` : item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Подготовить заново</button>` : item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить подготовку</button>` : "") + manual;
     const media = (delivery ? `<p><button class="button button--quiet" data-action="open-delivery" data-id="${delivery.delivery_id}">Результат отправки</button></p>` : "") + (item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Вложение поста № ${escapeHtml(item.package_id)}">` : "");
 
-    openDetail(shortTitle(item.post_text), `<article class="detail-prose">${statusBadge(item.status)}${media}<div class="rewrite-region"><p class="post-text">${escapeHtml(item.post_text)}</p><div class="rewrite-progress" role="status" hidden>✍️ Пишем новый пост…</div></div>${packagePlanForm(item)}<details class="detail-disclosure"><summary>Оригинал</summary><p class="post-text" dir="auto">${escapeHtml(item.original_text || "Оригинал недоступен")}</p>${item.source_url ? externalLink(item.source_url) : ""}</details>${item.analysis ? `<details class="detail-disclosure"><summary>Почему выбран этот материал</summary><p>${escapeHtml(item.analysis)}</p></details>` : ""}</article>`, actions, node);
+    openDetail(shortTitle(item.post_text), `<article class="detail-prose">${statusBadge(published ? "published" : item.status)}${media}<div class="rewrite-region"><p class="post-text">${escapeHtml(item.post_text)}</p><div class="rewrite-progress" role="status" hidden>✍️ Пишем новый пост…</div></div>${packagePlanForm({...item, delivery_status: delivery?.status || item.delivery_status, confirmed_at: delivery?.confirmed_at || item.confirmed_at})}<details class="detail-disclosure"><summary>Оригинал</summary><p class="post-text" dir="auto">${escapeHtml(item.original_text || "Оригинал недоступен")}</p>${item.source_url ? externalLink(item.source_url) : ""}</details>${item.analysis ? `<details class="detail-disclosure"><summary>Почему выбран этот материал</summary><p>${escapeHtml(item.analysis)}</p></details>` : ""}</article>`, actions, node);
 }
 
 function localPlanTime(date, timezone) {
@@ -247,10 +244,23 @@ async function rewritePost(node) {
 }
 
 function packagePlanForm(item) {
+  const displayedAt = item.delivery_status === "published" && item.confirmed_at ? item.confirmed_at : item.scheduled_at;
   const saved = item.scheduled_at ? localPlanTime(new Date(item.scheduled_at), item.timezone) : "";
-  const locked = ["published", "processing"].includes(item.status) || ["sending", "uncertain"].includes(item.delivery_status);
+  const locked = ["published", "processing"].includes(item.status) || ["sending", "uncertain", "published"].includes(item.delivery_status);
   const routes = item.routes || [];
-  return `<form data-package-plan data-id="${escapeHtml(item.package_id)}" data-timezone="${escapeHtml(item.timezone)}"><h3>План публикации</h3><fieldset class="settings-grid"${locked ? " disabled" : ""}><label class="settings-field"><span>Дата и время</span><input type="datetime-local" name="scheduled_local" required value="${escapeHtml(saved)}"></label><label class="settings-field"><span>Канал</span><select name="route_id" required><option value="">Выберите канал</option>${routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === item.route_id ? " selected" : ""}>${escapeHtml(route.name)}</option>`).join("")}</select></label><button class="button button--secondary" type="submit">Сохранить план</button></fieldset><p data-plan-error class="settings-error" role="alert"></p>${!item.scheduled_at || !item.route_id ? "<p>Укажите дату и канал, чтобы одобрить пост.</p>" : item.status === "approved" ? "<p>После изменения плана пост нужно одобрить заново.</p>" : ""}</form>`;
+  const planned = Boolean(displayedAt && item.route_id);
+  const exact = planned ? new Intl.DateTimeFormat("ru", {timeZone: item.timezone, dateStyle: "long", timeStyle: "short"}).format(new Date(displayedAt)) : "";
+  const delta = planned ? new Date(displayedAt).getTime() - Date.now() : 0;
+  const absolute = Math.abs(delta);
+  const [amount, unit] = absolute >= 86400000 ? [Math.round(delta / 86400000), "day"] : absolute >= 3600000 ? [Math.round(delta / 3600000), "hour"] : [Math.max(delta < 0 ? -1 : 1, Math.round(delta / 60000)), "minute"];
+  const relative = planned ? new Intl.RelativeTimeFormat("ru", {numeric: "always"}).format(amount, unit) : "";
+  const timing = item.status === "published" || item.delivery_status === "published" ? `Опубликован ${relative}` : `Публикация ${relative}`;
+  const summary = planned ? `<ul class="publication-plan-summary"><li>${escapeHtml(timing)}</li><li>${escapeHtml(exact)}</li></ul>` : "<p>Укажите дату и канал, чтобы одобрить пост.</p>";
+  const hidden = planned ? " hidden" : "";
+  const change = planned && !locked ? `<button class="button button--secondary" type="button" data-action="edit-package-plan">Изменить дату публикации</button>` : "";
+  const routeControl = planned ? `<input type="hidden" name="route_id" value="${escapeHtml(item.route_id)}">` : `<label class="settings-field"><span>Канал</span><select name="route_id" required><option value="">Выберите канал</option>${routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === item.route_id ? " selected" : ""}>${escapeHtml(route.name)}</option>`).join("")}</select></label>`;
+  const form = locked ? "" : `<fieldset class="settings-grid" data-plan-fields${hidden}><label class="settings-field"><span>Дата и время</span><input type="datetime-local" name="scheduled_local" required value="${escapeHtml(saved)}"></label>${routeControl}<div class="plan-confirm-actions"><button class="button button--primary" type="submit">Подтвердить дату</button>${planned ? '<button class="button button--quiet" type="button" data-action="cancel-package-plan">Отмена</button>' : ""}</div></fieldset>`;
+  return `<form data-package-plan data-id="${escapeHtml(item.package_id)}" data-timezone="${escapeHtml(item.timezone)}"><h3>План публикации</h3>${summary}${change}${form}<p data-plan-error class="settings-error" role="alert"></p>${item.status === "approved" && !locked ? "<p>После изменения даты пост нужно одобрить заново.</p>" : ""}</form>`;
 }
 
 async function savePlan(form) {
@@ -276,7 +286,7 @@ async function savePlan(form) {
     renderPackage(item, lastOpener);
     detailContent.querySelectorAll(".detail-disclosure").forEach((section, index) => { section.open = opened[index]; });
     detailContent.querySelector(".detail-body").scrollTop = scrollTop;
-    detailContent.querySelector('[data-package-plan] [type="submit"]').focus({preventScroll: true});
+    detailContent.querySelector('[data-action="edit-package-plan"], [data-package-plan] [type="submit"]')?.focus({preventScroll: true});
     paintCurrent();
     lastOpener = root.querySelector('[data-action="open-package"][data-id="' + item.package_id + '"]');
     showToast("План сохранён");
@@ -290,7 +300,7 @@ async function savePlan(form) {
 function openMaterial(node) {
   if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
   workState.selected = node.dataset.workKey || `material-${node.dataset.id}`;
-  workState.editorOpen = true;
+  workState.editorOpen = false;
   paintCurrent();
   node = root.querySelector(`[data-work-key="${workState.selected}"]`) || node;
   root.querySelectorAll("[data-work-key]").forEach(row => row.classList.toggle("is-selected", row.dataset.workKey === workState.selected));
@@ -442,7 +452,7 @@ document.addEventListener("click", (event) => {
   const workControl = event.target.closest("[data-work-view], [data-work-stage], [data-week]");
   if (workControl) {
     if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
-    if (workControl.dataset.workView) { workState.view = workControl.dataset.workView; if (workState.view === "calendar") workState.stage = "all"; }
+    if (workControl.dataset.workView) { closeDetail({repaint: false}); workState.view = workControl.dataset.workView; workState.selected = null; workState.editorOpen = false; if (workState.view === "calendar") workState.stage = "all"; }
     if (workControl.dataset.workStage) workState.stage = workControl.dataset.workStage;
     if (workControl.dataset.week) workState.week = workControl.dataset.week === "today" ? 0 : workState.week + Number(workControl.dataset.week);
     paintCurrent(); return;
@@ -456,6 +466,8 @@ document.addEventListener("click", (event) => {
   else if (action === "open-delivery") openDelivery(node);
   else if (action === "open-run") openRun(node);
   else if (action === "close-detail") closeDetail();
+  else if (action === "edit-package-plan") { node.hidden = true; detailContent.querySelector("[data-plan-fields]").hidden = false; detailContent.querySelector('[name="scheduled_local"]')?.focus(); }
+  else if (action === "cancel-package-plan") { const fields = node.closest("[data-plan-fields]"); fields.hidden = true; detailContent.querySelector('[data-action="edit-package-plan"]').hidden = false; }
   else if (["approve-package", "reject-package", "new-run", "retry-analysis", "return-to-analysis", "regenerate-post", "retry-delivery"].includes(action)) mutate(node);
 });
 

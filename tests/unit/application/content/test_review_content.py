@@ -131,6 +131,20 @@ def test_failed_reject_delete_keeps_rejected_package_recoverable() -> None:
     assert package.history[-1] == ("rejected", NOW)
 
 
+def test_reject_succeeds_when_local_media_cleanup_fails() -> None:
+    from postify.application.ports.media_provider import MediaCleanupError
+
+    ReviewContent, _ = _api()
+    package = _package()
+    repository = ReviewRepository(package)
+    media = DeletingMedia(MediaCleanupError("media_cleanup_failed"))
+
+    result = ReviewContent(repository, media, clock=lambda: NOW).reject(7)
+
+    assert result.status == "rejected"
+    assert package.media_path == "/media/7.jpg"
+
+
 @pytest.mark.parametrize("operation", ["approve", "reject"])
 def test_invalid_review_transition_changes_neither_history_nor_media(operation: str) -> None:
     # Терминальный published нельзя принять или отклонить повторно.
