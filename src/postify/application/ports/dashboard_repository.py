@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Protocol
 
 from postify.application.dashboard.models import (
-    DashboardOverview,
     Material,
     Operation,
     PackageDetail,
@@ -15,10 +14,6 @@ from postify.application.dashboard.models import (
 
 
 class DashboardRepository(Protocol):
-    def overview(
-        self, project_id: int, day: date, day_start: datetime, day_end: datetime
-    ) -> DashboardOverview: ...
-
     def materials(
         self,
         project_id: int,

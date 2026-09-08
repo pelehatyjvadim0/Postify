@@ -1,20 +1,18 @@
 import {
-  ApiError, approvePackage, checkChannel, createResource, deleteResource, getBootstrap,
-  getDashboard, getMaterials, getOperation, getOperations, getPackage, getPackages, getPublications,
-  getQueue, getSettings, publishOnce, rejectPackage, removeChannelSecret,
-  manualSearch, loadMorePackages, retryAnalysis, returnToAnalysis, regeneratePost, replacePackageMedia, publishNow, retryDelivery, updateResource, updateSettings,
+  approvePackage, checkChannel, createResource, deleteResource, getBootstrap,
+  getOperation, getOperations, getPackage, getSettings, savePackagePlan, rejectPackage, removeChannelSecret,
+  manualSearch, retryAnalysis, returnToAnalysis, regeneratePost, retryDelivery, updateResource, updateSettings,
 } from "./api.js";
-import {dateTime, escapeHtml, externalLink, label, screens, statusBadge} from "./screens.js";
+import {dateTime, escapeHtml, externalLink, label, renderJournal, sourceName, statusBadge} from "./screens.js";
 import {renderProviderConfiguration, renderSettings, serializeSettingsSection, showSettingsError, validateSettingsSection} from "./settings.js";
 
+import {loadWorkspace, renderWorkspace, workState, shortTitle} from "./workspace.js";
+
 const ROUTES = {
-  overview: {title: "Сегодня", eyebrow: "Рабочая панель", load: getDashboard},
-  materials: {title: "Материалы", eyebrow: "Редакторский поток", load: getMaterials},
-  review: {title: "Проверка", eyebrow: "Контентные пакеты", load: getPackages},
-  queue: {title: "Очередь публикаций", eyebrow: "Ритм дня", load: getQueue},
-  publications: {title: "История публикаций", eyebrow: "Доставка", load: getPublications},
-  journal: {title: "Журнал работы", eyebrow: "Операции", load: getOperations},
-  settings: {title: "Настройки", eyebrow: "Проект", load: getSettings},
+  review: {title: "Посты", load: loadWorkspace},
+  connections: {title: "Подключения", load: getSettings},
+  journal: {title: "Журнал работы", load: getOperations},
+  settings: {title: "Настройки", load: getSettings},
 };
 
 const root = document.querySelector("#screen-root");
@@ -22,25 +20,29 @@ const detailLayer = document.querySelector("#detail-layer");
 const detailContent = document.querySelector("#detail-content");
 const toastRegion = document.querySelector("#toast-region");
 let projectId = null;
-let currentRoute = "overview";
+let currentRoute = "review";
 let currentData = null;
 let loadController = null;
 let operationController = null;
-let reviewLoadMoreState = {status: "default"};
 let lastOpener = null;
-let materialFilter = "all";
 let providers = {sources: [], channels: []};
 
 const routeName = () => {
-  const candidate = location.hash.slice(1) || "overview";
-  return Object.hasOwn(ROUTES, candidate) ? candidate : "overview";
+  const candidate = location.hash.slice(1) || "review";
+  if (["overview", "materials", "queue", "publications"].includes(candidate)) {
+    workState.stage = {materials:"source", queue:"plan", publications:"published", overview:"review"}[candidate];
+    if (candidate === "queue") workState.view = "calendar";
+    return "review";
+  }
+  return Object.hasOwn(ROUTES, candidate) ? candidate : "review";
 };
 
 function updateShell(route) {
   const meta = ROUTES[route];
   document.querySelector("#screen-title").textContent = meta.title;
-  document.querySelector("#screen-eyebrow").textContent = meta.eyebrow;
-  document.title = `Postify — ${meta.title.toLocaleLowerCase("ru")}`;
+
+  document.title = `AutoPostTG — ${meta.title.toLocaleLowerCase("ru")}`;
+  document.querySelector('.topbar-actions [data-action="new-run"]').hidden = route !== "review";
   document.querySelectorAll("[data-route]").forEach((link) => {
     const active = link.dataset.route === route;
     link.classList.toggle("is-active", active);
@@ -49,30 +51,42 @@ function updateShell(route) {
 }
 
 const loadingMarkup = (route) => `<section class="screen" data-screen="${route}" data-loading="true" aria-busy="true"><div class="skeleton skeleton--wide"></div><div class="skeleton-grid"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></section>`;
-const errorMarkup = () => `<section class="screen"><section class="empty-state error-state"><span aria-hidden="true">!</span><h2>Не удалось загрузить данные</h2><p>Проверьте подключение к Postify и повторите запрос.</p><button class="button button--primary" type="button" data-action="retry">Повторить</button></section></section>`;
+const errorMarkup = () => `<section class="screen"><section class="empty-state error-state"><span aria-hidden="true">!</span><h2>Не удалось загрузить данные</h2><p>Проверьте подключение к AutoPostTG и повторите запрос.</p><button class="button button--primary" type="button" data-action="retry">Повторить</button></section></section>`;
 
 async function loadRoute() {
-  currentRoute = routeName();
-  if (location.hash !== `#${currentRoute}`) history.replaceState(null, "", `#${currentRoute}`);
-  updateShell(currentRoute);
+  const route = routeName();
+  currentRoute = route;
+  if (location.hash !== `#${route}`) history.replaceState(null, "", `#${route}`);
+  updateShell(route);
   loadController?.abort();
   loadController = new AbortController();
   const {signal} = loadController;
 
-  root.innerHTML = loadingMarkup(currentRoute);
+  closeDetail({repaint: false});
+  root.innerHTML = loadingMarkup(route);
   try {
-    currentData = currentRoute === "materials"
-      ? await ROUTES[currentRoute].load(projectId, signal, materialFilter)
-      : await ROUTES[currentRoute].load(projectId, signal);
-    if (!signal.aborted) {
-      if (currentRoute === "review") currentData = {...currentData, loadMoreState: reviewLoadMoreState};
-      root.innerHTML = currentRoute === "settings"
-        ? renderSettings(currentData, providers)
-        : screens[currentRoute](currentData);
+    const data = await ROUTES[route].load(projectId, signal);
+    if (!signal.aborted && currentRoute === route) {
+      currentData = data;
+      paintCurrent();
+      if (route === "review" && matchMedia("(min-width: 1101px)").matches) {
+        const first = root.querySelector('[data-work-key]');
+        if (first?.dataset.action === "open-package") await openPackage(first);
+        else if (first) openMaterial(first);
+      }
     }
   } catch (error) {
-    if (error.name !== "AbortError" && !signal.aborted) root.innerHTML = errorMarkup();
+    if (error.name !== "AbortError" && !signal.aborted && currentRoute === route) root.innerHTML = errorMarkup();
   }
+}
+
+function paintCurrent() {
+  const inline = root.contains(detailContent);
+  if (inline) detailLayer.append(detailContent);
+  root.innerHTML = ["settings", "connections"].includes(currentRoute)
+    ? renderSettings(currentData, providers, currentRoute === "connections")
+    : currentRoute === "review" ? renderWorkspace(currentData) : renderJournal(currentData);
+  if (inline) root.querySelector("#work-editor")?.replaceChildren(detailContent);
 }
 
 async function start() {
@@ -127,61 +141,177 @@ async function finishAcceptedOperation(start) {
 
 function itemBy(kind, id) {
   const key = {material: "candidate_id", package: "package_id", delivery: "delivery_id", run: "run_id"}[kind];
-  return (currentData?.items || []).find((item) => String(item[key]) === String(id));
+  const items = currentRoute === "review" && kind === "material" ? currentData.materials : currentRoute === "review" && kind === "delivery" ? currentData.publications : currentData?.items;
+  return (items || []).find((item) => String(item[key]) === String(id));
 }
 
 function openDetail(title, body, actions, opener) {
   lastOpener = opener;
-  detailContent.innerHTML = `<div class="detail-head"><div><p class="section-kicker">Postify</p><h2 id="detail-title">${escapeHtml(title)}</h2></div><button class="icon-button" type="button" data-action="close-detail" aria-label="Закрыть">×</button></div><div class="detail-body">${body}</div>${actions ? `<div class="detail-actions">${actions}</div>` : ""}`;
-  detailLayer.showModal();
+  detailContent.innerHTML = `<div class="detail-head"><div><h2 id="detail-title">${escapeHtml(title)}</h2></div><button class="icon-button" type="button" data-action="close-detail" aria-label="Закрыть">×</button></div><div class="detail-body">${body}</div>${actions ? `<div class="detail-actions">${actions}</div>` : ""}`;
+  const pane = currentRoute === "review" && matchMedia("(min-width: 1101px)").matches && root.querySelector("#work-editor");
+  if (pane) pane.replaceChildren(detailContent);
+  else { detailLayer.append(detailContent); detailLayer.showModal(); }
   detailContent.querySelector("button")?.focus();
 }
 
-function closeDetail() {
-  detailLayer.close();
+function closeDetail({repaint = true} = {}) {
+  if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
+  if (detailLayer.open) detailLayer.close();
+  else if (root.contains(detailContent)) {
+    detailLayer.append(detailContent);
+    detailContent.innerHTML = "";
+    workState.selected = null;
+    workState.editorOpen = false;
+    if (repaint) paintCurrent();
+  }
   lastOpener?.focus();
   lastOpener = null;
 }
 
 async function openPackage(node) {
+  if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
+  workState.selected = node.dataset.workKey || `post-${node.dataset.id}`;
+  workState.editorOpen = true;
+  paintCurrent();
+  node = root.querySelector(`[data-work-key="${workState.selected}"]`) || node;
+  root.querySelectorAll("[data-work-key]").forEach(row => row.classList.toggle("is-selected", row.dataset.workKey === workState.selected));
   const summary = itemBy("package", node.dataset.id);
   if (!summary) return;
-  openDetail(`Пакет № ${summary.package_id}`, `<p class="section-kicker">Загрузка пакета…</p>`, "", node);
+  openDetail(`Пост № ${summary.package_id}`, `<p class="section-kicker">Загрузка…</p>`, "", node);
   try {
     const item = await getPackage(projectId, summary.package_id);
-    const manual = item.status !== "published" && item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Перегенерировать пост</button><button class="button button--quiet" type="button" data-action="replace-media" data-id="${escapeHtml(item.package_id)}">Заменить медиа</button>${item.status === "approved" ? `<button class="button button--primary" type="button" data-action="publish-now" data-id="${escapeHtml(item.package_id)}">Опубликовать сейчас</button>` : ""}` : "";
-    const actions = (item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}">✓ Одобрить пост</button>` : item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Вернуть в анализ</button>` : item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить анализ</button>` : "") + manual;
-    const media = item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Медиа пакета № ${escapeHtml(item.package_id)}">` : "";
-    const history = (item.history || []).map((entry) => `<li>${statusBadge(entry.status)} <span>${escapeHtml(entry.reason)}</span> <time>${escapeHtml(dateTime(entry.created_at))}</time></li>`).join("") || "<li>История пока пуста</li>";
-    openDetail(`Пакет № ${item.package_id}`, `<article class="detail-prose">${media}<p>${escapeHtml(item.post_text)}</p><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Источник</dt><dd>${externalLink(item.source_url)}</dd><dt>Анализ</dt><dd>${escapeHtml(item.analysis)}</dd><dt>Медиа</dt><dd>${escapeHtml(label(item.media_status))}</dd></dl><h3>История</h3><ol class="package-history">${history}</ol></article>`, actions, node);
+    if (workState.selected !== `post-${summary.package_id}` || currentRoute !== "review") return;
+    renderPackage(item, node);
   } catch (_) {
-    detailContent.querySelector(".detail-body").innerHTML = `<p class="settings-error">Не удалось загрузить пакет.</p>`;
+    detailContent.querySelector(".detail-body").innerHTML = `<p class="settings-error">Не удалось загрузить пост.</p>`;
+  }
+}
+
+function renderPackage(item, node) {
+    const delivery = currentData?.publications?.find(entry => entry.package_id === item.package_id);
+    const manual = item.status === "approved" ? `<div><button class="button button--quiet" type="button" disabled aria-describedby="regenerate-note-${escapeHtml(item.package_id)}">Переписать пост</button><p id="regenerate-note-${escapeHtml(item.package_id)}">Переписывание доступно до одобрения</p></div>` : item.status !== "published" && item.status !== "processing" ? `<button class="button button--quiet" type="button" data-action="regenerate-post" data-id="${escapeHtml(item.package_id)}">Переписать пост</button>` : "";
+    const actions = (item.status === "awaiting_review" ? `<button class="button button--danger" type="button" data-action="reject-package" data-id="${escapeHtml(item.package_id)}">Отклонить</button><button class="button button--primary" type="button" data-action="approve-package" data-id="${escapeHtml(item.package_id)}"${!item.scheduled_at || !item.route_id ? " disabled" : ""}>✓ Одобрить пост</button>` : item.status === "rejected" ? `<button class="button button--primary" type="button" data-action="return-to-analysis" data-id="${escapeHtml(item.package_id)}">Подготовить заново</button>` : item.status === "failed" && item.attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.attempt_id)}">Повторить подготовку</button>` : "") + manual;
+    const media = (delivery ? `<p><button class="button button--quiet" data-action="open-delivery" data-id="${delivery.delivery_id}">Результат отправки</button></p>` : "") + (item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Вложение поста № ${escapeHtml(item.package_id)}">` : "");
+
+    openDetail(shortTitle(item.post_text), `<article class="detail-prose">${statusBadge(item.status)}${media}<div class="rewrite-region"><p class="post-text">${escapeHtml(item.post_text)}</p><div class="rewrite-progress" role="status" hidden>✍️ Пишем новый пост…</div></div>${packagePlanForm(item)}<details class="detail-disclosure"><summary>Оригинал</summary><p class="post-text" dir="auto">${escapeHtml(item.original_text || "Оригинал недоступен")}</p>${item.source_url ? externalLink(item.source_url) : ""}</details>${item.analysis ? `<details class="detail-disclosure"><summary>Почему выбран этот материал</summary><p>${escapeHtml(item.analysis)}</p></details>` : ""}</article>`, actions, node);
+}
+
+function localPlanTime(date, timezone) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"}).formatToParts(date).map(({type, value}) => [type, value]));
+  return parts.year + "-" + parts.month + "-" + parts.day + "T" + parts.hour + ":" + parts.minute;
+}
+
+function planInstant(value, timezone) {
+  const target = Date.parse(value + "Z");
+  let instant = target;
+  for (let i = 0; i < 4 && Number.isFinite(instant); i++) {
+    const shown = Date.parse(localPlanTime(new Date(instant), timezone) + "Z");
+    if (shown === target) return new Date(instant);
+    instant += target - shown;
+  }
+  return new Date(NaN);
+}
+
+async function rewritePost(node) {
+  const form = detailContent.querySelector("[data-package-plan]");
+  const draft = {date: form.elements.scheduled_local.value, route: form.elements.route_id.value};
+  const region = detailContent.querySelector(".rewrite-region");
+  const scrollTop = detailContent.querySelector(".detail-body").scrollTop;
+  const controls = [...detailContent.querySelectorAll("button, input, select")].map((control) => [control, control.disabled]);
+  region.setAttribute("aria-busy", "true");
+  region.querySelector(".rewrite-progress").hidden = false;
+  controls.forEach(([control]) => { control.disabled = true; });
+  try {
+    const before = await getPackage(projectId, node.dataset.id);
+    await finishAcceptedOperation(() => regeneratePost(projectId, node.dataset.id));
+    const previous = await getPackage(projectId, node.dataset.id);
+    if (!previous.replacement_package_id || previous.replacement_package_id === before.replacement_package_id) throw new Error("No new post");
+    const item = await getPackage(projectId, previous.replacement_package_id);
+    currentData.items = currentData.items.map((entry) => String(entry.package_id) === node.dataset.id ? {...entry, ...item, previous_package_id: Number(node.dataset.id)} : entry);
+    workState.selected = `post-${item.package_id}`;
+    const opener = lastOpener;
+    renderPackage(item, opener);
+    const updatedForm = detailContent.querySelector("[data-package-plan]");
+    updatedForm.elements.scheduled_local.value = draft.date;
+    updatedForm.elements.route_id.value = draft.route;
+    detailContent.querySelector(".detail-body").scrollTop = scrollTop;
+    paintCurrent();
+    lastOpener = root.querySelector('[data-action="open-package"][data-id="' + item.package_id + '"]');
+  } catch (_) {
+    region.removeAttribute("aria-busy");
+    region.querySelector(".rewrite-progress").hidden = true;
+    controls.forEach(([control, disabled]) => { control.disabled = disabled; });
+    node.disabled = false;
+    showToast("Не удалось переписать пост. Попробуйте ещё раз.");
+  }
+}
+
+function packagePlanForm(item) {
+  const saved = item.scheduled_at ? localPlanTime(new Date(item.scheduled_at), item.timezone) : "";
+  const locked = ["published", "processing"].includes(item.status) || ["sending", "uncertain"].includes(item.delivery_status);
+  const routes = item.routes || [];
+  return `<form data-package-plan data-id="${escapeHtml(item.package_id)}" data-timezone="${escapeHtml(item.timezone)}"><h3>План публикации</h3><fieldset class="settings-grid"${locked ? " disabled" : ""}><label class="settings-field"><span>Дата и время</span><input type="datetime-local" name="scheduled_local" required value="${escapeHtml(saved)}"></label><label class="settings-field"><span>Канал</span><select name="route_id" required><option value="">Выберите канал</option>${routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === item.route_id ? " selected" : ""}>${escapeHtml(route.name)}</option>`).join("")}</select></label><button class="button button--secondary" type="submit">Сохранить план</button></fieldset><p data-plan-error class="settings-error" role="alert"></p>${!item.scheduled_at || !item.route_id ? "<p>Укажите дату и канал, чтобы одобрить пост.</p>" : item.status === "approved" ? "<p>После изменения плана пост нужно одобрить заново.</p>" : ""}</form>`;
+}
+
+async function savePlan(form) {
+  if (!form.reportValidity()) return;
+  const error = form.querySelector("[data-plan-error]");
+  const date = planInstant(form.elements.scheduled_local.value, form.dataset.timezone);
+  if (!Number.isFinite(date.getTime()) || date <= new Date()) {
+    error.textContent = "Выберите дату и время в будущем.";
+    return;
+  }
+  const button = form.querySelector('[type="submit"]');
+  const scrollTop = detailContent.querySelector(".detail-body").scrollTop;
+  const opened = [...detailContent.querySelectorAll(".detail-disclosure")].map((section) => section.open);
+  const controls = [...detailContent.querySelectorAll("input, select, button")].map((control) => [control, control.disabled]);
+  controls.forEach(([control]) => { control.disabled = true; });
+  button.disabled = true;
+  button.textContent = "Сохраняем…";
+  error.textContent = "";
+  try {
+    const item = await savePackagePlan(projectId, form.dataset.id, {scheduled_at: date.toISOString(), route_id: Number(form.elements.route_id.value)});
+    if (!form.isConnected || (!detailLayer.open && !root.contains(form))) return;
+    currentData.items = currentData.items.map((entry) => entry.package_id === item.package_id ? {...entry, ...item} : entry);
+    renderPackage(item, lastOpener);
+    detailContent.querySelectorAll(".detail-disclosure").forEach((section, index) => { section.open = opened[index]; });
+    detailContent.querySelector(".detail-body").scrollTop = scrollTop;
+    detailContent.querySelector('[data-package-plan] [type="submit"]').focus({preventScroll: true});
+    paintCurrent();
+    lastOpener = root.querySelector('[data-action="open-package"][data-id="' + item.package_id + '"]');
+    showToast("План сохранён");
+  } catch (_) {
+    error.textContent = "План не сохранён. Обновите карточку и проверьте дату и канал.";
+    controls.forEach(([control, disabled]) => { control.disabled = disabled; });
+    button.textContent = "Сохранить план";
   }
 }
 
 function openMaterial(node) {
+  if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
+  workState.selected = node.dataset.workKey || `material-${node.dataset.id}`;
+  workState.editorOpen = true;
+  paintCurrent();
+  node = root.querySelector(`[data-work-key="${workState.selected}"]`) || node;
+  root.querySelectorAll("[data-work-key]").forEach(row => row.classList.toggle("is-selected", row.dataset.workKey === workState.selected));
   const item = itemBy("material", node.dataset.id);
   if (!item) return;
-  const actions = item.retry_attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.retry_attempt_id)}">Повторить анализ</button>` : "";
-  openDetail(`Материал № ${item.candidate_id}`, `<article class="detail-prose"><h3>${escapeHtml(item.title)}</h3><dl><dt>Источник</dt><dd>${escapeHtml(item.source_name)}</dd><dt>Решение</dt><dd>${statusBadge(item.decision_status)}</dd><dt>Причина</dt><dd>${escapeHtml(label(item.decision_reason))}</dd><dt>Объяснение</dt><dd>${escapeHtml(item.decision_explanation || "—")}</dd><dt>Политика</dt><dd>${escapeHtml(item.policy_version || "—")}</dd></dl></article>`, actions, node);
+  const actions = item.retry_attempt_id ? `<button class="button button--primary" type="button" data-action="retry-analysis" data-id="${escapeHtml(item.retry_attempt_id)}">Повторить подготовку</button>` : "";
+  openDetail(`Материал № ${item.candidate_id}`, `<article class="detail-prose"><p class="post-text" dir="auto">${escapeHtml(item.original_text || item.title)}</p><dl><dt>Источник</dt><dd>${escapeHtml(sourceName(item.source_name))}</dd><dt>Статус</dt><dd>${statusBadge(item.generation_status || item.decision_status)}</dd>${item.generation_failure_code ? `<dt>Не удалось подготовить пост</dt><dd class="settings-error">${escapeHtml(label(item.generation_failure_code))}</dd>` : ""}${item.decision_status === "rejected" ? `<dt>Причина отказа</dt><dd>${escapeHtml(label(item.decision_reason))}</dd>` : ""}</dl></article>`, actions, node);
 }
 
 function openDelivery(node) {
   const item = itemBy("delivery", node.dataset.id);
   if (!item) return;
-  const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>${escapeHtml(label(attempt.code))}</span><span>${escapeHtml(attempt.reason || "—")}</span><span>message ID: ${escapeHtml(attempt.message_id || "—")}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
+  const attempts = (item.attempts || []).map((attempt) => `<li><strong>№ ${escapeHtml(attempt.attempt_no)}</strong> ${statusBadge(attempt.outcome)}<span>${escapeHtml(label(attempt.code))}</span><time>${escapeHtml(dateTime(attempt.finished_at))}</time></li>`).join("") || "<li>Завершённых попыток нет</li>";
   const actions = item.status === "retryable" ? `<button class="button button--primary" type="button" data-action="retry-delivery" data-id="${escapeHtml(item.delivery_id)}">Повторить отправку</button>` : "";
-  openDetail("История попыток", `<article class="detail-prose"><dl><dt>Публикация</dt><dd>№ ${escapeHtml(item.delivery_id)}</dd><dt>Канал</dt><dd>${escapeHtml(item.provider || "—")}</dd><dt>Попыток</dt><dd>${escapeHtml(item.attempt_count ?? item.attempts?.length ?? item.attempts ?? 0)}</dd><dt>Сообщение</dt><dd>${escapeHtml(item.message_id || "—")}</dd><dt>Результат</dt><dd>${statusBadge(item.status)}</dd><dt>Код</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Описание</dt><dd>${escapeHtml(item.failure_reason || "—")}</dd></dl><h3>Попытки</h3><ol class="package-history">${attempts}</ol></article>`, actions, node);
+  openDetail("Публикация", `<article class="detail-prose"><dl><dt>Канал</dt><dd>${escapeHtml(sourceName(item.channel_name || item.provider))}</dd><dt>Статус</dt><dd>${statusBadge(item.status)}</dd>${item.failure_code ? `<dt>Что случилось</dt><dd>${escapeHtml(label(item.failure_code))}</dd>` : ""}</dl>${item.status === "uncertain" ? "<p>Проверьте канал перед повторной отправкой: пост мог быть опубликован.</p>" : ""}<details class="detail-disclosure"><summary>История отправки</summary><ol class="package-history">${attempts}</ol></details></article>`, actions, node);
 }
 
 function openRun(node) {
   const item = itemBy("run", node.dataset.id);
   if (!item) return;
-  openDetail("Подробности запуска", `<article class="detail-prose"><dl><dt>Запуск</dt><dd>№ ${escapeHtml(item.run_id)}</dd><dt>Операция</dt><dd>${escapeHtml(label(item.kind))}</dd><dt>Режим</dt><dd>${escapeHtml(label(item.mode))}</dd><dt>Источник</dt><dd>${escapeHtml(label(item.actor))}</dd><dt>Состояние</dt><dd>${statusBadge(item.status)}</dd><dt>Итог</dt><dd>${escapeHtml(label(item.outcome))}</dd><dt>Код ошибки</dt><dd>${escapeHtml(label(item.failure_code))}</dd><dt>Модель Codex</dt><dd>${escapeHtml(item.codex_model || "—")}</dd><dt>Reasoning effort</dt><dd>${escapeHtml(item.codex_reasoning_effort || "—")}</dd><dt>Материалов взято</dt><dd>${escapeHtml(item.materials_taken ?? 0)}</dd><dt>Пакетов создано</dt><dd>${escapeHtml(item.packages_created ?? 0)}</dd><dt>Начало</dt><dd>${escapeHtml(dateTime(item.started_at))}</dd><dt>Длительность</dt><dd>${escapeHtml(item.duration ?? "—")} сек.</dd></dl></article>`, "", node);
-}
-
-function openMobileMenu(node) {
-  openDetail("Разделы", `<nav class="mobile-more" aria-label="Дополнительная навигация"><a href="#publications">Публикации <span>→</span></a><a href="#journal">Журнал <span>→</span></a><a href="#settings">Настройки <span>→</span></a></nav>`, "", node);
+  openDetail(label(item.kind), `<article class="detail-prose"><dl><dt>Статус</dt><dd>${statusBadge(item.status)}</dd><dt>Начало</dt><dd>${escapeHtml(dateTime(item.started_at))}</dd><dt>Обработано материалов</dt><dd>${escapeHtml(item.materials_taken ?? 0)}</dd><dt>Подготовлено постов</dt><dd>${escapeHtml(item.packages_created ?? 0)}</dd>${item.failure_code ? `<dt>Что случилось</dt><dd>${escapeHtml(label(item.failure_code))}</dd>` : ""}</dl></article>`, "", node);
 }
 
 async function mutate(node) {
@@ -199,56 +329,28 @@ async function mutate(node) {
     } else if (action === "new-run") {
       await finishAcceptedOperation(() => manualSearch(projectId));
       showToast("Поиск завершён");
-    } else if (action === "publish-once") {
-      await finishAcceptedOperation(() => publishOnce(projectId));
-      showToast("Публикация завершена");
-    } else if (action === "load-more") {
-      reviewLoadMoreState = {status: "running"};
-      currentData = {...currentData, loadMoreState: reviewLoadMoreState};
-      root.innerHTML = screens.review(currentData);
-      const accepted = await loadMorePackages(projectId);
-      const run = await waitForOperation(accepted.operationRunId);
-      if (run.status === "failed") throw new Error(run.failure_code || "load_more_failed");
-      reviewLoadMoreState = {status: run.outcome === "empty" ? "empty" : "default"};
-      if (run.outcome !== "empty") showToast("Новые посты готовы к проверке");
     } else if (action === "retry-analysis") {
       await finishAcceptedOperation(() => retryAnalysis(projectId, node.dataset.id));
       closeDetail();
-      showToast("Анализ повторяется");
+      showToast("Пост подготовлен заново");
     } else if (action === "return-to-analysis") {
       await finishAcceptedOperation(() => returnToAnalysis(projectId, node.dataset.id));
       closeDetail();
-      showToast("Материал возвращён в анализ");
+      showToast("Материал обработан заново");
     } else if (action === "regenerate-post") {
-      await finishAcceptedOperation(() => regeneratePost(projectId, node.dataset.id));
-      closeDetail();
-      showToast("Новая версия поста готова");
-    } else if (action === "replace-media") {
-      await finishAcceptedOperation(() => replacePackageMedia(projectId, node.dataset.id));
-      closeDetail();
-      showToast("Медиа обновлено");
-    } else if (action === "publish-now") {
-      await finishAcceptedOperation(() => publishNow(projectId, node.dataset.id));
-      closeDetail();
-      showToast("Публикация завершена");
+      await rewritePost(node);
+      return;
     } else if (action === "retry-delivery") {
       await finishAcceptedOperation(() => retryDelivery(projectId, node.dataset.id));
       closeDetail();
       showToast("Отправка повторяется");
     }
     await loadRoute();
-  } catch (error) {
-    if (action === "load-more") {
-      reviewLoadMoreState = error instanceof ApiError && error.code === "review_unresolved"
-        ? {status: "unresolved", unresolvedPackageIds: error.unresolvedPackageIds}
-        : {status: "failed"};
+  } catch (_) {
+    showToast("Команда не выполнена. Повторите попытку.");
+    node.disabled = false;
+    if (["new-run", "retry-analysis", "return-to-analysis", "regenerate-post", "retry-delivery"].includes(action)) {
       await loadRoute();
-    } else {
-      showToast("Команда не выполнена. Повторите попытку.");
-      node.disabled = false;
-      if (["new-run", "publish-once", "retry-analysis", "return-to-analysis", "regenerate-post", "replace-media", "publish-now", "retry-delivery"].includes(action)) {
-        await loadRoute();
-      }
     }
   }
 }
@@ -261,7 +363,7 @@ function setSettingsBusy(form, busy) {
 async function refreshSettings(message) {
   const openSection = root.querySelector("[data-settings-section][open]")?.dataset.settingsSection;
   currentData = await getSettings(projectId);
-  root.innerHTML = renderSettings(currentData, providers);
+  root.innerHTML = renderSettings(currentData, providers, currentRoute === "connections");
   if (openSection !== "main") root.querySelector(`[data-settings-section="${openSection}"]`)?.setAttribute("open", "");
   document.querySelector("#project-name").textContent = currentData.project.name;
   document.querySelector(".farm-avatar").textContent = currentData.project.name.slice(0, 1).toLocaleUpperCase("ru");
@@ -303,7 +405,7 @@ async function settingsCommand(node) {
   if (node.matches("[data-settings-secret-toggle]")) {
     const token = form.querySelector('input[name="token"]');
     token.type = token.type === "password" ? "text" : "password";
-    node.textContent = token.type === "password" ? "Показать токен" : "Скрыть токен";
+    node.textContent = token.type === "password" ? "Показать ключ" : "Скрыть ключ";
     return;
   }
   if (node.matches("[data-settings-add]")) {
@@ -325,7 +427,7 @@ async function settingsCommand(node) {
       if (result.connectionStatus !== "ok") {
         const refreshedForm = root.querySelector(`[data-settings-form="channels"][data-resource-id="${channelId}"]`);
         const checkButton = refreshedForm?.querySelector("[data-settings-channel-check]");
-        if (refreshedForm) showSettingsError(refreshedForm, result.reason || "Не удалось подключиться к каналу. Проверьте настройки.", checkButton);
+        if (refreshedForm) showSettingsError(refreshedForm, "Не удалось подключиться к каналу. Проверьте ключ подключения и права бота.", checkButton);
       }
       return;
     }
@@ -337,8 +439,14 @@ async function settingsCommand(node) {
 }
 
 document.addEventListener("click", (event) => {
-  const filter = event.target.closest("[data-filter]");
-  if (filter) { materialFilter = filter.dataset.filter; loadRoute(); return; }
+  const workControl = event.target.closest("[data-work-view], [data-work-stage], [data-week]");
+  if (workControl) {
+    if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) return;
+    if (workControl.dataset.workView) { workState.view = workControl.dataset.workView; if (workState.view === "calendar") workState.stage = "all"; }
+    if (workControl.dataset.workStage) workState.stage = workControl.dataset.workStage;
+    if (workControl.dataset.week) workState.week = workControl.dataset.week === "today" ? 0 : workState.week + Number(workControl.dataset.week);
+    paintCurrent(); return;
+  }
   const node = event.target.closest("[data-action]");
   if (!node) return;
   const action = node.dataset.action;
@@ -347,12 +455,13 @@ document.addEventListener("click", (event) => {
   else if (action === "open-material") openMaterial(node);
   else if (action === "open-delivery") openDelivery(node);
   else if (action === "open-run") openRun(node);
-  else if (action === "open-mobile-menu") openMobileMenu(node);
   else if (action === "close-detail") closeDetail();
-  else if (["approve-package", "reject-package", "new-run", "publish-once", "load-more", "retry-analysis", "return-to-analysis", "regenerate-post", "replace-media", "publish-now", "retry-delivery"].includes(action)) mutate(node);
+  else if (["approve-package", "reject-package", "new-run", "retry-analysis", "return-to-analysis", "regenerate-post", "retry-delivery"].includes(action)) mutate(node);
 });
 
 document.addEventListener("submit", (event) => {
+  const plan = event.target.closest("[data-package-plan]");
+  if (plan) { event.preventDefault(); savePlan(plan); return; }
   const form = event.target.closest("[data-settings-form]");
   if (!form) return;
   event.preventDefault();
@@ -360,6 +469,14 @@ document.addEventListener("submit", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "work-search") {
+    workState.query = event.target.value;
+    paintCurrent(); root.querySelector("#work-search").focus(); return;
+  }
+  if (event.target.closest("[data-package-plan]")) {
+    const approve = detailContent.querySelector('[data-action="approve-package"]');
+    if (approve) approve.disabled = true;
+  }
   const form = event.target.closest("[data-settings-form]");
   if (!form) return;
   form.dataset.dirty = "true";
@@ -382,8 +499,10 @@ document.addEventListener("click", (event) => {
   if (node) settingsCommand(node);
 });
 
+detailLayer.addEventListener("cancel", (event) => { if (detailContent.querySelector('.rewrite-region[aria-busy="true"]')) event.preventDefault(); });
 detailLayer.addEventListener("click", (event) => { if (event.target === detailLayer) closeDetail(); });
 detailLayer.addEventListener("close", () => {
+  if (root.contains(detailContent)) return;
   detailContent.innerHTML = "";
   lastOpener?.focus();
   lastOpener = null;

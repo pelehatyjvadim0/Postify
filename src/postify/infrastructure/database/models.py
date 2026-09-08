@@ -32,38 +32,13 @@ class CandidateModel(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     url: Mapped[str] = mapped_column(String, nullable=False)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_text: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_connection_id: Mapped[int | None] = mapped_column(BigInteger)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
-
-class CandidateDecisionModel(Base):
-    __tablename__ = "candidate_decisions"
-    __table_args__ = (
-        UniqueConstraint(
-            "project_id",
-            "candidate_id",
-            name="uq_candidate_decisions_project_candidate_id",
-        ),
-        CheckConstraint("status IN ('selected', 'rejected')", name="ck_candidate_decisions_status"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    project_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_projects.id"), nullable=False
-    )
-    candidate_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("candidates.id", name="fk_candidate_decisions_candidate_id_candidates"),
-        nullable=False,
-    )
-    status: Mapped[str] = mapped_column(String, nullable=False)
-    reason: Mapped[str] = mapped_column(String, nullable=False)
-    explanation: Mapped[str] = mapped_column(Text, nullable=False)
-    signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    policy_version: Mapped[str] = mapped_column(String, nullable=False)
-    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ContentProjectModel(Base):
@@ -86,6 +61,7 @@ class SourceConnectionModel(Base):
         UniqueConstraint(
             "project_id", "name", name="uq_source_connections_project_id_name"
         ),
+        UniqueConstraint("project_id", "id", name="uq_source_connections_project_id_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -116,27 +92,6 @@ class ContentFormatModel(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     kind: Mapped[str] = mapped_column(String, nullable=False)
     instructions: Mapped[str] = mapped_column(Text, nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class CallToActionModel(Base):
-    __tablename__ = "calls_to_action"
-    __table_args__ = (
-        UniqueConstraint(
-            "project_id", "id", name="uq_calls_to_action_project_id_id"
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    project_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_projects.id"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    link_mode: Mapped[str] = mapped_column(String, nullable=False)
-    custom_url: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -187,11 +142,6 @@ class PublicationRouteModel(Base):
             ["channel_connections.project_id", "channel_connections.id"],
             name="fk_publication_routes_project_channel",
         ),
-        ForeignKeyConstraint(
-            ["project_id", "cta_id"],
-            ["calls_to_action.project_id", "calls_to_action.id"],
-            name="fk_publication_routes_project_cta",
-        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -204,11 +154,7 @@ class PublicationRouteModel(Base):
     channel_id: Mapped[int] = mapped_column(
         BigInteger, nullable=False
     )
-    cta_id: Mapped[int | None] = mapped_column(
-        BigInteger
-    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    schedule: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -245,9 +191,28 @@ class ScheduledJobModel(Base):
     kind: Mapped[str] = mapped_column(String, nullable=False)
     route_id: Mapped[int | None] = mapped_column(BigInteger)
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    package_id: Mapped[int | None] = mapped_column(BigInteger)
     operation_run_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TelegramSourceStateModel(Base):
+    __tablename__ = "telegram_source_state"
+    __table_args__ = (
+        CheckConstraint("initial_after_message_id >= 0", name="ck_telegram_source_state_initial_id"),
+        ForeignKeyConstraint(
+            ["project_id", "source_connection_id"],
+            ["source_connections.project_id", "source_connections.id"],
+            name="fk_telegram_source_state_project_source",
+            ondelete="CASCADE",
+        ),
+    )
+
+    project_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source_connection_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    group_id: Mapped[str] = mapped_column(String, primary_key=True)
+    initial_after_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

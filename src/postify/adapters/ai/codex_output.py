@@ -24,19 +24,10 @@ class _TopicOutput(BaseModel):
     usefulness: int = Field(ge=0, le=100)
 
 
-class SelectedTopicOutput(_TopicOutput):
+class TopicOutput(_TopicOutput):
     selected: StrictTrue
-    post_text: str = Field(min_length=1)
-    media_query: str = Field(min_length=1)
-
-
-class UnselectedTopicOutput(_TopicOutput):
-    selected: StrictFalse
-    post_text: None
+    post_text: str = Field(min_length=1, max_length=4096)
     media_query: None
-
-
-TopicOutput = SelectedTopicOutput | UnselectedTopicOutput
 
 
 def batch_output_model(article_count: int) -> type[BaseModel]:

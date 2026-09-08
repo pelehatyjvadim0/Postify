@@ -5,22 +5,13 @@ from postify.adapters.sources.registry import SourceProviderRegistry
 from postify.domain.projects.models import UnsupportedProvider
 
 
-def test_source_registry_normalises_hn_algolia_configuration() -> None:
+def test_source_registry_normalises_telegram_group_configuration() -> None:
     result = SourceProviderRegistry().validate(
-        "hn_algolia",
-        {
-            "url": "https://hn.algolia.com/api/v1/search_by_date",
-            "query": "  python agents ",
-            "tags": " story ",
-            "hits": 50,
-        },
+        "telegram_group", {"group_id": "  -100123  "},
     )
 
     assert result == {
-        "url": "https://hn.algolia.com/api/v1/search_by_date",
-        "query": "python agents",
-        "tags": "story",
-        "hits": 50,
+        "group_id": "-100123",
     }
 
 
@@ -49,13 +40,10 @@ def test_provider_catalog_describes_configuration_without_leaking_common_model_d
     channels = ChannelProviderRegistry().catalog()
 
     assert sources == ({
-        "code": "hn_algolia",
-        "label": "HN Algolia",
+        "code": "telegram_group",
+        "label": "Telegram-группа",
         "fields": (
-            {"name": "url", "label": "Адрес API", "type": "url", "required": True, "protocol": "https"},
-            {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
-            {"name": "tags", "label": "Теги", "type": "text", "required": True},
-            {"name": "hits", "label": "Материалов за запрос", "type": "number", "required": True, "min": 1, "max": 1000},
+            {"name": "group_id", "label": "Группа", "type": "text", "required": True},
         ),
     },)
     assert channels == ({

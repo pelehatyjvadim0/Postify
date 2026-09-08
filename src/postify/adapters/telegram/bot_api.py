@@ -11,12 +11,16 @@ class TelegramBotApiPublisher:
     def __init__(self, client: httpx.Client, *, bot_token: str, chat_id: str) -> None:
         self.client = client
         self._url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        self._text_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         self.chat_id = chat_id
 
     def publish(self, claim):
         try:
-            with Path(claim.media_path).open("rb") as stream:
-                response = self.client.post(self._url, data={"chat_id": self.chat_id, "caption": claim.post_text}, files={"photo": (Path(claim.media_path).name, stream, claim.media_mime)})
+            if claim.media_path:
+                with Path(claim.media_path).open("rb") as stream:
+                    response = self.client.post(self._url, data={"chat_id": self.chat_id, "caption": claim.post_text}, files={"photo": (Path(claim.media_path).name, stream, claim.media_mime)})
+            else:
+                response = self.client.post(self._text_url, data={"chat_id": self.chat_id, "text": claim.post_text})
         except OSError:
             raise TelegramPublishError(code="media_unavailable", reason="Локальное медиа недоступно", kind=PublishFailureKind.RETRYABLE) from None
         except (httpx.TimeoutException, httpx.TransportError):

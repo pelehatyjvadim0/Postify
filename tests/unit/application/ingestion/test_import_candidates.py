@@ -64,3 +64,21 @@ def test_rejects_repository_count_outside_received_range(created: int) -> None:
 
     with pytest.raises(ValueError, match="created"):
         ImportCandidates(source, repository).execute()
+
+
+def test_neutral_material_import_uses_server_connection_and_preserves_original():
+    material = Candidate(source_name="test_fixture", source_id="document:alpha",
+        title="Тестовый материал", url="", discovered_at=datetime(2026, 9, 5, tzinfo=UTC),
+        raw_payload={}, source_text="هذا نص للاختبار.", source_connection_id=999)
+    repository = RepositorySpy(created=1)
+
+    result = ImportCandidates(SourceStub([material]), repository, source_connection_id=17).execute()
+
+    assert result.created == 1
+    stored = repository.received[0]
+    assert stored.source_connection_id == 17
+    assert stored.source_name == "test_fixture"
+    assert stored.source_id == "document:alpha"
+    assert stored.source_text == "هذا نص للاختبار."
+    assert stored.url == ""
+    assert material.source_connection_id == 999

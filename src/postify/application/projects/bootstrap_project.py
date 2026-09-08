@@ -3,19 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from postify.domain.projects.models import (
-    CallToAction,
     ContentFormat,
     ContentProject,
     ProjectConfiguration,
     PublicationRoute,
-    SourceConnection,
-)
-
-
-FORMAT_B_INSTRUCTIONS = (
-    "Короткий хук с результатом или задачей читателя. Простое объяснение "
-    "ценности, компактные возможности, механика только при необходимости, "
-    "кому пригодится, честное ограничение и полезный следующий шаг."
 )
 
 
@@ -34,9 +25,7 @@ class BootstrapChannel:
 @dataclass(frozen=True, slots=True)
 class ProjectBootstrapGraph:
     project: ContentProject
-    sources: tuple[SourceConnection, ...]
     formats: tuple[ContentFormat, ...]
-    ctas: tuple[CallToAction, ...]
     channels: tuple[BootstrapChannel, ...]
     routes: tuple[PublicationRoute, ...]
 
@@ -63,73 +52,27 @@ class BootstrapProject:
             return existing
         now = self._clock()
         configuration = ProjectConfiguration(
-            selection_policy_version=settings.selection_policy_version,
-            selection_rules=tuple(settings.selection_rules),
-            topic_terms=tuple(settings.selection_topic_terms),
-            topic_exclusion_terms=tuple(settings.selection_topic_exclusion_terms),
-            advertising_terms=tuple(settings.selection_advertising_terms),
-            hiring_terms=tuple(settings.selection_hiring_terms),
-            technical_release_terms=tuple(
-                settings.selection_technical_release_terms
-            ),
-            practical_terms=tuple(settings.selection_practical_terms),
-            selection_freshness_days=settings.selection_freshness_days,
-            daily_analysis_limit=settings.content_daily_analysis_limit,
-            daily_package_limit=settings.content_daily_package_limit,
-            priority_freshness_days=settings.content_priority_freshness_days,
-            fresh_share_percent=settings.content_fresh_share_percent,
-            reserve_share_percent=settings.content_reserve_share_percent,
-            review_required=settings.content_review_required,
-            article_max_bytes=settings.content_article_max_bytes,
+            analysis_batch_size=settings.content_batch_size,
             media_max_bytes=settings.content_media_max_bytes,
-            analysis_timeout_seconds=settings.content_codex_timeout_seconds,
-            analysis_model=getattr(
-                settings, "content_codex_model", "gpt-5.6-luna"
-            ),
-            analysis_reasoning_effort=getattr(
-                settings, "content_codex_reasoning_effort", "high"
-            ),
+            analysis_timeout_seconds=settings.content_analysis_timeout_seconds,
+            analysis_model=settings.content_model,
+            source_language=settings.content_source_language,
+            tone=settings.content_tone,
+            analysis_reasoning_effort=settings.content_analysis_reasoning_effort,
         )
         project = ContentProject(
             1,
-            "Технологии просто",
-            settings.hn_query,
-            settings.selection_language,
-            settings.selection_audience,
+            "AutoPostTG",
+            settings.project_topic,
+            settings.project_language,
+            settings.project_audience,
             settings.postify_timezone,
             configuration,
             now,
             now,
         )
-        source_configuration = self._sources.validate(
-            "hn_algolia",
-            {
-                "url": settings.hn_algolia_url,
-                "query": settings.hn_query,
-                "tags": settings.hn_tags,
-                "hits": settings.hn_hits_per_page,
-            },
-        )
-        source = SourceConnection(
-            1,
-            1,
-            "hn_algolia",
-            "Hacker News",
-            True,
-            source_configuration,
-            settings.postify_on_calendar,
-        )
         content_format = ContentFormat(
-            1, 1, "Практический разбор B", "text", FORMAT_B_INSTRUCTIONS, True
-        )
-        cta = CallToAction(
-            1,
-            1,
-            "Полезный источник",
-            "Открыть источник",
-            "source",
-            None,
-            True,
+            1, 1, "Пост", "text", "Сохрани смысл, имена, числа и факты оригинала. Не добавляй утверждений. Подготовь естественный русский текст.", True
         )
         channels: tuple[BootstrapChannel, ...] = ()
         routes: tuple[PublicationRoute, ...] = ()
@@ -151,8 +94,8 @@ class BootstrapProject:
                     "configured",
                 ),
             )
-            routes = (PublicationRoute(1, 1, 1, 1, 1, True),)
+            routes = (PublicationRoute(1, 1, 1, 1, True),)
         graph = ProjectBootstrapGraph(
-            project, (source,), (content_format,), (cta,), channels, routes
+            project, (content_format,), channels, routes
         )
         return self._repository.create_project_graph(graph)

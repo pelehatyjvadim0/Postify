@@ -30,7 +30,7 @@ class PublishAction:
 
 
 def _route(route_id: int, channel_id: int, *, enabled: bool) -> PublicationRoute:
-    return PublicationRoute(route_id, 1, route_id, channel_id, None, enabled)
+    return PublicationRoute(route_id, 1, route_id, channel_id, enabled)
 
 
 def _channel(channel_id: int, *, enabled: bool) -> ChannelConnection:

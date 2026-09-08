@@ -25,9 +25,6 @@ class ApiStub:
             },
         }
 
-    def dashboard(self, project_id: int):
-        return {"projectId": project_id, "candidateTotal": 3}
-
     def materials(self, project_id: int, **filters: object):
         return {"projectId": project_id, "items": [], "filters": filters}
 
@@ -36,6 +33,10 @@ class ApiStub:
 
     def package(self, project_id: int, package_id: int):
         return {"projectId": project_id, "id": package_id, "history": []}
+
+    def save_plan(self, project_id: int, package_id: int, *, scheduled_at: datetime, route_id: int):
+        self.calls.append(("save_plan", (project_id, package_id, scheduled_at, route_id)))
+        return {"id": package_id, "routeId": route_id}
 
     def approve(self, project_id: int, package_id: int):
         self.calls.append(("approve", (project_id, package_id)))
@@ -58,7 +59,7 @@ class ApiStub:
         self.calls.append(("operation", (project_id, operation_run_id)))
         return {
             "run_id": operation_run_id,
-            "kind": "load_more",
+            "kind": "manual_search",
             "mode": "manual",
             "actor": "ui",
             "status": "succeeded",
@@ -81,9 +82,6 @@ class ApiStub:
     def manual_search(self, project_id: int):
         return self._accepted("manual_search", project_id)
 
-    def load_more(self, project_id: int):
-        return self._accepted("load_more", project_id) | {"requested": 3}
-
     def retry_analysis(self, project_id: int, attempt_id: int):
         return self._accepted("retry_analysis", project_id, attempt_id)
 
@@ -93,12 +91,6 @@ class ApiStub:
     def regenerate_post(self, project_id: int, package_id: int):
         return self._accepted("regenerate_post", project_id, package_id)
 
-    def replace_media(self, project_id: int, package_id: int):
-        return self._accepted("replace_media", project_id, package_id)
-
-    def publish_now(self, project_id: int, package_id: int):
-        return self._accepted("publish_now", project_id, package_id)
-
     def retry_delivery(self, project_id: int, delivery_id: int):
         return self._accepted("retry_delivery", project_id, delivery_id)
 
@@ -107,9 +99,6 @@ class ApiStub:
             raise RuntimeError("operation_busy")
         self.calls.append(("run_once", (project_id,)))
         return {"status": "accepted"}
-
-    def publish_once(self, project_id: int):
-        return self._accepted("publish_once", project_id)
 
     def settings(self, project_id: int):
         return {
@@ -265,8 +254,7 @@ def test_bootstrap_response_schema_keeps_descriptor_and_drops_unknown_values() -
     assert "leak" not in response.text
 
 
-def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> None:
-    # Break caught: publication slots are dropped by the route schema, or clearing a token deletes the channel itself.
+def test_route_and_explicit_secret_removal_have_strict_commands() -> None:
     stub = ApiStub()
     client = client_for(stub)
     route = client.put(
@@ -274,12 +262,7 @@ def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> No
         json={
             "format_id": 1,
             "channel_id": 2,
-            "cta_id": 3,
             "enabled": True,
-            "schedule": {
-                "autopublish": True,
-                "slots": ["09:00", "14:30", "19:15"],
-            },
         },
     )
     removed = client.post("/api/v1/projects/1/channels/2/secret/remove")
@@ -289,7 +272,7 @@ def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> No
             "format_id": 1,
             "channel_id": 2,
             "enabled": True,
-            "schedule": {"autopublish": True, "slots": ["09:00", "99:00"]},
+                "schedule": {"autopublish": True, "slots": ["09:00", "99:00"]},
         },
     )
 
@@ -306,12 +289,7 @@ def test_route_schedule_and_explicit_secret_removal_have_strict_commands() -> No
                 {
                     "format_id": 1,
                     "channel_id": 2,
-                    "cta_id": 3,
                     "enabled": True,
-                    "schedule": {
-                        "autopublish": True,
-                        "slots": ["09:00", "14:30", "19:15"],
-                    },
                 },
             ),
         ),
@@ -363,17 +341,11 @@ def test_selection_policy_version_is_not_a_client_owned_setting() -> None:
     assert response.status_code == 422
 
 
-def test_schedule_section_is_one_strict_atomic_command() -> None:
-    # Break caught: schedule persistence requires separate source/route requests or accepts invalid publication slots.
+def test_source_schedule_section_is_one_strict_atomic_command() -> None:
     stub = ApiStub()
     client = client_for(stub)
     payload = {
         "sources": [{"id": 1, "schedule": "0 8 * * *"}],
-        "routes": [{
-            "id": 10,
-            "autopublish": False,
-            "slots": ["08:30", "13:30", "18:30"],
-        }],
     }
 
     updated = client.put("/api/v1/projects/1/settings/schedule", json=payload)
@@ -440,7 +412,7 @@ def test_operation_polling_is_project_scoped() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "run_id": 17,
-        "kind": "load_more",
+        "kind": "manual_search",
         "mode": "manual",
         "actor": "ui",
         "status": "succeeded",
@@ -456,17 +428,14 @@ def test_operation_polling_is_project_scoped() -> None:
     assert stub.calls == [("operation", (1, 17))]
 
 
-def test_all_manual_commands_are_accepted_server_owned_empty_body_mutations() -> None:
+def test_retained_manual_commands_are_accepted_server_owned_empty_body_mutations() -> None:
     stub = ApiStub()
     client = client_for(stub)
     paths = (
         "/api/v1/projects/1/operations/search",
-        "/api/v1/projects/1/packages/load-more",
         "/api/v1/projects/1/attempts/8/retry-analysis",
         "/api/v1/projects/1/packages/7/return-to-analysis",
         "/api/v1/projects/1/packages/7/regenerate",
-        "/api/v1/projects/1/packages/7/media/replace",
-        "/api/v1/projects/1/packages/7/publish-now",
         "/api/v1/projects/1/deliveries/6/retry",
     )
 
@@ -475,36 +444,14 @@ def test_all_manual_commands_are_accepted_server_owned_empty_body_mutations() ->
 
     assert all(response.status_code == 202 for response in accepted)
     assert all(response.json()["operationRunId"] == 17 for response in accepted)
-    assert accepted[1].json()["requested"] == 3
     assert hostile.status_code == 422
     assert [name for name, _ in stub.calls] == [
         "manual_search",
-        "load_more",
         "retry_analysis",
         "return_to_analysis",
         "regenerate_post",
-        "replace_media",
-        "publish_now",
         "retry_delivery",
     ]
-
-
-def test_load_more_conflict_returns_only_safe_unresolved_package_ids() -> None:
-    from postify.web.errors import ConflictError
-
-    stub = ApiStub()
-
-    def unresolved(project_id: int):
-        raise ConflictError(
-            "review_unresolved", {"unresolvedPackageIds": [7, 8]}
-        )
-
-    stub.load_more = unresolved
-    response = client_for(stub).post("/api/v1/projects/1/packages/load-more")
-
-    assert response.status_code == 409
-    assert response.json()["code"] == "review_unresolved"
-    assert response.json()["unresolvedPackageIds"] == [7, 8]
 
 
 def test_invalid_review_transition_is_a_conflict_not_validation_error() -> None:
@@ -531,7 +478,6 @@ def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     client = client_for(stub)
 
     assert client.post("/api/v1/projects/1/packages/7/approve").status_code == 200
-    assert client.post("/api/v1/projects/1/operations/publish-once").status_code == 202
     assert client.put(
         "/api/v1/projects/1/settings/main",
         json={"name": "Новая редакция", "topic": "AI", "language": "ru", "audience": "Команды", "timezone": "Europe/Moscow"},
@@ -544,18 +490,8 @@ def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     assert client.delete("/api/v1/projects/1/routes/10").status_code == 204
 
     assert [call[0] for call in stub.calls] == [
-        "approve", "publish_once", "update_settings", "create_resource", "check_channel", "delete_resource"
+        "approve", "update_settings", "create_resource", "check_channel", "delete_resource"
     ]
-
-
-def test_publish_once_returns_the_background_operation_identifier() -> None:
-    # Break caught: the browser cannot observe a failed Telegram publish and reports false success.
-    response = client_for(ApiStub()).post(
-        "/api/v1/projects/1/operations/publish-once"
-    )
-
-    assert response.status_code == 202
-    assert response.json() == {"status": "accepted", "operationRunId": 17}
 
 
 def test_mutations_require_same_origin_session_capability_and_trusted_host() -> None:
@@ -613,8 +549,8 @@ def test_unexpected_error_is_safe_service_unavailable_response(monkeypatch) -> N
     def broken(project_id: int):
         raise OSError("postgresql://user:very-secret@/private/path")
 
-    monkeypatch.setattr(stub, "dashboard", broken)
-    response = client.get("/api/v1/projects/1/dashboard")
+    monkeypatch.setattr(stub, "materials", broken)
+    response = client.get("/api/v1/projects/1/materials")
 
     assert response.status_code == 503
     assert response.json()["code"] == "service_unavailable"

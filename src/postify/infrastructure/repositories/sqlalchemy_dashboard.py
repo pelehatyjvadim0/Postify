@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import bindparam, text
 
 from postify.application.dashboard.models import (
-    DashboardOverview,
     Material,
     Operation,
     PackageDetail,
@@ -53,56 +52,6 @@ class SqlAlchemyDashboardRepository:
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
 
-    def overview(
-        self, project_id: int, day: date, day_start: datetime, day_end: datetime
-    ) -> DashboardOverview:
-        with self._session_factory() as session:
-            try:
-                session.connection(
-                    execution_options={"isolation_level": "REPEATABLE READ"}
-                )
-                session.execute(text("SET TRANSACTION READ ONLY"))
-                row = (
-                    session.execute(
-                        text(
-                            """SELECT
-                        (SELECT count(*) FROM candidates WHERE project_id=:project) AS candidate_total,
-                        (SELECT count(*) FROM candidates c WHERE c.project_id=:project
-                         AND NOT EXISTS (SELECT 1 FROM candidate_decisions d
-                                         WHERE d.project_id=c.project_id AND d.candidate_id=c.id)) AS undecided_materials,
-                        (SELECT count(*) FROM candidate_decisions
-                         WHERE project_id=:project AND status='selected') AS selected_materials,
-                        (SELECT count(*) FROM content_packages WHERE project_id=:project) AS package_total,
-                        (SELECT count(*) FROM content_packages
-                         WHERE project_id=:project AND status='approved') AS approved_packages,
-                        (SELECT count(*) FROM deliveries
-                         WHERE project_id=:project AND status='published'
-                           AND confirmed_at >= :day_start AND confirmed_at < :day_end) AS published_today,
-                        COALESCE((SELECT analyses_started FROM content_daily_usage
-                                  WHERE project_id=:project AND day=:day), 0) AS daily_analyses_started,
-                        COALESCE((SELECT packages_created FROM content_daily_usage
-                                  WHERE project_id=:project AND day=:day), 0) AS daily_packages_created,
-                        COALESCE((SELECT manual_analyses_started FROM content_daily_usage
-                                  WHERE project_id=:project AND day=:day), 0) AS manual_analyses_started,
-                        COALESCE((SELECT manual_packages_created FROM content_daily_usage
-                                  WHERE project_id=:project AND day=:day), 0) AS manual_packages_created"""
-                        ),
-                        {
-                            "project": project_id,
-                            "day": day,
-                            "day_start": day_start,
-                            "day_end": day_end,
-                        },
-                    )
-                    .mappings()
-                    .one()
-                )
-                session.commit()
-                return DashboardOverview(**dict(row))
-            except BaseException:
-                session.rollback()
-                raise
-
     def materials(
         self,
         project_id: int,
@@ -119,7 +68,7 @@ class SqlAlchemyDashboardRepository:
             "offset": offset,
         }
         if status is not None:
-            clauses.append("d.status=:status")
+            clauses.append("latest.status=:status")
             params["status"] = status
         if query is not None:
             clauses.append(
@@ -130,14 +79,14 @@ class SqlAlchemyDashboardRepository:
             rows = (
                 session.execute(
                     text(
-                        f"""SELECT c.id AS candidate_id,c.source_name,c.title,c.url,c.discovered_at,
-                    d.status AS decision_status,d.reason AS decision_reason,
-                    d.explanation AS decision_explanation,d.signals AS decision_signals,d.policy_version,
-                    (SELECT a.id FROM content_attempts a WHERE a.project_id=c.project_id
-                     AND a.candidate_id=c.id AND a.status IN ('failed','retry_scheduled')
-                     ORDER BY a.id DESC LIMIT 1) AS retry_attempt_id
-                    FROM candidates c LEFT JOIN candidate_decisions d
-                    ON d.project_id=c.project_id AND d.candidate_id=c.id
+                        f"""SELECT c.id AS candidate_id,c.source_name,c.title,c.url,c.discovered_at,c.source_text,
+                    CASE WHEN latest.status IN ('failed','retry_scheduled') THEN latest.id END AS retry_attempt_id,
+                    latest.status AS generation_status,latest.failure_code AS generation_failure_code
+                    FROM candidates c LEFT JOIN LATERAL (
+                        SELECT a.id,a.status,a.failure_code FROM content_attempts a
+                        WHERE a.project_id=c.project_id AND a.candidate_id=c.id
+                        ORDER BY a.attempt_no DESC,a.id DESC LIMIT 1
+                    ) latest ON true
                     WHERE {" AND ".join(clauses)}
                     ORDER BY c.discovered_at DESC,c.id DESC LIMIT :limit OFFSET :offset"""
                     ),
@@ -153,14 +102,10 @@ class SqlAlchemyDashboardRepository:
                 row.title,
                 row.url,
                 row.discovered_at,
-                row.decision_status,
-                row.decision_reason,
-                row.decision_explanation,
-                None
-                if row.decision_signals is None
-                else _mapping(row.decision_signals),
-                row.policy_version,
                 row.retry_attempt_id,
+                generation_status=row.generation_status,
+                generation_failure_code=row.generation_failure_code,
+                original_text=row.source_text,
             )
             for row in rows
         )
@@ -186,7 +131,8 @@ class SqlAlchemyDashboardRepository:
             rows = (
                 session.execute(
                     text(
-                        """SELECT id,status,source_url,post_text,media_path,media_deleted_at,created_at,updated_at
+                        """SELECT id,status,source_url,post_text,media_path,media_deleted_at,created_at,updated_at,scheduled_at,route_id,previous_package_id,
+                    (SELECT a.candidate_id FROM content_attempts a WHERE a.id=content_packages.attempt_id AND a.project_id=content_packages.project_id) AS candidate_id
                     FROM content_packages WHERE """
                         + " AND ".join(clauses)
                         + " ORDER BY created_at DESC,id DESC LIMIT :limit OFFSET :offset"
@@ -205,6 +151,8 @@ class SqlAlchemyDashboardRepository:
                 *_media_status(row.media_path, row.media_deleted_at),
                 row.created_at,
                 row.updated_at,
+                scheduled_at=row.scheduled_at, route_id=row.route_id,
+                candidate_id=row.candidate_id, previous_package_id=row.previous_package_id,
             )
             for row in rows
         )
@@ -215,7 +163,9 @@ class SqlAlchemyDashboardRepository:
                 session.execute(
                     text(
                         """SELECT id,attempt_id,status,source_url,post_text,analysis,media_path,media_deleted_at,
-                    media_source_type,media_source_url,generation_snapshot,created_at,updated_at
+                    media_source_type,media_source_url,generation_snapshot,created_at,updated_at,context,scheduled_at,route_id,
+                    (SELECT d.status FROM deliveries d WHERE d.project_id=content_packages.project_id AND d.package_id=content_packages.id) AS delivery_status,
+                    (SELECT p.id FROM content_packages p WHERE p.project_id=content_packages.project_id AND p.previous_package_id=content_packages.id AND p.status='awaiting_review' ORDER BY p.id DESC LIMIT 1) AS replacement_package_id
                     FROM content_packages WHERE project_id=:project AND id=:package"""
                     ),
                     {"project": project_id, "package": package_id},
@@ -253,6 +203,9 @@ class SqlAlchemyDashboardRepository:
             row.created_at,
             row.updated_at,
             row.attempt_id,
+            original_text=row.context, scheduled_at=row.scheduled_at, route_id=row.route_id,
+            delivery_status=row.delivery_status,
+            replacement_package_id=row.replacement_package_id,
         )
 
     def package_media_path(self, project_id: int, package_id: int) -> tuple[str, str]:
@@ -271,77 +224,26 @@ class SqlAlchemyDashboardRepository:
 
     def queue(self, project_id: int, day: date) -> tuple[QueueSlot, ...]:
         with self._session_factory() as session:
-            routes = (
-                session.execute(
-                    text(
-                        """SELECT r.id AS route_id,c.provider,r.schedule,p.timezone FROM publication_routes r
-                    JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id
-                    JOIN content_projects p ON p.id=r.project_id
-                    WHERE r.project_id=:project AND r.enabled AND c.enabled
-                    ORDER BY r.id"""
-                    ),
-                    {"project": project_id},
-                )
-                .mappings()
-                .all()
-            )
-            if not routes:
-                return ()
-            route = routes[0]
-            day_start = datetime.combine(day, time.min, tzinfo=ZoneInfo(route.timezone))
-            day_end = day_start + timedelta(days=1)
-            slots = (
-                route.schedule.get("slots", ())
-                if isinstance(route.schedule, dict)
-                else ()
-            )
-            slots = tuple(slot for slot in slots if isinstance(slot, str))[:3]
-            confirmed = (
-                session.execute(
-                    text(
-                        """SELECT id,package_id FROM deliveries WHERE project_id=:project
-                    AND (route_id=:route OR (:include_legacy AND route_id IS NULL))
-                    AND status='published'
-                    AND confirmed_at >= :day_start AND confirmed_at < :day_end
-                    ORDER BY confirmed_at,id"""
-                    ),
-                    {
-                        "project": project_id,
-                        "route": route.route_id,
-                        "include_legacy": len(routes) == 1,
-                        "day_start": day_start,
-                        "day_end": day_end,
-                    },
-                )
-                .mappings()
-                .all()
-            )
-            forecasts = (
-                session.execute(
-                    text(
-                        """SELECT p.id FROM content_packages p WHERE p.project_id=:project AND p.status='approved'
-                    AND NOT EXISTS (SELECT 1 FROM deliveries d
-                                    WHERE d.project_id=p.project_id AND d.package_id=p.id)
-                    ORDER BY p.created_at,p.id"""
-                    ),
-                    {"project": project_id},
-                )
-                .scalars()
-                .all()
-            )
-        assignments = [("confirmed", row.package_id, row.id) for row in confirmed]
-        assignments.extend(("forecast", package_id, None) for package_id in forecasts)
-        return tuple(
-            QueueSlot(
-                route.route_id,
-                route.provider,
-                slot_time,
-                assignments[index][0] if index < len(assignments) else "empty",
-                assignments[index][1] if index < len(assignments) else None,
-                assignments[index][2] if index < len(assignments) else None,
-            )
-            for index, slot_time in enumerate(slots)
-        )
+            timezone = session.execute(text("SELECT timezone FROM content_projects WHERE id=:project"), {"project": project_id}).scalar_one()
+            day_start = datetime.combine(day, time.min, tzinfo=ZoneInfo(timezone))
+            rows = session.execute(text("""
+                SELECT p.id,p.scheduled_at,p.route_id,p.status,p.post_text,
+                       c.provider,c.name AS channel_name,d.id AS delivery_id,
+                       d.status AS delivery_status,d.failure_code,d.failure_reason
+                FROM content_packages p
+                JOIN content_projects project ON project.id=p.project_id
+                JOIN publication_routes r ON r.id=p.route_id AND r.project_id=p.project_id
+                JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id
+                LEFT JOIN deliveries d ON d.package_id=p.id AND d.project_id=p.project_id
+                WHERE p.project_id=:project AND (p.status IN ('awaiting_review','approved')
+                    OR (p.status='published' AND p.scheduled_at>=:start AND p.scheduled_at<:end))
+                ORDER BY p.scheduled_at,p.id
+            """), {"project": project_id, "start": day_start, "end": day_start + timedelta(days=1)}).mappings().all()
+        return tuple(QueueSlot(row.route_id,row.provider,row.scheduled_at.astimezone(ZoneInfo(timezone)).strftime("%H:%M"),
+            "confirmed" if row.delivery_status == "published" else "planned", row.id,row.delivery_id,
+            scheduled_at=row.scheduled_at,status=row.status,delivery_status=row.delivery_status,
+            channel_name=row.channel_name,post_text=row.post_text,failure_code=row.failure_code,
+            failure_reason=row.failure_reason) for row in rows)
 
     def publications(
         self, project_id: int, limit: int = 50, offset: int = 0

@@ -6,32 +6,16 @@ from typing import Mapping
 
 
 @dataclass(frozen=True, slots=True)
-class DashboardOverview:
-    candidate_total: int
-    undecided_materials: int
-    selected_materials: int
-    package_total: int
-    approved_packages: int
-    published_today: int
-    daily_analyses_started: int
-    daily_packages_created: int
-    manual_analyses_started: int = 0
-    manual_packages_created: int = 0
-
-
-@dataclass(frozen=True, slots=True)
 class Material:
     candidate_id: int
     source_name: str
     title: str
     url: str
     discovered_at: datetime
-    decision_status: str | None
-    decision_reason: str | None
-    decision_explanation: str | None
-    decision_signals: Mapping[str, object] | None
-    policy_version: str | None
     retry_attempt_id: int | None = None
+    generation_status: str | None = None
+    generation_failure_code: str | None = None
+    original_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +28,12 @@ class PackageSummary:
     media_status: str
     created_at: datetime
     updated_at: datetime
+
+
+    scheduled_at: datetime | None = None
+    route_id: int | None = None
+    candidate_id: int | None = None
+    previous_package_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +59,11 @@ class PackageDetail:
     created_at: datetime
     updated_at: datetime
     attempt_id: int | None = None
+    original_text: str = ""
+    scheduled_at: datetime | None = None
+    route_id: int | None = None
+    delivery_status: str | None = None
+    replacement_package_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +74,15 @@ class QueueSlot:
     assignment_kind: str
     package_id: int | None
     delivery_id: int | None
+
+
+    scheduled_at: datetime | None = None
+    status: str | None = None
+    delivery_status: str | None = None
+    channel_name: str | None = None
+    post_text: str = ""
+    failure_code: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

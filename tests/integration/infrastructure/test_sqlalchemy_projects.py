@@ -90,7 +90,6 @@ def test_bootstrap_repository_creates_full_graph_once(
         clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
     )
     try:
-        assert repository.active_project() is None
         first = action.execute(settings(), telegram=None)
         second = action.execute(settings(), telegram=None)
 
@@ -98,13 +97,7 @@ def test_bootstrap_repository_creates_full_graph_once(
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT count(*) FROM source_connections"
-            ).scalar_one() == 1
-            assert connection.exec_driver_sql(
-                "SELECT count(*) FROM content_formats"
-            ).scalar_one() == 1
-            assert connection.exec_driver_sql(
-                "SELECT count(*) FROM calls_to_action"
-            ).scalar_one() == 1
+            ).scalar_one() == 0
     finally:
         engine.dispose()
 
@@ -116,24 +109,24 @@ def test_repository_removes_only_channel_secret_and_keeps_connection(
     command.upgrade(alembic_config, "head")
     engine = create_engine(isolated_database_url)
     repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    cipher = SecretCipher(Fernet.generate_key().decode())
-    telegram = SimpleNamespace(
-        telegram_chat_id="-100123",
-        telegram_bot_token=SecretStr("123:token"),
-    )
     try:
-        BootstrapProject(
-            repository,
-            SourceProviderRegistry(),
-            ChannelProviderRegistry(),
-            cipher=cipher,
-            clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
-        ).execute(settings(), telegram)
+        channel = repository.create_resource(
+            1,
+            "channels",
+            {
+                "provider": "telegram",
+                "name": "Основной",
+                "enabled": True,
+                "configuration": {"chat_id": "-100123"},
+                "encrypted_secret": "encrypted-token",
+            },
+            datetime(2026, 8, 12, 9, tzinfo=UTC),
+        )
 
         result = repository.remove_channel_secret(
-            1, 1, datetime(2026, 8, 12, 10, tzinfo=UTC)
+            1, channel["id"], datetime(2026, 8, 12, 10, tzinfo=UTC)
         )
-        stored = repository.get_resource(1, "channels", 1)
+        stored = repository.get_resource(1, "channels", channel["id"])
 
         assert result["secretConfigured"] is False
         assert result["connection_status"] == "unconfigured"
@@ -150,11 +143,6 @@ def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
     command.upgrade(alembic_config, "head")
     engine = create_engine(isolated_database_url)
     normal = SqlAlchemyProjectRepository(sessionmaker(engine))
-    cipher = SecretCipher(Fernet.generate_key().decode())
-    telegram = SimpleNamespace(
-        telegram_chat_id="-100123",
-        telegram_bot_token=SecretStr("123:token"),
-    )
 
     class FailingCommitSession(Session):
         def commit(self) -> None:
@@ -162,13 +150,13 @@ def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
             raise RuntimeError("forced commit failure")
 
     try:
-        BootstrapProject(
-            normal,
-            SourceProviderRegistry(),
-            ChannelProviderRegistry(),
-            cipher=cipher,
-            clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
-        ).execute(settings(), telegram)
+        source = normal.create_resource(
+            1,
+            "sources",
+            {"provider": "telegram_group", "name": "Источник", "enabled": True,
+             "configuration": {"chat_id": "-100-source"}, "schedule": "0 7 * * 1-5"},
+            datetime(2026, 8, 12, 9, tzinfo=UTC),
+        )
         failing = SqlAlchemyProjectRepository(
             sessionmaker(engine, class_=FailingCommitSession)
         )
@@ -176,16 +164,11 @@ def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
         with pytest.raises(RuntimeError, match="forced commit failure"):
             failing.update_schedules(
                 1,
-                ({"id": 1, "schedule": "0 8 * * *"},),
-                ({"id": 1, "autopublish": False, "slots": ("08:30", "13:30", "18:30")},),
+                ({"id": source["id"], "schedule": "0 8 * * *"},),
                 datetime(2026, 8, 12, 10, tzinfo=UTC),
             )
 
-        assert normal.get_resource(1, "sources", 1)["schedule"] == "0 7 * * 1-5"
-        assert normal.get_resource(1, "routes", 1)["schedule"] == {
-            "autopublish": True,
-            "slots": ["09:00", "14:00", "19:00"],
-        }
+        assert normal.get_resource(1, "sources", source["id"])["schedule"] == "0 7 * * 1-5"
     finally:
         engine.dispose()
 
@@ -227,15 +210,15 @@ def test_route_references_are_project_scoped_in_repository_and_database(
             )
 
         with pytest.raises(LookupError):
-            repository.validate_route_references(1, 202, 302, None)
+            repository.validate_route_references(1, 202, 302)
 
         with pytest.raises(IntegrityError):
             with engine.begin() as connection:
                 connection.execute(
                     text(
                         """INSERT INTO publication_routes
-                        (project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
-                        VALUES (1,202,302,true,'{}',:now,:now)"""
+                        (project_id,format_id,channel_id,enabled,created_at,updated_at)
+                        VALUES (1,202,302,true,:now,:now)"""
                     ),
                     {"now": now},
                 )

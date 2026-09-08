@@ -29,10 +29,16 @@ def test_real_run_once_records_only_requested_project_scope(
                 text(
                     """INSERT INTO content_projects
                     (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
-                    VALUES (2,'Project 2','AI','ru','Teams','Europe/Moscow','{}',:now,:now)"""
+                    VALUES (2,'Project 2','AI','ru','Teams','Europe/Moscow',
+                    CAST(:configuration AS jsonb),:now,:now)"""
                 ),
-                {"now": datetime(2026, 8, 12, 9, tzinfo=UTC)},
+                {"now": datetime(2026, 8, 12, 9, tzinfo=UTC),
+                 "configuration": '{"media_max_bytes":10000000,"analysis_timeout_seconds":60,"analysis_batch_size":100}'},
             )
+            session.execute(text("""INSERT INTO content_formats
+                (project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (2,'Пост','text','Короткий пост',true,:now,:now)"""),
+                {"now": datetime(2026, 8, 12, 9, tzinfo=UTC)})
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"hits": []}))
 
         with open_run_once(settings, project_id=2, transport=transport) as action:
@@ -68,9 +74,9 @@ def test_web_retry_accepts_project_owned_scheduled_attempt_via_shared_action(
             attempt_id = session.execute(
                 text(
                     """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,tier,status,source_url,retry_at,
+                    (project_id,candidate_id,attempt_no,status,source_url,retry_at,
                      started_at,finished_at)
-                    VALUES (1,:candidate,1,'fresh','retry_scheduled',
+                    VALUES (1,:candidate,1,'retry_scheduled',
                             'https://example.test/scheduled-owner',:retry_at,:now,:now)
                     RETURNING id"""
                 ),

@@ -24,8 +24,8 @@ class DeliveryClaim:
     package_id: int
     attempt_no: int
     post_text: str
-    media_path: str
-    media_mime: str
+    media_path: str | None
+    media_mime: str | None
 
 
 @dataclass(frozen=True, slots=True)

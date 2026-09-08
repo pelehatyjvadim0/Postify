@@ -72,7 +72,8 @@ def test_execution_context_enforces_operation_specific_server_policy() -> None:
 
     with pytest.raises(api["ContentValidationError"]):
         api["ExecutionContext"](
-            mode="manual", actor="ui", purpose="load_more", batch_size=2
+            mode="manual", actor="ui", purpose="retry_analysis", batch_size=2,
+            target_attempt_id=7,
         )
     with pytest.raises(api["ContentValidationError"]):
         api["ExecutionContext"](
@@ -104,7 +105,6 @@ def test_attempt_requires_positive_append_only_number(attempt_no: int) -> None:
             id=1,
             candidate_id=7,
             attempt_no=attempt_no,
-            tier="fresh",
             status="processing",
             source_url="https://source.test/post",
             started_at=NOW,
@@ -115,7 +115,7 @@ def test_attempt_allows_manual_history_beyond_automatic_retry_limit() -> None:
     api = _models_api()
 
     attempt = api["ContentAttempt"](
-        id=1, candidate_id=7, attempt_no=3, tier="manual", status="processing",
+        id=1, candidate_id=7, attempt_no=3, status="processing",
         source_url="https://source.test/post", started_at=NOW,
     )
 
@@ -207,12 +207,11 @@ def test_post_text_must_not_contain_source_url() -> None:
             media_path="/var/lib/postify/media/one.jpg",
             media_source_type="og",
             media_source_url="https://cdn.test/one.jpg",
-            review_required=True,
             status=api["PackageStatus"].AWAITING_REVIEW,
         )
 
 
-def test_post_text_may_contain_source_url_for_source_cta() -> None:
+def test_stored_post_can_preserve_an_allowed_source_link() -> None:
     api = _models_api()
     source_url = "https://source.test/article"
 
@@ -226,7 +225,6 @@ def test_post_text_may_contain_source_url_for_source_cta() -> None:
         media_path="/var/lib/postify/media/one.jpg",
         media_source_type="og",
         media_source_url="https://cdn.test/one.jpg",
-        review_required=True,
         status=api["PackageStatus"].AWAITING_REVIEW,
         source_url_allowed=True,
     )
@@ -239,7 +237,7 @@ def test_post_text_may_contain_source_url_for_source_cta() -> None:
     [
         ("not_started", "processing", True),
         ("processing", "awaiting_review", True),
-        ("processing", "approved", True),
+        ("processing", "approved", False),
         ("awaiting_review", "approved", True),
         ("awaiting_review", "rejected", True),
         ("approved", "rejected", False),
@@ -280,12 +278,12 @@ def test_batch_requires_one_analysis_result_for_every_requested_attempt() -> Non
 
 @pytest.mark.parametrize(
     ("post_text", "media_query"),
-    [(None, "database"), ("Русский пост", None)],
+    [(None, "database"), ("", None), ("Русский пост", "")],
 )
-def test_selected_analysis_requires_post_and_media_query(
+def test_selected_analysis_requires_post_and_valid_optional_media_query(
     post_text: str | None, media_query: str | None
 ) -> None:
-    # Поломка re-review 8: selected outcome нельзя превратить в полный пакет.
+    # Выбранный материал обязан содержать текст; заданный запрос медиа не бывает пустым.
     api = _models_api()
 
     with pytest.raises(api["ContentValidationError"]):

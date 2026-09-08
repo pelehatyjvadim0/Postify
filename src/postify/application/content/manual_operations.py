@@ -12,28 +12,11 @@ from postify.domain.content.models import (
 )
 
 
-class ReviewUnresolved(InvalidContentTransition):
-    def __init__(self, package_ids: tuple[int, ...]) -> None:
-        super().__init__("review_unresolved")
-        self.package_ids = package_ids
-
-
 @dataclass(frozen=True, slots=True)
 class ManualContentOperations:
     """Validate owner commands and produce server-owned execution contexts."""
 
     repository: ContentRepository
-
-    def load_more(self) -> ExecutionContext:
-        unresolved = tuple(self.repository.awaiting_review_package_ids(limit=50))
-        if unresolved:
-            raise ReviewUnresolved(unresolved)
-        return ExecutionContext(
-            mode=ExecutionMode.MANUAL,
-            actor=ExecutionActor.UI,
-            purpose=ExecutionPurpose.LOAD_MORE,
-            batch_size=3,
-        )
 
     def retry_analysis(self, attempt_id: int) -> ExecutionContext:
         status = self.repository.attempt_status(attempt_id)
@@ -61,22 +44,8 @@ class ManualContentOperations:
         return self._package_context(
             package_id,
             purpose=ExecutionPurpose.REGENERATE_POST,
-            allowed={"awaiting_review", "rejected", "approved"},
+            allowed={"awaiting_review", "rejected"},
             batch_size=1,
-        )
-
-    def replace_media(self, package_id: int) -> ExecutionContext:
-        return self._package_context(
-            package_id,
-            purpose=ExecutionPurpose.REPLACE_MEDIA,
-            allowed={"awaiting_review", "rejected", "approved"},
-        )
-
-    def publish_now(self, package_id: int) -> ExecutionContext:
-        return self._package_context(
-            package_id,
-            purpose=ExecutionPurpose.PUBLISH_NOW,
-            allowed={"approved"},
         )
 
     def _package_context(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from postify.application.ports.candidate_repository import CandidateRepository
 from postify.application.ports.candidate_source import CandidateSource
@@ -14,12 +14,15 @@ class ImportResult:
 
 
 class ImportCandidates:
-    def __init__(self, source: CandidateSource, repository: CandidateRepository) -> None:
+    def __init__(self, source: CandidateSource, repository: CandidateRepository, *, source_connection_id: int | None = None) -> None:
         self._source = source
         self._repository = repository
+        self._source_connection_id = source_connection_id
 
     def execute(self) -> ImportResult:
         candidates = self._source.fetch()
+        if self._source_connection_id is not None:
+            candidates = tuple(replace(item, source_connection_id=self._source_connection_id) for item in candidates)
         received = len(candidates)
         created = self._repository.save_new(candidates)
 

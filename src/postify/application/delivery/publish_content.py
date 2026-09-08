@@ -23,7 +23,8 @@ class PublishContent:
             cleanup = self.repository.pending_cleanup()
             if cleanup is not None:
                 try:
-                    self.media.delete(cleanup.media_path)
+                    if cleanup.media_path:
+                        self.media.delete(cleanup.media_path)
                 except (OSError, MediaCleanupError):
                     return PublishContentResult("cleanup_pending", package_id=cleanup.package_id)
                 self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
@@ -44,7 +45,8 @@ class PublishContent:
             return PublishContentResult(error.kind.value, package_id=claim.package_id)
         self.repository.confirm_published(claim, message_id=message.message_id, now=now)
         try:
-            self.media.delete(claim.media_path)
+            if claim.media_path:
+                self.media.delete(claim.media_path)
         except (OSError, MediaCleanupError):
             return PublishContentResult("cleanup_pending", package_id=claim.package_id)
         self.repository.mark_media_deleted(claim.delivery_id, now=now)

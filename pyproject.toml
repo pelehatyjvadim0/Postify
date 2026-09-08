@@ -14,7 +14,9 @@ dependencies = [
     "httpx",
     "psycopg[binary]",
     "pydantic-settings",
+    "qrcode>=8.2",
     "sqlalchemy",
+    "telethon>=1.44,<2",
     "typer",
     "uvicorn>=0.52.1",
 ]
@@ -38,6 +40,7 @@ postify = [
     "web/static/api.js",
     "web/static/screens.js",
     "web/static/settings.js",
+    "web/static/workspace.js",
 ]
 
 [tool.pytest.ini_options]

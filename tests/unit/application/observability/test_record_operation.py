@@ -287,12 +287,10 @@ def test_run_once_records_codex_profile_and_counts_from_shared_result() -> None:
     from postify.application.observability.record_operation import (
         run_once_operation_metadata,
     )
-    from postify.application.selection.select_candidates import SelectionResult
 
     events: list[tuple[object, ...]] = []
     result = RunOnceResult(
         ImportResult(3, 2, 1),
-        SelectionResult(2, 2, 0, 0),
         ProcessContentResult(
             claimed=2,
             packages_created=1,

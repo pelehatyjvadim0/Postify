@@ -1,0 +1,17 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+.pytest_cache
+.worktrees
+var
+tmp
+temp
+.DS_Store
+docs
+ui-mockup
+.superpowers

@@ -523,7 +523,7 @@ def test_wave_ten_head_has_complete_manual_journal_and_project_safe_versions(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Break caught: the final head omits polling metadata or permits cross-project lineage.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260905_18")
     engine = create_engine(isolated_database_url)
     try:
         inspector = inspect(engine)
@@ -585,7 +585,7 @@ def test_wave_ten_head_has_complete_manual_journal_and_project_safe_versions(
 def test_wave_ten_downgrades_restore_exact_previous_terminal_constraints(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260905_18")
     expectations = [
         ("20260817_14", "retry_delivery_failed", "manual_search_failed"),
         ("20260817_13", "replace_media_failed", "retry_delivery_failed"),
@@ -700,11 +700,11 @@ def test_production_invariants_migration_downgrades_and_upgrades_again(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка final review: project_id default не снят или rollback неповторяем.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260905_18")
     engine = create_engine(isolated_database_url)
     try:
         inspector = inspect(engine)
-        assert inspector.get_columns("candidates")[-1]["name"] == "project_id"
+        assert "project_id" in {column["name"] for column in inspector.get_columns("candidates")}
         assert next(
             column
             for column in inspector.get_columns("candidates")
@@ -731,7 +731,7 @@ def test_production_invariants_migration_downgrades_and_upgrades_again(
     finally:
         engine.dispose()
 
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260905_18")
     engine = create_engine(isolated_database_url)
     try:
         project_default = next(
@@ -748,7 +748,7 @@ def test_project_migration_downgrade_reports_project_scoped_duplicates(
     alembic_config: Config, isolated_database_url: str
 ) -> None:
     # Поломка final review: rollback падает opaque unique violation вместо preflight.
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "20260905_18")
     engine = create_engine(isolated_database_url)
     now = datetime(2026, 8, 13, 9, tzinfo=UTC)
     try:

@@ -13,9 +13,8 @@ class GenerationBrief:
     language: str
     audience: str
     format_instructions: str
-    cta: str
-    cta_link_mode: str = "none"
-    cta_url: str | None = None
+    source_language: str = "ar"
+    tone: str = "Нейтральный"
 
 
 class ContentAnalyzer(Protocol):

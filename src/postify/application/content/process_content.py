@@ -1,13 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections.abc import Callable
-from zoneinfo import ZoneInfo
-from postify.domain.content.models import AUTOMATIC_CONTEXT, AnalysisInput, ContentLimits, ExecutionContext
-from postify.application.ports.article_extractor import ArticleExtractor
+from postify.domain.content.models import AUTOMATIC_CONTEXT, AnalysisInput, ExecutionContext, ExtractedArticle
 from postify.application.ports.content_analyzer import ContentAnalyzer
 from postify.application.ports.content_repository import ContentRepository
-from postify.application.ports.media_provider import MediaProvider
 from postify.application.ports.content_analyzer import GenerationBrief
 
 
@@ -18,6 +15,7 @@ class ProcessContentResult:
     failed: int = 0
     packages_created: int = 0
     materials_taken: int = 0
+    model: str | None = None
     codex_model: str | None = None
     codex_reasoning_effort: str | None = None
 
@@ -29,27 +27,21 @@ class ProcessContent:
     def __init__(
         self,
         repository: ContentRepository,
-        extractor: ArticleExtractor,
         analyzer: ContentAnalyzer,
-        media: MediaProvider,
         *,
-        limits: ContentLimits,
-        review_required: bool,
-        timezone: str,
+        batch_size: int,
         generation_brief: GenerationBrief | None = None,
         generation_snapshot: dict[str, object] | None = None,
+        model: str | None = None,
         codex_model: str | None = None,
         codex_reasoning_effort: str | None = None,
         context: ExecutionContext = AUTOMATIC_CONTEXT,
         clock: Callable[[], datetime],
     ):
         self.r = repository
-        self.e = extractor
         self.a = analyzer
-        self.m = media
-        self.limits = limits
-        self.review = review_required
-        self.tz = ZoneInfo(timezone)
+        self.batch_size = batch_size
+        self.model = model
         self.brief = generation_brief
         self.generation_snapshot = dict(generation_snapshot or {})
         self.codex_model = codex_model
@@ -59,30 +51,20 @@ class ProcessContent:
 
     def execute(self):
         now = self.clock()
-        self.m.cleanup(
-            older_than=now - timedelta(hours=48),
-            protected_paths=self.r.active_media_paths(),
-        )
-        day = now.astimezone(self.tz).date()
-        attempts = self.r.claim(
-            now=now, day=day, limits=self.limits, context=self.context
-        )
+        attempts = self.r.claim(now=now, batch_size=self.batch_size, context=self.context)
         articles = {}
         retry = failed = 0
         for x in attempts:
             try:
-                article = self.e.extract(x.source_url)
+                source_text = getattr(x, "source_text", None)
+                if source_text is None:
+                    raise ValueError("Source has no text")
+                article = ExtractedArticle(x.source_url, x.title, source_text, ())
                 self.r.save_extracted(x.id, article)
                 articles[x.id] = article
             except Exception:
-                if not self.context.is_manual and x.attempt_no == 1:
-                    self.r.schedule_article_retry(
-                        x.id, retry_at=now + timedelta(hours=6), now=now
-                    )
-                    retry += 1
-                else:
-                    self.r.fail_attempt(x.id, code="article_unavailable", now=now)
-                    failed += 1
+                self.r.fail_attempt(x.id, code="source_text_unavailable", now=now)
+                failed += 1
         if not articles:
             return ProcessContentResult(
                 len(attempts), retry, failed, 0, materials_taken=len(attempts)
@@ -91,16 +73,20 @@ class ProcessContent:
             AnalysisInput(i, a.source_url, a.title, a.text) for i, a in articles.items()
         )
         try:
-            package_slots = self.r.package_slots_remaining(
-                day=day, limit=self.limits.package_limit, context=self.context
-            )
+            self.model = self.model or getattr(self.a, "model", None)
+            provider = getattr(self.a, "provider", None)
+            if provider in {"gemini", "codex"}:
+                self.generation_snapshot.update(
+                    provider=provider, model=self.model, prompt_version=self.a.prompt_version
+                )
+            package_slots = len(inputs)
             batch = (
                 self.a.analyze(inputs, package_slots, self.brief)
                 if self.brief is not None
                 else self.a.analyze(inputs, package_slots)
             )
         except Exception as error:
-            code = getattr(error, "code", "codex_failed")
+            code = getattr(error, "code", "generation_failed")
             for i in articles:
                 self.r.fail_attempt(i, code=code, now=now)
             return ProcessContentResult(
@@ -109,17 +95,15 @@ class ProcessContent:
                 failed + len(articles),
                 0,
                 materials_taken=len(attempts),
+                model=self.model,
                 codex_model=self.codex_model,
                 codex_reasoning_effort=self.codex_reasoning_effort,
             )
         save_kwargs = dict(
             batch=batch,
             articles=articles,
-            review_required=self.review,
             generation_snapshot=self.generation_snapshot,
             now=now,
-            day=day,
-            package_limit=self.limits.package_limit,
             context=self.context,
         )
         drafts = self.r.save_analysis_and_create_packages(
@@ -130,8 +114,8 @@ class ProcessContent:
             try:
                 self.r.complete_package(
                     d.package_id,
-                    media=self.m.acquire(d.article, d.media_query),
-                    status="awaiting_review" if self.review else "approved",
+                    media=None,
+                    status="awaiting_review",
                     now=now,
                 )
                 made += 1
@@ -144,6 +128,7 @@ class ProcessContent:
             failed,
             made,
             materials_taken=len(attempts),
+            model=self.model,
             codex_model=self.codex_model,
             codex_reasoning_effort=self.codex_reasoning_effort,
         )

@@ -46,17 +46,27 @@ class SqlAlchemyDeliveryRepository:
                     SELECT p.id, p.post_text, p.media_path, p.media_mime, d.id AS delivery_id,
                            d.status, d.attempt_no
                     FROM content_packages p
+                    JOIN content_attempts source_attempt ON source_attempt.id=p.attempt_id AND source_attempt.project_id=p.project_id
                     LEFT JOIN deliveries d ON d.package_id = p.id AND d.project_id=p.project_id
                     WHERE p.project_id=:project AND p.status = 'approved'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM content_packages newer
+                          JOIN content_attempts newer_attempt ON newer_attempt.id=newer.attempt_id AND newer_attempt.project_id=newer.project_id
+                          WHERE newer.project_id=p.project_id AND newer_attempt.candidate_id=source_attempt.candidate_id
+                            AND newer.id>p.id AND newer.status NOT IN ('failed','processing')
+                      )
+                      AND p.scheduled_at IS NOT NULL AND p.scheduled_at <= :now
+                      AND p.route_id = :route_id
+                      AND EXISTS (SELECT 1 FROM publication_routes r JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id WHERE r.project_id=p.project_id AND r.id=p.route_id AND r.channel_id=:channel_id AND r.enabled AND c.enabled)
                       AND (:package_id < 1 OR p.id=:package_id)
                       AND (:delivery_id < 1 OR d.id=:delivery_id)
                       AND (d.id IS NULL OR
                            (d.status = 'retryable'
                             AND d.route_id IS NOT DISTINCT FROM :route_id
                             AND d.channel_id IS NOT DISTINCT FROM :channel_id))
-                    ORDER BY p.created_at, p.id
+                    ORDER BY p.scheduled_at, p.id
                     FOR UPDATE OF p SKIP LOCKED LIMIT 1
-                """), {"project": self.project_id, "route_id": self.route_id, "channel_id": self.channel_id, "package_id": package_id, "delivery_id": delivery_id}).mappings().first()
+                """), {"project": self.project_id, "route_id": self.route_id, "channel_id": self.channel_id, "package_id": package_id, "delivery_id": delivery_id, "now": now}).mappings().first()
                 if row is None:
                     session.commit()
                     return None

@@ -37,12 +37,9 @@ class ExecutionPurpose(StrEnum):
     RUN_ONCE = "run_once"
     PUBLISH_ONCE = "publish_once"
     MANUAL_SEARCH = "manual_search"
-    LOAD_MORE = "load_more"
     RETRY_ANALYSIS = "retry_analysis"
     RETURN_TO_ANALYSIS = "return_to_analysis"
     REGENERATE_POST = "regenerate_post"
-    REPLACE_MEDIA = "replace_media"
-    PUBLISH_NOW = "publish_now"
     RETRY_DELIVERY = "retry_delivery"
 
 
@@ -50,7 +47,6 @@ def validate_transition(current: str, target: str) -> None:
     allowed = {
         ("not_started", "processing"),
         ("processing", "awaiting_review"),
-        ("processing", "approved"),
         ("awaiting_review", "approved"),
         ("awaiting_review", "rejected"),
         ("approved", "published"),
@@ -100,10 +96,10 @@ class AnalyzedTopic:
         if self.selected and (
             not isinstance(self.post_text, str)
             or not self.post_text.strip()
-            or not isinstance(self.media_query, str)
-            or not self.media_query.strip()
         ):
-            raise ContentValidationError("Нужен запрос медиа")
+            raise ContentValidationError("Нужен текст поста")
+        if self.media_query is not None and (not isinstance(self.media_query, str) or not self.media_query.strip()):
+            raise ContentValidationError("Некорректный запрос медиа")
         if not self.selected and (
             self.post_text is not None or self.media_query is not None
         ):
@@ -136,23 +132,16 @@ class ContentAttempt:
     id: int
     candidate_id: int
     attempt_no: int
-    tier: str
     status: str
     source_url: str
     started_at: datetime
 
+    title: str = ""
+    source_text: str | None = None
+
     def __post_init__(self):
         if type(self.attempt_no) is not int or self.attempt_no < 1:
             raise ContentValidationError("Номер попытки должен быть положительным")
-
-
-@dataclass(frozen=True, slots=True)
-class ContentLimits:
-    analysis_limit: int
-    package_limit: int
-    freshness_days: int
-    fresh_share: int
-    reserve_share: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,8 +169,6 @@ class ExecutionContext:
                 purpose = ExecutionPurpose.RETRY_ANALYSIS
             elif self.target_package_id is not None:
                 purpose = ExecutionPurpose.RETURN_TO_ANALYSIS
-            elif self.batch_size == 3:
-                purpose = ExecutionPurpose.LOAD_MORE
             else:
                 purpose = ExecutionPurpose.MANUAL_SEARCH
         try:
@@ -224,12 +211,9 @@ class ExecutionContext:
                 raise ContentValidationError("Автоматический запуск не принимает ручную цель")
             return
         expected = {
-            ExecutionPurpose.LOAD_MORE: (3, None, None, None),
             ExecutionPurpose.RETRY_ANALYSIS: (1, self.target_attempt_id, None, None),
             ExecutionPurpose.RETURN_TO_ANALYSIS: (1, None, self.target_package_id, None),
             ExecutionPurpose.REGENERATE_POST: (1, None, self.target_package_id, None),
-            ExecutionPurpose.REPLACE_MEDIA: (None, None, self.target_package_id, None),
-            ExecutionPurpose.PUBLISH_NOW: (None, None, self.target_package_id, None),
             ExecutionPurpose.RETRY_DELIVERY: (None, None, None, self.target_delivery_id),
         }.get(purpose)
         if expected is not None and (
@@ -248,12 +232,6 @@ class ExecutionContext:
 
 
 AUTOMATIC_CONTEXT = ExecutionContext()
-MANUAL_UI_CONTEXT = ExecutionContext(
-    mode=ExecutionMode.MANUAL,
-    actor=ExecutionActor.UI,
-    purpose=ExecutionPurpose.LOAD_MORE,
-    batch_size=3,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,14 +250,16 @@ class ContentPackage:
     context: str
     analysis: str
     post_text: str
-    media_path: str
-    media_source_type: str
-    media_source_url: str
-    review_required: bool
+    media_path: str | None
+    media_source_type: str | None
+    media_source_url: str | None
     status: str | PackageStatus
     source_url_allowed: bool = False
     history: list[object] = field(default_factory=list)
+    scheduled_at: datetime | None = None
+    route_id: int | None = None
+    previous_package_id: int | None = None
 
     def __post_init__(self):
-        if not self.source_url_allowed and self.source_url in self.post_text:
+        if self.source_url and not self.source_url_allowed and self.source_url in self.post_text:
             raise ContentValidationError("URL источника нельзя добавлять в пост")

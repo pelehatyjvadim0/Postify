@@ -1,7 +1,7 @@
 """Доменные модели контентного проекта.
 
 Модуль описывает сам проект и его граф конфигурации: источники
-материалов, форматы контента, CTA, каналы доставки и маршруты
+материалов, форматы контента, каналы доставки и маршруты
 публикации. Все сущности неизменяемы после создания и проверяют свои
 инварианты в ``__post_init__``.
 """
@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from postify.domain.projects.cron import normalize_cron
@@ -37,14 +36,6 @@ def _normalise_text(value: str, field: str) -> str:
     return normalised
 
 
-def _normalise_terms(values: tuple[str, ...]) -> tuple[str, ...]:
-    """Приводит маркеры отбора к единому регистру и запрещает дубли."""
-    normalised = tuple(_normalise_text(value, "Маркер").casefold() for value in values)
-    if len(set(normalised)) != len(normalised):
-        raise ValueError("Маркеры не должны повторяться")
-    return normalised
-
-
 def _aware(value: datetime, field: str) -> None:
     """Гарантирует, что datetime содержит часовой пояс и может безопасно сравниваться."""
     if value.tzinfo is None or value.utcoffset() is None:
@@ -56,107 +47,38 @@ class ProjectConfiguration:
     """
     Хранит все бизнес-правила обработки контента для одного проекта.
 
-    Конфигурация определяет правила первичного отбора, дневные лимиты,
-    соотношение свежих и резервных материалов, необходимость ручной
-    проверки, ограничения сетевых данных и профиль Codex. Application-слой
-    использует её для сборки конкретного pipeline.
+    Конфигурация определяет технические ограничения подготовки контента и
+    профиль AI. Application-слой использует её для сборки pipeline.
     """
-    selection_policy_version: str
-    selection_rules: tuple[str, ...]
-    topic_terms: tuple[str, ...]
-    topic_exclusion_terms: tuple[str, ...]
-    advertising_terms: tuple[str, ...]
-    hiring_terms: tuple[str, ...]
-    technical_release_terms: tuple[str, ...]
-    practical_terms: tuple[str, ...]
-    selection_freshness_days: int
-    daily_analysis_limit: int
-    daily_package_limit: int
-    priority_freshness_days: int
-    fresh_share_percent: int
-    reserve_share_percent: int
-    review_required: bool
-    article_max_bytes: int
     media_max_bytes: int
     analysis_timeout_seconds: int
-    analysis_model: str = "gpt-5.6-luna"
+    analysis_batch_size: int = 100
+    analysis_model: str = "gemini-3.8-flash"
     analysis_reasoning_effort: str = "high"
+    source_language: str = "ar"
+    tone: str = "Нейтральный"
+    # None means approved backlog is sent after restart regardless of its age.
+    delivery_lateness_seconds: int | None = None
 
     def __post_init__(self) -> None:
         """
         Нормализует настройки и проверяет их взаимную согласованность.
-
-        Метод не даёт создать конфигурацию с неизвестными или повторяющимися
-        правилами, отсутствующими маркерами, некорректными лимитами,
-        несогласованными долями очереди или неподдерживаемым профилем Codex.
         """
-        object.__setattr__(
-            self,
-            "selection_policy_version",
-            _normalise_text(self.selection_policy_version, "Версия политики"),
-        )
-        allowed = {
-            "advertising",
-            "out_of_scope",
-            "hiring",
-            "technical_without_use",
-        }
-        rules = tuple(self.selection_rules)
-        object.__setattr__(self, "selection_rules", rules)
-        if not rules or any(
-            rule not in allowed for rule in rules
-        ):
-            raise ValueError("Неизвестное или пустое правило отбора")
-        if len(set(rules)) != len(rules):
-            raise ValueError("Правила отбора не должны повторяться")
         for name in (
-            "topic_terms",
-            "topic_exclusion_terms",
-            "advertising_terms",
-            "hiring_terms",
-            "technical_release_terms",
-            "practical_terms",
-        ):
-            object.__setattr__(self, name, _normalise_terms(getattr(self, name)))
-        required = {
-            "advertising": (self.advertising_terms,),
-            "out_of_scope": (self.topic_exclusion_terms,),
-            "hiring": (self.hiring_terms,),
-            "technical_without_use": (
-                self.technical_release_terms,
-                self.practical_terms,
-            ),
-        }
-        if any(
-            not terms
-            for rule in self.selection_rules
-            for terms in required[rule]
-        ):
-            raise ValueError("Для включённого правила нужны маркеры")
-        for name in (
-            "selection_freshness_days",
-            "daily_analysis_limit",
-            "daily_package_limit",
-            "priority_freshness_days",
-            "article_max_bytes",
+            "analysis_batch_size",
             "media_max_bytes",
             "analysis_timeout_seconds",
         ):
             _positive(getattr(self, name), name)
-        if self.daily_package_limit > self.daily_analysis_limit:
-            raise ValueError("Лимит пакетов не может превышать лимит анализа")
-        for share in (self.fresh_share_percent, self.reserve_share_percent):
-            if type(share) is not int or not 0 <= share <= 100:
-                raise ValueError("Доля очереди должна быть от 0 до 100")
-        if self.fresh_share_percent + self.reserve_share_percent != 100:
-            raise ValueError("Доли очереди должны составлять 100")
-        if type(self.review_required) is not bool:
-            raise ValueError("review_required должен быть boolean")
         object.__setattr__(
             self,
             "analysis_model",
             _normalise_text(self.analysis_model, "Модель анализа"),
         )
+        for name in ("source_language", "tone"):
+            object.__setattr__(self, name, _normalise_text(getattr(self, name), name))
+        if self.delivery_lateness_seconds is not None and (type(self.delivery_lateness_seconds) is not int or self.delivery_lateness_seconds <= 0):
+            raise ValueError("Допустимая задержка должна быть положительным целым числом секунд")
         allowed_efforts = {"low", "medium", "high", "xhigh", "max"}
         if self.analysis_reasoning_effort not in allowed_efforts:
             raise ValueError("Неизвестный reasoning effort")
@@ -300,66 +222,23 @@ class ContentFormat:
 
 
 @dataclass(frozen=True, slots=True)
-class CallToAction:
-    """
-    Описывает призыв к действию, который генератор может добавить в публикацию.
-
-    ``link_mode`` определяет политику ссылки: ``none`` запрещает ссылку,
-    ``source`` разрешает URL исходного материала, ``custom`` использует явно
-    заданный ``custom_url``.
-    """
-    id: int
-    project_id: int
-    name: str
-    text: str
-    link_mode: str
-    custom_url: str | None
-    enabled: bool
-
-    def __post_init__(self) -> None:
-        """
-        Проверяет текст CTA и согласованность режима ссылки с URL.
-
-        Произвольный URL допустим только в режиме ``custom`` и должен быть
-        абсолютной HTTP(S)-ссылкой.
-        """
-        _positive(self.id, "id")
-        _positive(self.project_id, "project_id")
-        object.__setattr__(self, "name", _normalise_text(self.name, "name"))
-        object.__setattr__(self, "text", _normalise_text(self.text, "text"))
-        if self.link_mode not in {"none", "source", "custom"}:
-            raise ValueError("Неизвестный режим ссылки")
-        if self.link_mode == "custom":
-            parts = urlsplit(self.custom_url or "")
-            if parts.scheme not in {"http", "https"} or not parts.netloc:
-                raise ValueError("Нужен абсолютный HTTP(S) URL")
-        elif self.custom_url is not None:
-            raise ValueError("URL допустим только для режима custom")
-        if type(self.enabled) is not bool:
-            raise ValueError("enabled должен быть boolean")
-
-
-@dataclass(frozen=True, slots=True)
 class PublicationRoute:
     """
-    Связывает формат контента, канал доставки и необязательный CTA.
+    Связывает формат контента и канал доставки.
 
-    Маршрут отвечает на вопрос: «в каком виде, с каким призывом и куда
-    публиковать пакет». Расписание маршрута хранится в persistence-модели,
+    Маршрут отвечает на вопрос: «в каком виде и куда публиковать пакет».
+    Расписание маршрута хранится в persistence-модели,
     а эта доменная сущность фиксирует сами связи.
     """
     id: int
     project_id: int
     format_id: int
     channel_id: int
-    cta_id: int | None
     enabled: bool
 
     def __post_init__(self) -> None:
-        """Проверяет все обязательные ссылки маршрута и необязательную ссылку на CTA."""
+        """Проверяет все обязательные ссылки маршрута."""
         for field in ("id", "project_id", "format_id", "channel_id"):
             _positive(getattr(self, field), field)
-        if self.cta_id is not None:
-            _positive(self.cta_id, "cta_id")
         if type(self.enabled) is not bool:
             raise ValueError("enabled должен быть boolean")

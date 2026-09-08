@@ -72,13 +72,13 @@ def test_update_rejects_unknown_section_without_saving() -> None:
     assert repository.project == project()
 
 
-def test_update_configuration_revalidates_domain_rules() -> None:
+def test_update_configuration_revalidates_technical_limits() -> None:
     repository = MemoryProjects(project())
 
-    with pytest.raises(ValueError, match="100"):
+    with pytest.raises(ValueError, match="analysis_batch_size"):
         ManageProject(repository).update(
             1,
             "configuration",
-            {"fresh_share_percent": 80},
+            {"analysis_batch_size": 0},
             now=datetime(2026, 8, 12, 9, tzinfo=UTC),
         )

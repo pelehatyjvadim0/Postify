@@ -170,3 +170,20 @@ def _assert_safe_error(error: Exception) -> None:
     assert "/sendPhoto" not in rendered
     assert CAPTION not in rendered
     assert PNG_BYTES.decode("latin1") not in rendered
+
+
+def test_text_only_post_uses_send_message_with_exact_text():
+    from urllib.parse import parse_qs
+    Publisher, Claim, _, _, _ = _api()
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert request.url.path == f"/bot{TOKEN}/sendMessage"
+        assert parse_qs(request.read().decode()) == {"chat_id": [CHAT_ID], "text": [CAPTION]}
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 912}})
+    client, publisher = _publisher(Publisher, handler)
+    try:
+        assert publisher.publish(Claim(1, 2, 1, CAPTION, None, None)).message_id == 912
+    finally:
+        client.close()
+    assert len(requests) == 1

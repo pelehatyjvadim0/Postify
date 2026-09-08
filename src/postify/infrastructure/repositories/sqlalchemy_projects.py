@@ -5,7 +5,6 @@ from typing import Any
 from sqlalchemy import select, text
 
 from postify.domain.projects.models import (
-    CallToAction,
     ChannelConnection,
     ContentFormat,
     ContentProject,
@@ -18,7 +17,6 @@ from postify.application.projects.runtime_configuration import (
     RuntimeChannel,
 )
 from postify.infrastructure.database.models import (
-    CallToActionModel,
     ChannelConnectionModel,
     ContentFormatModel,
     ContentProjectModel,
@@ -83,22 +81,6 @@ class SqlAlchemyProjectRepository:
                     .order_by(ContentFormatModel.id)
                 ).all()
             )
-            ctas = tuple(
-                CallToAction(
-                    item.id,
-                    item.project_id,
-                    item.name,
-                    item.text,
-                    item.link_mode,
-                    item.custom_url,
-                    item.enabled,
-                )
-                for item in session.scalars(
-                    select(CallToActionModel)
-                    .where(CallToActionModel.project_id == project_id)
-                    .order_by(CallToActionModel.id)
-                ).all()
-            )
             channels = tuple(
                 RuntimeChannel(
                     ChannelConnection(
@@ -125,7 +107,6 @@ class SqlAlchemyProjectRepository:
                     item.project_id,
                     item.format_id,
                     item.channel_id,
-                    item.cta_id,
                     item.enabled,
                 )
                 for item in session.scalars(
@@ -134,7 +115,7 @@ class SqlAlchemyProjectRepository:
                     .order_by(PublicationRouteModel.id)
                 ).all()
             )
-        return ProjectRuntimeGraph(project, sources, formats, ctas, channels, routes)
+        return ProjectRuntimeGraph(project, sources, formats, channels, routes)
 
     def create_project_graph(self, graph) -> ContentProject:
         with self._session_factory() as session:
@@ -158,20 +139,6 @@ class SqlAlchemyProjectRepository:
                 else:
                     for name, value in values.items():
                         setattr(model, name, value)
-                for source in graph.sources:
-                    session.add(
-                        SourceConnectionModel(
-                            id=source.id,
-                            project_id=source.project_id,
-                            provider=source.provider,
-                            name=source.name,
-                            enabled=source.enabled,
-                            configuration=source.configuration,
-                            schedule=source.schedule,
-                            created_at=graph.project.created_at,
-                            updated_at=graph.project.updated_at,
-                        )
-                    )
                 for content_format in graph.formats:
                     session.add(
                         ContentFormatModel(
@@ -181,20 +148,6 @@ class SqlAlchemyProjectRepository:
                             kind=content_format.kind,
                             instructions=content_format.instructions,
                             enabled=content_format.enabled,
-                            created_at=graph.project.created_at,
-                            updated_at=graph.project.updated_at,
-                        )
-                    )
-                for cta in graph.ctas:
-                    session.add(
-                        CallToActionModel(
-                            id=cta.id,
-                            project_id=cta.project_id,
-                            name=cta.name,
-                            text=cta.text,
-                            link_mode=cta.link_mode,
-                            custom_url=cta.custom_url,
-                            enabled=cta.enabled,
                             created_at=graph.project.created_at,
                             updated_at=graph.project.updated_at,
                         )
@@ -222,12 +175,7 @@ class SqlAlchemyProjectRepository:
                             project_id=route.project_id,
                             format_id=route.format_id,
                             channel_id=route.channel_id,
-                            cta_id=route.cta_id,
                             enabled=route.enabled,
-                            schedule={
-                                "autopublish": True,
-                                "slots": ["09:00", "14:00", "19:00"],
-                            },
                             created_at=graph.project.created_at,
                             updated_at=graph.project.updated_at,
                         )
@@ -236,7 +184,6 @@ class SqlAlchemyProjectRepository:
                     "content_projects",
                     "source_connections",
                     "content_formats",
-                    "calls_to_action",
                     "channel_connections",
                     "publication_routes",
                 ):
@@ -368,11 +315,31 @@ class SqlAlchemyProjectRepository:
                 item = session.scalar(
                     select(model).where(
                         model.project_id == project_id, model.id == resource_id
-                    )
+                    ).with_for_update()
                 )
                 if item is None:
                     raise LookupError(resource_id)
-                for name, value in _resource_persistence_values(resource, payload).items():
+                values = _resource_persistence_values(resource, payload)
+                destination_changed = (
+                    resource == "routes" and values["channel_id"] != item.channel_id
+                ) or (
+                    resource == "channels" and (
+                        values["provider"] != item.provider
+                        or values["configuration"] != item.configuration
+                    )
+                )
+                if destination_changed:
+                    predicate = "r.id=:resource" if resource == "routes" else "r.channel_id=:resource"
+                    active = session.execute(text(f"""
+                        SELECT p.id FROM content_packages p
+                        JOIN publication_routes r ON r.id=p.route_id AND r.project_id=p.project_id
+                        LEFT JOIN deliveries d ON d.project_id=p.project_id AND d.package_id=p.id
+                        WHERE p.project_id=:project AND {predicate}
+                          AND (p.status='approved' OR d.status IN ('sending','uncertain')) LIMIT 1
+                    """), {"project": project_id, "resource": resource_id}).scalar_one_or_none()
+                    if active is not None:
+                        raise ValueError("Назначение связано с принятым постом или незавершённой отправкой")
+                for name, value in values.items():
                     if value is not None or name != "encrypted_secret":
                         setattr(item, name, value)
                 item.updated_at = now
@@ -404,7 +371,6 @@ class SqlAlchemyProjectRepository:
         self,
         project_id: int,
         sources: tuple[dict[str, object], ...],
-        routes: tuple[dict[str, object], ...],
         now: datetime,
     ) -> dict[str, int]:
         with self._session_factory() as session:
@@ -418,33 +384,17 @@ class SqlAlchemyProjectRepository:
                         )
                     ).all()
                 }
-                route_models = {
-                    item.id: item
-                    for item in session.scalars(
-                        select(PublicationRouteModel).where(
-                            PublicationRouteModel.project_id == project_id,
-                            PublicationRouteModel.id.in_(item["id"] for item in routes),
-                        )
-                    ).all()
-                }
-                if len(source_models) != len(sources) or len(route_models) != len(routes):
+                if len(source_models) != len(sources):
                     raise LookupError("schedule_resource")
                 for values in sources:
                     source = source_models[values["id"]]
                     source.schedule = values["schedule"]
                     source.updated_at = now
-                for values in routes:
-                    route = route_models[values["id"]]
-                    route.schedule = {
-                        "autopublish": values["autopublish"],
-                        "slots": list(values["slots"]),
-                    }
-                    route.updated_at = now
                 session.commit()
             except BaseException:
                 session.rollback()
                 raise
-        return {"sources": len(sources), "routes": len(routes)}
+        return {"sources": len(sources)}
 
     def get_resource(
         self, project_id: int, resource: str, resource_id: int
@@ -468,14 +418,11 @@ class SqlAlchemyProjectRepository:
         project_id: int,
         format_id: int,
         channel_id: int,
-        cta_id: int | None,
     ) -> None:
         references = [
             (ContentFormatModel, format_id),
             (ChannelConnectionModel, channel_id),
         ]
-        if cta_id is not None:
-            references.append((CallToActionModel, cta_id))
         with self._session_factory() as session:
             for model, resource_id in references:
                 found = session.scalar(
@@ -552,7 +499,6 @@ def _resource_model(resource: str):
     models = {
         "sources": SourceConnectionModel,
         "channels": ChannelConnectionModel,
-        "ctas": CallToActionModel,
         "routes": PublicationRouteModel,
     }
     try:
@@ -570,19 +516,9 @@ def _resource_persistence_values(resource: str, payload: dict[str, object]) -> d
             values["encrypted_secret"] = payload["encrypted_secret"]
             values["connection_status"] = "configured"
         return values
-    if resource == "ctas":
-        values = {name: payload[name] for name in ("name", "text", "link_mode", "enabled")}
-        custom_url = payload.get("custom_url")
-        values["custom_url"] = None if custom_url is None else str(custom_url)
-        return values
     if resource == "routes":
         return {
             **{name: payload[name] for name in ("format_id", "channel_id", "enabled")},
-            "cta_id": payload.get("cta_id"),
-            "schedule": payload.get(
-                "schedule",
-                {"autopublish": True, "slots": ["09:00", "14:00", "19:00"]},
-            ),
         }
     raise ValueError("unknown_resource")
 
@@ -595,8 +531,6 @@ def _resource_values(resource: str, model: Any) -> dict[str, object]:
             name: getattr(model, name)
             for name in ("id", "provider", "name", "enabled", "configuration", "connection_status")
         } | {"secretConfigured": model.encrypted_secret is not None}
-    if resource == "ctas":
-        return {name: getattr(model, name) for name in ("id", "name", "text", "link_mode", "custom_url", "enabled")}
     if resource == "routes":
-        return {name: getattr(model, name) for name in ("id", "format_id", "channel_id", "cta_id", "enabled", "schedule")}
+        return {name: getattr(model, name) for name in ("id", "format_id", "channel_id", "enabled")}
     raise ValueError("unknown_resource")

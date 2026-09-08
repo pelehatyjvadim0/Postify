@@ -12,6 +12,5 @@ class ProjectRepository(Protocol):
         self,
         project_id: int,
         sources: tuple[dict[str, object], ...],
-        routes: tuple[dict[str, object], ...],
         now,
     ) -> dict[str, int]: ...

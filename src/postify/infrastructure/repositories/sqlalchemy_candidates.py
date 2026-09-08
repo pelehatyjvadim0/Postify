@@ -28,15 +28,16 @@ class SqlAlchemyCandidateRepository:
                 "url": candidate.url,
                 "discovered_at": candidate.discovered_at,
                 "raw_payload": dict(candidate.raw_payload),
+                "source_text": candidate.source_text,
+                "published_at": candidate.published_at,
+                "source_connection_id": candidate.source_connection_id,
             }
             for candidate in candidates
         ]
         statement = (
             insert(CandidateModel)
             .values(rows)
-            .on_conflict_do_nothing(
-                constraint="uq_candidates_project_source_name_source_id"
-            )
+            .on_conflict_do_nothing()
             .returning(CandidateModel.id)
         )
 

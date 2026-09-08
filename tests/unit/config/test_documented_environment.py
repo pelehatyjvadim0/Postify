@@ -16,7 +16,7 @@ def test_documented_environment_loading_preserves_spaced_values(tmp_path: Path) 
         [
             "sh",
             "-c",
-            'set -a; . "$1"; set +a; printf "%s\\n%s\\n" "$POSTIFY_ON_CALENDAR" "$SELECTION_AUDIENCE"',
+            'set -a; . "$1"; set +a; printf "%s\\n%s\\n" "$CONTENT_ANALYZER" "$CONTENT_MODEL"',
             "sh",
             str(environment_file),
         ],
@@ -27,23 +27,6 @@ def test_documented_environment_loading_preserves_spaced_values(tmp_path: Path) 
     )
 
     assert result.stdout.splitlines() == [
-        "0 9 * * 1-5",
-        "Читатели практических материалов",
+        "codex",
+        "gpt-5.6-terra",
     ]
-
-
-def test_documented_pg_dump_target_strips_sqlalchemy_driver_safely() -> None:
-    result = subprocess.run(
-        [
-            "sh",
-            "-c",
-            'DATABASE_URL="postgresql+psycopg://postify:secret@db:5432/postify"; '
-            'PG_DUMP_DATABASE_URL="postgresql:${DATABASE_URL#postgresql+psycopg:}"; '
-            'printf "%s" "$PG_DUMP_DATABASE_URL"',
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.stdout == "postgresql://postify:secret@db:5432/postify"

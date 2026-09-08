@@ -53,39 +53,17 @@ def _runtime_environment(database_url: str, media_dir: Path) -> dict[str, str]:
     environment.update(
         {
             "DATABASE_URL": database_url,
-            "HN_ALGOLIA_URL": "https://hn.example.test/api/v1/search_by_date",
-            "HN_QUERY": "python",
-            "HN_TAGS": "story",
-            "HN_HITS_PER_PAGE": "1",
             "DATABASE_READINESS_TIMEOUT_SECONDS": "5",
             "RUN_ONCE_WAIT_TIMEOUT_SECONDS": "5",
-            "POSTGRESQL_SYSTEMD_UNIT": "postgresql.service",
-            "POSTGRESQL_OWNERSHIP": "dedicated",
             "POSTIFY_ON_CALENDAR": "0 7 * * 1-5",
             "POSTIFY_TIMEZONE": "Europe/Moscow",
-            "SELECTION_POLICY_VERSION": "wheel-e2e-v1",
-            "SELECTION_LANGUAGE": "ru",
-            "SELECTION_AUDIENCE": "Тестовая аудитория",
-            "SELECTION_RULES": (
-                "advertising,out_of_scope,hiring,technical_without_use"
-            ),
-            "SELECTION_TOPIC_TERMS": "практика",
-            "SELECTION_TOPIC_EXCLUSION_TERMS": "лотерея",
-            "SELECTION_ADVERTISING_TERMS": "реклама",
-            "SELECTION_HIRING_TERMS": "вакансия",
-            "SELECTION_TECHNICAL_RELEASE_TERMS": "релиз",
-            "SELECTION_PRACTICAL_TERMS": "пример",
-            "SELECTION_FRESHNESS_DAYS": "30",
-            "CONTENT_DAILY_ANALYSIS_LIMIT": "12",
-            "CONTENT_DAILY_PACKAGE_LIMIT": "3",
-            "CONTENT_PRIORITY_FRESHNESS_DAYS": "14",
-            "CONTENT_FRESH_SHARE_PERCENT": "90",
-            "CONTENT_RESERVE_SHARE_PERCENT": "10",
-            "CONTENT_REVIEW_REQUIRED": "true",
+            "PROJECT_TOPIC": "python",
+            "PROJECT_LANGUAGE": "ru",
+            "PROJECT_AUDIENCE": "Тестовая аудитория",
+            "CONTENT_BATCH_SIZE": "12",
             "CONTENT_MEDIA_DIR": str(media_dir),
-            "CONTENT_ARTICLE_MAX_BYTES": "2000000",
             "CONTENT_MEDIA_MAX_BYTES": "10000000",
-            "CONTENT_CODEX_TIMEOUT_SECONDS": "600",
+            "CONTENT_ANALYSIS_TIMEOUT_SECONDS": "600",
         }
     )
     return environment
@@ -93,23 +71,28 @@ def _runtime_environment(database_url: str, media_dir: Path) -> dict[str, str]:
 
 def _migrate_installed_wheel(python: Path, environment: dict[str, str]) -> None:
     migration = """
+import os
 from importlib.resources import as_file, files
+from pathlib import Path
 from alembic import command
 from alembic.config import Config
+import postify
 
+assert Path(postify.__file__).is_relative_to(Path(os.environ['POSTIFY_INSTALLED_WHEEL_DIR']))
 with as_file(files('postify.infrastructure.database.migrations')) as path:
     config = Config()
     config.set_main_option('script_location', str(path))
     command.upgrade(config, 'head')
 """
-    subprocess.run(
+    result = subprocess.run(
         [str(python), "-c", migration],
         cwd=python.parents[2],
         env={**environment, "POSTIFY_ALEMBIC_DATABASE_URL": environment["DATABASE_URL"]},
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
 
 
 def _wait_for_response(url: str, process: subprocess.Popen[str]) -> httpx.Response:
@@ -184,23 +167,16 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
             ),
         } <= names
 
-        virtualenv = tmp_path / "installed"
-        subprocess.run(
-            ["uv", "venv", "--python", sys.executable, str(virtualenv)],
-            env=tool_environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        python = virtualenv / "bin/python"
+        installed = tmp_path / "installed-wheel"
         subprocess.run(
             [
                 "uv",
                 "pip",
                 "install",
                 "--offline",
-                "--python",
-                str(python),
+                "--no-deps",
+                "--target",
+                str(installed),
                 str(wheel),
             ],
             env=tool_environment,
@@ -214,9 +190,9 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
         assert not outside_checkout.resolve().is_relative_to(ROOT.resolve())
         isolated_url = _schema_url(database_url, schema_name)
         environment = _runtime_environment(isolated_url, tmp_path / "media")
-        environment["PATH"] = (
-            f"{virtualenv / 'bin'}{os.pathsep}{environment.get('PATH', '')}"
-        )
+        environment["PYTHONPATH"] = str(installed)
+        environment["POSTIFY_INSTALLED_WHEEL_DIR"] = str(installed)
+        python = Path(sys.executable)
         _migrate_installed_wheel(python, environment)
 
         port = _free_port()
@@ -224,7 +200,7 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
         with log_path.open("w") as log:
             process = subprocess.Popen(
                 [
-                    str(virtualenv / "bin/postify"),
+                    str(Path(sys.prefix) / "bin" / "postify"),
                     "ui",
                     "--host",
                     "127.0.0.1",
@@ -251,7 +227,7 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
                 )
 
                 assert root.status_code == 200
-                assert "Postify" in root.text
+                assert "AutoPostTG" in root.text
                 assert styles.status_code == 200
                 assert "--forest" in styles.text
                 assert bootstrap.status_code == 200
@@ -265,7 +241,7 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
                 stored_settings = settings.json()
                 assert stored_settings["channels"] == []
                 assert stored_settings["routes"] == []
-                assert stored_settings["sources"][0]["configuration"]["query"] == "python"
+                assert stored_settings["sources"] == []
                 assert ambient_query not in settings.text
                 assert ambient_token not in settings.text
                 assert "secretConfigured" not in settings.text

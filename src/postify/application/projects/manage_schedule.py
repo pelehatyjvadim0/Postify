@@ -19,12 +19,4 @@ class ManageProjectSchedule:
             {"id": item["id"], "schedule": item["schedule"]}
             for item in payload["sources"]
         )
-        routes = tuple(
-            {
-                "id": item["id"],
-                "autopublish": item["autopublish"],
-                "slots": tuple(item["slots"]),
-            }
-            for item in payload["routes"]
-        )
-        return self._repository.update_schedules(project_id, sources, routes, now)
+        return self._repository.update_schedules(project_id, sources, now)

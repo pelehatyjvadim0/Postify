@@ -39,21 +39,12 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
                 "now": NOW,
             },
         ).scalar_one()
-        connection.execute(
-            text(
-                "INSERT INTO candidate_decisions "
-                "(project_id, candidate_id, status, reason, explanation, signals, policy_version, decided_at) "
-                "VALUES (1, :candidate_id, 'selected', 'eligible_for_ai', 'eligible', "
-                "'{}'::jsonb, 'v1', :now)"
-            ),
-            {"candidate_id": candidate_id, "now": NOW},
-        )
         attempt_id = connection.execute(
             text(
                 "INSERT INTO content_attempts "
-                "(project_id, candidate_id, attempt_no, tier, status, source_url, article_title, "
+                "(project_id, candidate_id, attempt_no, status, source_url, article_title, "
                 "article_text, analysis, started_at, finished_at) "
-                "VALUES (1, :candidate_id, 1, 'fresh', 'packaged', :url, 'title', "
+                "VALUES (1, :candidate_id, 1, 'packaged', :url, 'title', "
                 "'article', 'analysis', :now, :now) RETURNING id"
             ),
             {"candidate_id": candidate_id, "url": f"https://source.test/{marker}", "now": NOW},
@@ -62,9 +53,9 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
             text(
                 "INSERT INTO content_packages "
                 "(project_id, attempt_id, source_url, context, analysis, post_text, media_path, media_mime, "
-                "media_source_type, media_source_url, review_required, status, created_at, updated_at) "
+                "media_source_type, media_source_url, status, created_at, updated_at) "
                 "VALUES (1, :attempt_id, :url, 'context', 'analysis', :post_text, :media_path, "
-                "'image/png', 'og', :media_url, true, :status, :now, :now) RETURNING id"
+                "'image/png', 'og', :media_url, :status, :now, :now) RETURNING id"
             ),
             {
                 "attempt_id": attempt_id,
@@ -80,24 +71,40 @@ def _seed_package(engine, *, status: str = "approved", marker: str | None = None
 
 def _repository(engine):
     _, Repository = _api()
-    return Repository(sessionmaker(engine))
+    return Repository(sessionmaker(engine), route_id=901, channel_id=801)
 
 
-def test_reserve_next_claims_only_one_oldest_approved_package(
+def _seed_delivery_package(engine, *, status="approved", marker=None, route_id=901, scheduled_at=NOW):
+    """Give delivery safety fixtures an explicit destination, plan and one-hour test window."""
+    package_id = _seed_package(engine, status=status, marker=marker)
+    with engine.begin() as connection:
+        if connection.execute(text("SELECT id FROM publication_routes WHERE id=:id"), {"id":route_id}).scalar_one_or_none() is None:
+            assert route_id == 901, "Non-default routes must be explicitly seeded by the test"
+            for statement in (
+                "INSERT INTO content_formats(id,project_id,name,kind,instructions,enabled,created_at,updated_at) VALUES (701,1,'Delivery','post','Text',true,:now,:now)",
+                "INSERT INTO channel_connections(id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at) VALUES (801,1,'telegram','Delivery',true,'{}','ok',:now,:now)",
+                "INSERT INTO publication_routes(id,project_id,format_id,channel_id,enabled,created_at,updated_at) VALUES (901,1,701,801,true,:now,:now)",
+            ):
+                connection.execute(text(statement), {"now":NOW})
+        connection.execute(text("UPDATE content_packages SET scheduled_at=:at,route_id=:route WHERE id=:id"), {"id":package_id,"route":route_id,"at":scheduled_at})
+    return package_id
+
+
+def test_reserve_next_claims_only_one_earliest_planned_approved_package(
     migrated_database_url: str,
 ) -> None:
-    # Поломка: wrong status filter, reverse FIFO или reserve two.
+    # Порядок назначенной даты важнее порядка создания; rejected не отправляется.
     engine = create_engine(migrated_database_url)
-    rejected_id = _seed_package(engine, status="rejected", marker="first-rejected")
-    first_id = _seed_package(engine, marker="second-approved")
-    second_id = _seed_package(engine, marker="third-approved")
+    rejected_id = _seed_delivery_package(engine, status="rejected", marker="first-rejected")
+    first_id = _seed_delivery_package(engine, marker="second-approved")
+    second_id = _seed_delivery_package(engine, marker="third-approved", scheduled_at=NOW-timedelta(seconds=1))
     repository = _repository(engine)
     try:
         first = repository.reserve_next(now=NOW)
         second = repository.reserve_next(now=NOW)
 
-        assert first is not None and first.package_id == first_id
-        assert second is not None and second.package_id == second_id
+        assert first is not None and first.package_id == second_id
+        assert second is not None and second.package_id == first_id
         assert rejected_id not in {first.package_id, second.package_id}
         assert first.attempt_no == second.attempt_no == 1
     finally:
@@ -109,8 +116,8 @@ def test_two_concurrent_claims_receive_different_packages(
 ) -> None:
     # Поломка: удален FOR UPDATE SKIP LOCKED и два worker берут один пакет.
     engine = create_engine(migrated_database_url, pool_size=4)
-    first_id = _seed_package(engine, marker="concurrent-first")
-    second_id = _seed_package(engine, marker="concurrent-second")
+    first_id = _seed_delivery_package(engine, marker="concurrent-first")
+    second_id = _seed_delivery_package(engine, marker="concurrent-second")
     repository = _repository(engine)
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -127,8 +134,8 @@ def test_claim_skips_a_lock_held_on_the_oldest_package(
 ) -> None:
     # Поломка: удалённый SKIP LOCKED блокирует слот вместо выбора следующего пакета.
     engine = create_engine(migrated_database_url, pool_size=3)
-    first_id = _seed_package(engine, marker="locked-first")
-    second_id = _seed_package(engine, marker="locked-second")
+    first_id = _seed_delivery_package(engine, marker="locked-first")
+    second_id = _seed_delivery_package(engine, marker="locked-second")
     repository = _repository(engine)
     connection = engine.connect()
     transaction = connection.begin()
@@ -146,7 +153,7 @@ def test_claim_skips_a_lock_held_on_the_oldest_package(
 def test_delivery_has_one_row_per_package(migrated_database_url: str) -> None:
     # Поломка: удалён unique package_id и один пакет получает две delivery.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine, marker="unique")
+    package_id = _seed_delivery_package(engine, marker="unique")
     repository = _repository(engine)
     try:
         repository.reserve_next(now=NOW)
@@ -170,9 +177,9 @@ def test_retryable_is_the_only_failure_claimed_again_with_next_attempt(
     # Поломка: retryable теряется, terminal ретраится или attempt_no не растёт.
     FailureKind, _ = _api()
     engine = create_engine(migrated_database_url)
-    retry_id = _seed_package(engine, marker="retryable")
-    failed_id = _seed_package(engine, marker="failed")
-    uncertain_id = _seed_package(engine, marker="uncertain")
+    retry_id = _seed_delivery_package(engine, marker="retryable")
+    failed_id = _seed_delivery_package(engine, marker="failed")
+    uncertain_id = _seed_delivery_package(engine, marker="uncertain")
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)
@@ -193,12 +200,12 @@ def test_retryable_is_the_only_failure_claimed_again_with_next_attempt(
         engine.dispose()
 
 
-def test_older_retryable_precedes_later_new_package_in_fifo_order(migrated_database_url: str) -> None:
+def test_earlier_planned_retryable_precedes_later_planned_new_package(migrated_database_url: str) -> None:
     # Поломка: CASE new-first бесконечно отодвигает ранний retryable поздними новыми пакетами.
     FailureKind, _ = _api()
     engine = create_engine(migrated_database_url)
-    retryable_id = _seed_package(engine, marker="older-retryable")
-    later_id = _seed_package(engine, marker="later-new")
+    retryable_id = _seed_delivery_package(engine, marker="older-retryable", scheduled_at=NOW-timedelta(seconds=1))
+    later_id = _seed_delivery_package(engine, marker="later-new")
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)
@@ -233,14 +240,14 @@ def test_retry_is_reserved_only_by_its_persisted_route_and_channel(
             """,
             """
                 INSERT INTO publication_routes
-                    (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
-                VALUES (901,1,701,801,true,'{}',:now,:now),
-                       (902,1,702,802,true,'{}',:now,:now)
+                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
+                VALUES (901,1,701,801,true,:now,:now),
+                       (902,1,702,802,true,:now,:now)
             """,
         ):
             connection.execute(text(statement), {"now": NOW})
-    retryable_id = _seed_package(engine, marker="route-one-retry")
-    route_two_id = _seed_package(engine, marker="route-two-new")
+    retryable_id = _seed_delivery_package(engine, marker="route-one-retry", route_id=901)
+    route_two_id = _seed_delivery_package(engine, marker="route-two-new", route_id=902)
     first_route = Repository(
         sessionmaker(engine), project_id=1, route_id=901, channel_id=801
     )
@@ -299,12 +306,12 @@ def test_manual_delivery_retry_action_resolves_only_project_owned_retryable_rout
         connection.execute(
             text(
                 """INSERT INTO publication_routes
-                (id,project_id,format_id,channel_id,enabled,schedule,created_at,updated_at)
-                VALUES (911,1,711,811,true,'{}',:now,:now)"""
+                (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
+                VALUES (911,1,711,811,true,:now,:now)"""
             ),
             {"now": NOW},
         )
-    package_id = _seed_package(engine, marker="manual-delivery-retry")
+    package_id = _seed_delivery_package(engine, marker="manual-delivery-retry", route_id=911)
     repository = Repository(
         sessionmaker(engine), project_id=1, route_id=911, channel_id=811
     )
@@ -338,7 +345,7 @@ def test_stale_sending_becomes_uncertain_with_one_attempt(
 ) -> None:
     # Поломка: stale conversion пропущена или uncertain автоматически retry.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine, marker="stale")
+    package_id = _seed_delivery_package(engine, marker="stale", scheduled_at=NOW-timedelta(minutes=30))
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW - timedelta(minutes=30))
@@ -372,7 +379,7 @@ def test_confirmation_atomically_persists_attempt_delivery_message_and_package(
 ) -> None:
     # Поломка: confirm не пишет message_id/attempt/package published в одном commit.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine, marker="confirmed")
+    package_id = _seed_delivery_package(engine, marker="confirmed")
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)
@@ -420,7 +427,7 @@ def test_confirmation_rejects_missing_or_nonpositive_integer_message_id(
 ) -> None:
     # Поломка: package published без целочисленного confirmation.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine)
+    package_id = _seed_delivery_package(engine)
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)
@@ -440,7 +447,7 @@ def test_confirmation_sql_failure_rolls_back_every_write(
 ) -> None:
     # Поломка: attempt INSERT failure оставляет delivery/package published.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine, marker="rollback")
+    package_id = _seed_delivery_package(engine, marker="rollback")
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)
@@ -489,7 +496,7 @@ def test_cleanup_marker_is_persisted_separately_from_confirmation(
 ) -> None:
     # Поломка: confirmation сразу помечает медиа удалённым или cleanup теряется.
     engine = create_engine(migrated_database_url)
-    package_id = _seed_package(engine, marker="cleanup")
+    package_id = _seed_delivery_package(engine, marker="cleanup")
     repository = _repository(engine)
     try:
         claim = repository.reserve_next(now=NOW)

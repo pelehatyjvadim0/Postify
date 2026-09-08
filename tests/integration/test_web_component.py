@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from cryptography.fernet import Fernet
@@ -25,10 +26,10 @@ from tests.unit.web.test_api import ApiClient
 pytestmark = pytest.mark.integration
 
 
-def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
+def test_component_bootstrap_uses_real_project_scoped_repositories(
     migrated_database_url: str,
 ) -> None:
-    # Break caught: composition root returns demo data or dashboard skips the project's SQL scope.
+    # Break caught: composition root returns demo data instead of the active project.
     settings = configured_settings(migrated_database_url)
     engine = create_engine_from_settings(settings)
     try:
@@ -43,7 +44,6 @@ def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
         client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
 
         bootstrap = client.get("/api/v1/bootstrap")
-        dashboard = client.get("/api/v1/projects/1/dashboard")
 
         assert bootstrap.status_code == 200
         assert bootstrap.json()["activeProject"]["id"] == 1
@@ -52,59 +52,7 @@ def test_component_bootstrap_and_dashboard_use_real_project_scoped_repositories(
             "label": "Токен бота",
             "input_type": "password",
         }
-        assert dashboard.status_code == 200
-        assert dashboard.json()["candidate_total"] == 0
     finally:
-        engine.dispose()
-
-
-def test_component_load_more_returns_project_scoped_unresolved_identifiers(
-    migrated_database_url: str,
-) -> None:
-    settings = configured_settings(migrated_database_url)
-    engine = create_engine_from_settings(settings)
-    api = WebApplication(settings, None)
-    client = ApiClient(create_app(WebContainer(api=api)))
-    now = datetime(2026, 8, 17, 10, tzinfo=UTC)
-    try:
-        with engine.begin() as connection:
-            candidate_id = connection.execute(
-                text(
-                    """INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                    VALUES (1,'source','component-unresolved','Unresolved',
-                            'https://example.test/unresolved',:now,'{}') RETURNING id"""
-                ),
-                {"now": now},
-            ).scalar_one()
-            attempt_id = connection.execute(
-                text(
-                    """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'fresh','packaged',
-                            'https://example.test/unresolved',:now) RETURNING id"""
-                ),
-                {"candidate": candidate_id, "now": now},
-            ).scalar_one()
-            package_id = connection.execute(
-                text(
-                    """INSERT INTO content_packages
-                    (project_id,attempt_id,source_url,context,analysis,post_text,
-                     review_required,status,generation_snapshot,created_at,updated_at)
-                    VALUES (1,:attempt,'https://example.test/unresolved','Context',
-                            'Анализ','Post',true,'awaiting_review','{}',:now,:now)
-                    RETURNING id"""
-                ),
-                {"attempt": attempt_id, "now": now},
-            ).scalar_one()
-
-        response = client.post("/api/v1/projects/1/packages/load-more")
-
-        assert response.status_code == 409
-        assert response.json()["code"] == "review_unresolved"
-        assert response.json()["unresolvedPackageIds"] == [package_id]
-    finally:
-        api.close()
         engine.dispose()
 
 
@@ -223,8 +171,8 @@ def test_component_media_uses_persisted_mime(
             attempt_id = connection.execute(
                 text(
                     """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'fresh','packaged',
+                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
+                    VALUES (1,:candidate,1,'packaged',
                             'https://example.test/media',:now) RETURNING id"""
                 ),
                 {"candidate": candidate_id, "now": now},
@@ -234,20 +182,104 @@ def test_component_media_uses_persisted_mime(
                     """INSERT INTO content_packages
                     (project_id,attempt_id,source_url,context,analysis,post_text,
                      media_path,media_mime,media_source_type,media_source_url,
-                     review_required,status,generation_snapshot,created_at,updated_at)
+                     status,generation_snapshot,created_at,updated_at)
                     VALUES (1,:attempt,'https://example.test/media','Context','Анализ',
                             'Post',:path,'image/webp','og','https://cdn.test/a.webp',
-                            true,'approved','{}',:now,:now) RETURNING id"""
+                            'approved','{}',:now,:now) RETURNING id"""
                 ),
                 {"attempt": attempt_id, "path": str(media), "now": now},
             ).scalar_one()
+            future = datetime.now(UTC) + timedelta(days=1)
+            connection.execute(text("""
+                INSERT INTO content_formats
+                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (401,1,'Тестовый формат','text','Короткий пост',true,:now,:now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO channel_connections
+                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                VALUES (401,1,'telegram','Тестовый канал',true,'{"chat_id":"-100-review"}',
+                        'configured',:now,:now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO publication_routes
+                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
+                VALUES (401,1,401,401,true,:now,:now)
+            """), {"now": now})
+            connection.execute(text("""
+                UPDATE content_packages SET scheduled_at=:scheduled,route_id=401
+                WHERE project_id=1 AND id=:id
+            """), {"scheduled": future, "id": package_id})
 
         response = client.get(f"/api/v1/projects/1/media/packages/{package_id}")
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         assert response.headers["content-type"] == "image/webp"
         assert response.content == b"RIFF-component-webp"
     finally:
+        engine.dispose()
+
+
+def test_component_queue_returns_planned_package_in_project_timezone(
+    migrated_database_url: str,
+) -> None:
+    settings = configured_settings(migrated_database_url).model_copy(
+        update={"postify_timezone": "Europe/Moscow"}
+    )
+    engine = create_engine_from_settings(settings)
+    api = WebApplication(settings, None)
+    client = ApiClient(create_app(WebContainer(api=api)))
+    now = datetime.now(UTC)
+    scheduled_at = now + timedelta(hours=1)
+    try:
+        with engine.begin() as connection:
+            candidate_id = connection.execute(text("""
+                INSERT INTO candidates
+                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
+                VALUES (1,'source','queue-component','Queue package',
+                        'https://example.test/queue',:now,'{}'::jsonb)
+                RETURNING id
+            """), {"now": now}).scalar_one()
+            attempt_id = connection.execute(text("""
+                INSERT INTO content_attempts
+                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
+                VALUES (1,:candidate,1,'packaged','https://example.test/queue',:now)
+                RETURNING id
+            """), {"candidate": candidate_id, "now": now}).scalar_one()
+            package_id = connection.execute(text("""
+                INSERT INTO content_packages
+                    (project_id,attempt_id,source_url,context,analysis,post_text,status,
+                     generation_snapshot,created_at,updated_at)
+                VALUES (1,:attempt,'https://example.test/queue','Context','Analysis',
+                        'Planned post','awaiting_review','{}'::jsonb,:now,:now)
+                RETURNING id
+            """), {"attempt": attempt_id, "now": now}).scalar_one()
+            connection.execute(text("""
+                INSERT INTO channel_connections
+                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                VALUES (501,1,'telegram','Queue channel',true,'{"chat_id":"-100-queue"}',
+                        'configured',:now,:now)
+            """), {"now": now})
+            connection.execute(text("""
+                INSERT INTO publication_routes
+                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
+                VALUES (501,1,1,501,true,:now,:now)
+            """), {"now": now})
+            connection.execute(text("""
+                UPDATE content_packages
+                SET scheduled_at=:scheduled_at, route_id=501
+                WHERE project_id=1 AND id=:package_id
+            """), {"scheduled_at": scheduled_at, "package_id": package_id})
+
+        response = client.get("/api/v1/projects/1/queue")
+
+        assert response.status_code == 200, response.text
+        item = next(item for item in response.json()["items"] if item["package_id"] == package_id)
+        assert item["status"] == "awaiting_review"
+        assert datetime.fromisoformat(item["scheduled_at"]) == scheduled_at
+        assert item["slot_time"] == scheduled_at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
+    finally:
+        api.close()
         engine.dispose()
 
 
@@ -287,8 +319,8 @@ def test_component_review_returns_the_committed_package_status(
             attempt_id = connection.execute(
                 text(
                     """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'fresh','packaged',
+                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
+                    VALUES (1,:candidate,1,'packaged',
                             'https://example.test/review',:now) RETURNING id"""
                 ),
                 {"candidate": candidate_id, "now": now},
@@ -298,14 +330,27 @@ def test_component_review_returns_the_committed_package_status(
                     """INSERT INTO content_packages
                     (project_id,attempt_id,source_url,context,analysis,post_text,
                      media_path,media_mime,media_source_type,media_source_url,
-                     review_required,status,generation_snapshot,created_at,updated_at)
+                     status,generation_snapshot,created_at,updated_at)
                     VALUES (1,:attempt,'https://example.test/review','Context','Analysis',
                             'Generated post without source link',:path,'image/png','og',
-                            'https://cdn.test/review.png',true,'awaiting_review','{}'::jsonb,
+                            'https://cdn.test/review.png','awaiting_review','{}'::jsonb,
                             :now,:now) RETURNING id"""
                 ),
                 {"attempt": attempt_id, "path": str(media), "now": now},
             ).scalar_one()
+
+        with engine.begin() as connection:
+            future = datetime.now(UTC) + timedelta(days=1)
+            connection.execute(text("""INSERT INTO content_formats
+                (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
+                VALUES (402,1,'Плановый формат','text','Короткий пост',true,:now,:now)"""), {"now": now})
+            connection.execute(text("""INSERT INTO channel_connections
+                (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
+                VALUES (402,1,'telegram','Плановый канал',true,'{"chat_id":"-100-plan"}','configured',:now,:now)"""), {"now": now})
+            connection.execute(text("""INSERT INTO publication_routes
+                (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
+                VALUES (402,1,402,402,true,:now,:now)"""), {"now": now})
+            connection.execute(text("UPDATE content_packages SET scheduled_at=:at,route_id=402 WHERE id=:id"), {"at": future, "id": package_id})
 
         response = client.post(
             f"/api/v1/projects/1/packages/{package_id}/{action}"
@@ -315,49 +360,6 @@ def test_component_review_returns_the_committed_package_status(
         assert response.json()["status"] == expected_status
     finally:
         api.close()
-        engine.dispose()
-
-
-def test_component_serializes_persisted_material_signals(
-    migrated_database_url: str,
-) -> None:
-    # Break caught: immutable decision signals make a populated materials API return 503.
-    settings = configured_settings(migrated_database_url)
-    engine = create_engine_from_settings(settings)
-    try:
-        client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
-        with engine.begin() as connection:
-            candidate_id = connection.execute(
-                text(
-                    """INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                    VALUES (1,'source','component-material','Материал компонента',
-                            'https://example.test/material',:now,'{}'::jsonb)
-                    RETURNING id"""
-                ),
-                {"now": datetime(2026, 8, 12, 9, tzinfo=UTC)},
-            ).scalar_one()
-            connection.execute(
-                text(
-                    """INSERT INTO candidate_decisions
-                    (project_id,candidate_id,status,reason,explanation,signals,
-                     policy_version,decided_at)
-                    VALUES (1,:candidate,'selected','eligible_for_ai','Полезно',
-                            '{"topic":"automation"}'::jsonb,'component-v1',:now)"""
-                ),
-                {
-                    "candidate": candidate_id,
-                    "now": datetime(2026, 8, 12, 9, tzinfo=UTC),
-                },
-            )
-
-        response = client.get("/api/v1/projects/1/materials")
-
-        assert response.status_code == 200
-        assert response.json()["items"][0]["decision_signals"] == {
-            "topic": "automation"
-        }
-    finally:
         engine.dispose()
 
 
@@ -384,8 +386,8 @@ def test_component_lists_persisted_packages_without_status_filter(
             attempt_id = connection.execute(
                 text(
                     """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,tier,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'fresh','packaged',
+                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
+                    VALUES (1,:candidate,1,'packaged',
                             'https://example.test/package',:now) RETURNING id"""
                 ),
                 {"candidate": candidate_id, "now": now},
@@ -394,9 +396,9 @@ def test_component_lists_persisted_packages_without_status_filter(
                 text(
                     """INSERT INTO content_packages
                     (project_id,attempt_id,source_url,context,analysis,post_text,
-                     review_required,status,generation_snapshot,created_at,updated_at)
+                     status,generation_snapshot,created_at,updated_at)
                     VALUES (1,:attempt,'https://example.test/package','Контекст',
-                            'Анализ','Текст пакета',true,'awaiting_review',
+                            'Анализ','Текст пакета','awaiting_review',
                             '{}'::jsonb,:now,:now)"""
                 ),
                 {"attempt": attempt_id, "now": now},
@@ -407,53 +409,4 @@ def test_component_lists_persisted_packages_without_status_filter(
         assert response.status_code == 200
         assert response.json()["items"][0]["post_text"] == "Текст пакета"
     finally:
-        engine.dispose()
-
-
-def test_component_dashboard_and_journal_include_operational_contract(
-    migrated_database_url: str,
-) -> None:
-    # Поломка review: overview/journal были только counters/run list.
-    settings = configured_settings(migrated_database_url)
-    engine = create_engine_from_settings(settings)
-    api = WebApplication(settings, None)
-    try:
-        now = datetime.now(UTC)
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    """INSERT INTO operation_runs
-                    (project_id,operation,status,failure_code,started_at,finished_at)
-                    VALUES (1,'run_once','failed','run_once_failed',:started,:finished)"""
-                ),
-                {"started": now, "finished": now},
-            )
-
-        client = ApiClient(create_app(WebContainer(api=api)))
-        dashboard = client.get("/api/v1/projects/1/dashboard")
-        journal = client.get("/api/v1/projects/1/operations")
-
-        assert dashboard.status_code == 200
-        assert dashboard.json()["deficit"] == 3
-        assert dashboard.json()["deficit_reasons"] == ["eligible_source_shortage"]
-        assert dashboard.json()["ready_delivery_ids"] == []
-        assert dashboard.json()["signals"][0] == {
-            "severity": "warning",
-            "code": "operation_failed",
-            "count": 1,
-            "ids": [1],
-        }
-        assert dashboard.json()["recent_operations"][0]["operation"] == "run_once"
-        assert dashboard.json()["runtime"] == {
-            "database": "available",
-            "scheduler": "active",
-        }
-        assert journal.json()["operational"]["deficit"] == 3
-        assert journal.json()["operational"]["signals"][0]["code"] == "operation_failed"
-        assert journal.json()["operational"]["runtime"] == {
-            "database": "available",
-            "scheduler": "active",
-        }
-    finally:
-        api.close()
         engine.dispose()

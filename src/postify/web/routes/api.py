@@ -11,8 +11,8 @@ from postify.web.schemas import (
     BootstrapResponse,
     ChannelRequest,
     ConfigurationSettingsRequest,
-    CtaRequest,
     MainSettingsRequest,
+    PackagePlanRequest,
     OperationPollingResponse,
     RouteRequest,
     ScheduleSettingsRequest,
@@ -71,11 +71,6 @@ def bootstrap(request: Request, container: Container):
     return response
 
 
-@router.get("/projects/{project_id}/dashboard")
-def dashboard(project_id: int, container: Container):
-    return _response(container.api.dashboard(project_id))
-
-
 @router.get("/projects/{project_id}/materials")
 def materials(
     project_id: int,
@@ -110,6 +105,13 @@ def package(project_id: int, package_id: int, container: Container):
     return _response(container.api.package(project_id, package_id))
 
 
+@router.patch("/projects/{project_id}/packages/{package_id}/plan")
+def save_plan(project_id: int, package_id: int, body: PackagePlanRequest, container: Container):
+    return _response(container.api.save_plan(
+        project_id, package_id, scheduled_at=body.scheduled_at, route_id=body.route_id
+    ))
+
+
 @router.post("/projects/{project_id}/packages/{package_id}/approve")
 def approve(project_id: int, package_id: int, container: Container):
     return _response(container.api.approve(project_id, package_id))
@@ -118,12 +120,6 @@ def approve(project_id: int, package_id: int, container: Container):
 async def _require_empty_body(request: Request) -> None:
     if await request.body():
         raise HTTPException(status_code=422, detail="request_body_not_allowed")
-
-
-@router.post("/projects/{project_id}/packages/load-more", status_code=202)
-async def load_more(project_id: int, request: Request, container: Container):
-    await _require_empty_body(request)
-    return _response(container.api.load_more(project_id), status_code=202)
 
 
 @router.post("/projects/{project_id}/attempts/{attempt_id}/retry-analysis", status_code=202)
@@ -142,18 +138,6 @@ async def return_to_analysis(project_id: int, package_id: int, request: Request,
 async def regenerate_post(project_id: int, package_id: int, request: Request, container: Container):
     await _require_empty_body(request)
     return _response(container.api.regenerate_post(project_id, package_id), status_code=202)
-
-
-@router.post("/projects/{project_id}/packages/{package_id}/media/replace", status_code=202)
-async def replace_media(project_id: int, package_id: int, request: Request, container: Container):
-    await _require_empty_body(request)
-    return _response(container.api.replace_media(project_id, package_id), status_code=202)
-
-
-@router.post("/projects/{project_id}/packages/{package_id}/publish-now", status_code=202)
-async def publish_now(project_id: int, package_id: int, request: Request, container: Container):
-    await _require_empty_body(request)
-    return _response(container.api.publish_now(project_id, package_id), status_code=202)
 
 
 @router.post("/projects/{project_id}/deliveries/{delivery_id}/retry", status_code=202)
@@ -210,11 +194,6 @@ async def manual_search(project_id: int, request: Request, container: Container)
     return _response(container.api.manual_search(project_id), status_code=202)
 
 
-@router.post("/projects/{project_id}/operations/publish-once", status_code=202)
-def publish_once(project_id: int, container: Container):
-    return _response(container.api.publish_once(project_id), status_code=202)
-
-
 @router.get("/projects/{project_id}/settings")
 def settings(project_id: int, container: Container):
     return _response(container.api.settings(project_id))
@@ -234,11 +213,10 @@ def update_settings(
     }
     if section not in expected or not isinstance(body, expected[section]):
         raise ValueError("unknown_settings_section")
-    return _response(
-        container.api.update_settings(
-            project_id, section, body.model_dump(mode="json", exclude_none=True)
-        )
-    )
+    payload = body.model_dump(mode="json", exclude_none=True)
+    if isinstance(body, ConfigurationSettingsRequest) and "delivery_lateness_seconds" in body.model_fields_set:
+        payload["delivery_lateness_seconds"] = body.delivery_lateness_seconds
+    return _response(container.api.update_settings(project_id, section, payload))
 
 
 def _resources(project_id: int, resource: str, container: Container):
@@ -316,28 +294,6 @@ def update_channel(
 @router.delete("/projects/{project_id}/channels/{resource_id}", status_code=204)
 def delete_channel(project_id: int, resource_id: int, container: Container) -> Response:
     return _delete_resource(project_id, "channels", resource_id, container)
-
-
-@router.get("/projects/{project_id}/ctas")
-def ctas(project_id: int, container: Container):
-    return _resources(project_id, "ctas", container)
-
-
-@router.post("/projects/{project_id}/ctas", status_code=201)
-def create_cta(project_id: int, body: CtaRequest, container: Container):
-    return _create_resource(project_id, "ctas", body, container)
-
-
-@router.put("/projects/{project_id}/ctas/{resource_id}")
-def update_cta(
-    project_id: int, resource_id: int, body: CtaRequest, container: Container
-):
-    return _update_resource(project_id, "ctas", resource_id, body, container)
-
-
-@router.delete("/projects/{project_id}/ctas/{resource_id}", status_code=204)
-def delete_cta(project_id: int, resource_id: int, container: Container) -> Response:
-    return _delete_resource(project_id, "ctas", resource_id, container)
 
 
 @router.get("/projects/{project_id}/routes")

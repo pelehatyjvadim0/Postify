@@ -1,7 +1,5 @@
 from dataclasses import asdict, replace
 from datetime import datetime
-from hashlib import sha256
-import json
 
 from postify.application.ports.project_repository import ProjectRepository
 from postify.domain.projects.models import ContentProject, ProjectConfiguration
@@ -30,35 +28,10 @@ class ManageProject:
             updated = replace(project, **payload, updated_at=now)
         elif section == "configuration":
             values = asdict(project.configuration)
-            if "selection_policy_version" in payload:
-                raise ValueError("Версия политики задаётся системой")
             unknown = set(payload) - set(values)
             if unknown:
                 raise ValueError("Некорректные поля секции Конфигурация")
             values.update(payload)
-            policy_fields = {
-                "selection_rules",
-                "topic_terms",
-                "topic_exclusion_terms",
-                "advertising_terms",
-                "hiring_terms",
-                "technical_release_terms",
-                "practical_terms",
-                "selection_freshness_days",
-            }
-            if policy_fields.intersection(payload):
-                canonical = {
-                    name: values[name] for name in sorted(policy_fields)
-                }
-                digest = sha256(
-                    json.dumps(
-                        canonical,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest()[:12]
-                values["selection_policy_version"] = f"policy-{digest}"
             updated = replace(
                 project,
                 configuration=ProjectConfiguration(**values),

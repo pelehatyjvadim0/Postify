@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-from postify.domain.projects.models import CallToAction, PublicationRoute
+from postify.domain.projects.models import PublicationRoute
 class ManageProjectResources:
     """Application boundary for project-scoped settings resources."""
 
@@ -71,44 +71,22 @@ class ManageProjectResources:
             return self._source(payload)
         if resource == "channels":
             return self._channel(payload)
-        if resource == "ctas":
-            custom_url = payload.get("custom_url")
-            cta = CallToAction(
-                resource_id,
-                project_id,
-                str(payload["name"]),
-                str(payload["text"]),
-                str(payload["link_mode"]),
-                None if custom_url is None else str(custom_url),
-                payload["enabled"],
-            )
-            return {
-                "name": cta.name,
-                "text": cta.text,
-                "link_mode": cta.link_mode,
-                "custom_url": cta.custom_url,
-                "enabled": cta.enabled,
-            }
         if resource == "routes":
             route = PublicationRoute(
                 resource_id,
                 project_id,
                 payload["format_id"],
                 payload["channel_id"],
-                payload.get("cta_id"),
                 payload["enabled"],
             )
             self._repository.validate_route_references(
-                project_id, route.format_id, route.channel_id, route.cta_id
+                project_id, route.format_id, route.channel_id
             )
             values = {
                 "format_id": route.format_id,
                 "channel_id": route.channel_id,
-                "cta_id": route.cta_id,
                 "enabled": route.enabled,
             }
-            if payload.get("schedule") is not None:
-                values["schedule"] = payload["schedule"]
             return values
         raise ValueError("unknown_resource")
 

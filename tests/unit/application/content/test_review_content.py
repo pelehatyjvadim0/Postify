@@ -133,9 +133,9 @@ def test_failed_reject_delete_keeps_rejected_package_recoverable() -> None:
 
 @pytest.mark.parametrize("operation", ["approve", "reject"])
 def test_invalid_review_transition_changes_neither_history_nor_media(operation: str) -> None:
-    # Поломка (gate 6): repeated/terminal review добавляет history или удаляет файл.
+    # Терминальный published нельзя принять или отклонить повторно.
     ReviewContent, InvalidContentTransition = _api()
-    package = _package(status="approved")
+    package = _package(status="published")
     before = list(package.history)
     repository = ReviewRepository(package)
     media = DeletingMedia()
@@ -144,6 +144,6 @@ def test_invalid_review_transition_changes_neither_history_nor_media(operation: 
     with pytest.raises(InvalidContentTransition):
         getattr(review, operation)(7)
 
-    assert package.status == "approved"
+    assert package.status == "published"
     assert package.history == before
     assert media.deleted == []

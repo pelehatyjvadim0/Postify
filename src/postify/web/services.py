@@ -17,16 +17,10 @@ from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
 from postify.adapters.media.local_media_provider import LocalMediaProvider
 from postify.application.content.manual_operations import (
     ManualContentOperations,
-    ReviewUnresolved,
 )
-from postify.application.dashboard.show_dashboard import ShowDashboard
 from postify.application.delivery.manual_operations import (
     DeliveryNotRetryable,
     ManualDeliveryRetry,
-)
-from postify.application.observability.show_status import (
-    RuntimeSnapshot,
-    ShowOperationalStatus,
 )
 from postify.application.observability.record_operation import (
     content_operation_metadata,
@@ -42,7 +36,6 @@ from postify.application.scheduling.project_scheduler import (
 )
 from postify.bootstrap import (
     open_project_publish_once,
-    open_project_replace_media,
     open_project_run_once,
     project_manual_content_operations,
     project_manual_delivery_retry,
@@ -59,10 +52,7 @@ from postify.domain.content.models import (
 from postify.infrastructure.database.engine import create_engine_from_settings
 from postify.infrastructure.repositories.sqlalchemy_dashboard import SqlAlchemyDashboardRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import SqlAlchemyProjectRepository
-from postify.infrastructure.repositories.sqlalchemy_observability import (
-    SqlAlchemyOperationalStatusRepository,
-    SqlAlchemyOperationRunRepository,
-)
+from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
 from postify.infrastructure.repositories.sqlalchemy_schedule import (
     SqlAlchemyScheduleRepository,
 )
@@ -159,16 +149,6 @@ class WebApplication:
         self._operations.close()
         self._engine.dispose()
 
-    def dashboard(self, project_id: int) -> dict[str, object]:
-        project = self._projects.get(project_id)
-        day, start, end = _day_boundaries(project.timezone)
-        return _values(
-            ShowDashboard(self._dashboard).execute(project_id, day, start, end)
-        ) | self._operational(project) | {
-            "automaticAnalysisLimit": project.configuration.daily_analysis_limit,
-            "automaticPackageLimit": project.configuration.daily_package_limit,
-        }
-
     def materials(self, project_id: int, **filters: object) -> dict[str, object]:
         self._projects.get(project_id)
         return {"items": [_values(item) for item in self._dashboard.materials(project_id, **filters)]}
@@ -178,8 +158,23 @@ class WebApplication:
         return {"items": [_values(item) for item in self._dashboard.packages(project_id, **filters)]}
 
     def package(self, project_id: int, package_id: int) -> dict[str, object]:
+        project = self._projects.get(project_id)
+        channels = {item["id"]: item for item in self._resources.list(project_id, "channels")}
+        routes = [
+            {"id": item["id"], "name": channels[item["channel_id"]]["name"]}
+            for item in self._resources.list(project_id, "routes")
+            if item["enabled"] and item["channel_id"] in channels
+            and channels[item["channel_id"]]["enabled"]
+        ]
+        return _values(self._dashboard.package(project_id, package_id)) | {
+            "timezone": project.timezone, "routes": routes,
+        }
+
+    def save_plan(self, project_id: int, package_id: int, *, scheduled_at: datetime, route_id: int):
         self._projects.get(project_id)
-        return _values(self._dashboard.package(project_id, package_id))
+        with self._review(project_id) as action:
+            action.save_plan(package_id, scheduled_at=scheduled_at, route_id=route_id)
+        return self.package(project_id, package_id)
 
     def approve(self, project_id: int, package_id: int) -> dict[str, object]:
         with self._review(project_id) as action:
@@ -207,7 +202,6 @@ class WebApplication:
                 _values(item)
                 for item in self._dashboard.operations(project_id, **filters)
             ],
-            "operational": self._operational(project),
         }
 
     def operation(self, project_id: int, operation_run_id: int) -> dict[str, object]:
@@ -237,20 +231,6 @@ class WebApplication:
         run_id = self._submit_operation(project_id, "manual_search", context=context)
         return {"status": "accepted", "operationRunId": run_id}
 
-    def load_more(self, project_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        try:
-            context = self._manual_content_for(project_id).load_more()
-        except ReviewUnresolved as error:
-            from postify.web.errors import ConflictError
-
-            raise ConflictError(
-                "review_unresolved",
-                {"unresolvedPackageIds": list(error.package_ids)},
-            ) from error
-        run_id = self._submit_operation(project_id, "load_more", context=context)
-        return {"status": "accepted", "requested": 3, "operationRunId": run_id}
-
     def retry_analysis(self, project_id: int, attempt_id: int) -> dict[str, object]:
         self._projects.get(project_id)
         context = self._manual_content_for(project_id).retry_analysis(attempt_id)
@@ -267,35 +247,6 @@ class WebApplication:
         self._projects.get(project_id)
         context = self._manual_content_for(project_id).regenerate_post(package_id)
         run_id = self._submit_operation(project_id, "regenerate_post", context=context)
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def replace_media(self, project_id: int, package_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = self._manual_content_for(project_id).replace_media(package_id)
-        run_id = self._submit_operation(
-            project_id, "replace_media", package_id=package_id, context=context
-        )
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def publish_once(self, project_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        run_id = self._submit_operation(
-            project_id,
-            "publish_once",
-            context=ExecutionContext(
-                mode=ExecutionMode.MANUAL,
-                actor=ExecutionActor.UI,
-                purpose=ExecutionPurpose.PUBLISH_ONCE,
-            ),
-        )
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def publish_now(self, project_id: int, package_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = self._manual_content_for(project_id).publish_now(package_id)
-        run_id = self._submit_operation(
-            project_id, "publish_now", package_id=package_id, context=context
-        )
         return {"status": "accepted", "operationRunId": run_id}
 
     def retry_delivery(self, project_id: int, delivery_id: int) -> dict[str, object]:
@@ -320,7 +271,6 @@ class WebApplication:
             "project": _project(self._projects.get(project_id)),
             "sources": self._resources.list(project_id, "sources"),
             "formats": self._formats(project_id),
-            "ctas": self._resources.list(project_id, "ctas"),
             "channels": self._resources.list(project_id, "channels"),
             "routes": self._resources.list(project_id, "routes"),
         }
@@ -385,45 +335,14 @@ class WebApplication:
     def _manual_delivery_for(self, project_id: int) -> ManualDeliveryRetry:
         return project_manual_delivery_retry(self._sessions, project_id)
 
-    def _operational(self, project) -> dict[str, object]:
-        configuration = project.configuration
-        report = ShowOperationalStatus(
-            SqlAlchemyOperationalStatusRepository(
-                self._sessions, project_id=project.id
-            ),
-            timezone=ZoneInfo(project.timezone),
-            daily_target=configuration.daily_package_limit,
-            analysis_limit=configuration.daily_analysis_limit,
-            package_limit=configuration.daily_package_limit,
-            clock=lambda: datetime.now(UTC),
-        ).execute(RuntimeSnapshot())
-        return {
-            "coverage": report.coverage,
-            "deficit": report.deficit,
-            "deficit_reasons": list(report.deficit_reasons),
-            "ready_delivery_ids": list(report.snapshot.delivery_ready_ids),
-            "runtime": {
-                "database": "available",
-                "scheduler": "active",
-            },
-            "signals": [_values(item) for item in report.signals],
-            "recent_operations": [
-                _values(item) for item in report.latest_operation_runs
-            ],
-        }
-
     @contextmanager
     def _review(self, project_id: int):
-        client = httpx.Client()
-        try:
-            yield project_review_content(
-                self._sessions,
-                project_id,
-                LocalMediaProvider(client, self._settings.content_media_dir, self._settings.content_media_max_bytes, None, url_policy=PublicHttpUrlPolicy()),
-                clock=lambda: datetime.now(UTC),
-            )
-        finally:
-            client.close()
+        yield project_review_content(
+            self._sessions,
+            project_id,
+            LocalMediaProvider(self._settings.content_media_dir),
+            clock=lambda: datetime.now(UTC),
+        )
 
     def _run_once(self, project_id: int, *, context: ExecutionContext):
         with open_project_run_once(
@@ -434,15 +353,6 @@ class WebApplication:
         ) as action:
             return action.execute()
 
-    def _publish_once(self, project_id: int, route_id: int | None = None) -> None:
-        with open_project_publish_once(
-            self._settings,
-            project_id=project_id,
-            route_id=route_id,
-            record_operation=False,
-        ) as action:
-            action.execute()
-
     def _submit_scheduled(self, command: ScheduledCommand) -> None:
         self._projects.get(command.project_id)
         self._submit_operation(
@@ -451,6 +361,7 @@ class WebApplication:
             accepted_run_id=command.operation_run_id,
             route_id=command.route_id,
             scheduled_job_id=command.job_id,
+            package_id=command.package_id,
             context=ExecutionContext(
                 mode=ExecutionMode.AUTOMATIC,
                 actor=ExecutionActor.SCHEDULER,
@@ -503,7 +414,7 @@ class WebApplication:
                     ):
                         raise RuntimeError("manual_content_failed")
                     outcome = "completed"
-                elif kind in {"load_more", "retry_analysis", "return_to_analysis", "regenerate_post"}:
+                elif kind in {"retry_analysis", "return_to_analysis", "regenerate_post"}:
                     from postify.bootstrap import open_project_run_once
                     with open_project_run_once(
                         self._settings, project_id=project_id, record_operation=False,
@@ -514,14 +425,7 @@ class WebApplication:
                     if result.failed:
                         raise RuntimeError("manual_content_failed")
                     outcome = "completed" if result.packages_created else "empty"
-                elif kind == "replace_media":
-                    with open_project_replace_media(
-                        self._settings, project_id=project_id
-                    ) as action:
-                        action.execute(package_id)
-                    metadata["materials_taken"] = 1
-                    outcome = "completed"
-                else:
+                elif kind in {"publish_once", "retry_delivery"}:
                     with open_project_publish_once(
                         self._settings,
                         project_id=project_id,
@@ -531,6 +435,8 @@ class WebApplication:
                         delivery_id=delivery_id,
                     ) as action:
                         outcome = action.execute(package_id=package_id, delivery_id=delivery_id).outcome
+                else:
+                    raise ValueError("unsupported_operation")
             except BaseException:
                 try:
                     journal.fail(

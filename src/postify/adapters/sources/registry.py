@@ -1,71 +1,27 @@
-from urllib.parse import urlsplit
-
 from postify.domain.projects.models import UnsupportedProvider
 
 
 class SourceProviderRegistry:
     def catalog(self) -> tuple[dict[str, object], ...]:
         return ({
-            "code": "hn_algolia",
-            "label": "HN Algolia",
-            "fields": (
-                {
-                    "name": "url",
-                    "label": "Адрес API",
-                    "type": "url",
-                    "required": True,
-                    "protocol": "https",
-                },
-                {"name": "query", "label": "Поисковый запрос", "type": "text", "required": True},
-                {"name": "tags", "label": "Теги", "type": "text", "required": True},
-                {
-                    "name": "hits",
-                    "label": "Материалов за запрос",
-                    "type": "number",
-                    "required": True,
-                    "min": 1,
-                    "max": 1000,
-                },
-            ),
+            "code": "telegram_group",
+            "label": "Telegram-группа",
+            "fields": ({"name": "group_id", "label": "Группа", "type": "text", "required": True},),
         },)
 
     def validate(self, provider: str, configuration: object) -> dict[str, object]:
-        if provider != "hn_algolia":
-            raise UnsupportedProvider(f"Источник {provider} не поддерживается")
-        if not isinstance(configuration, dict):
-            raise ValueError("Конфигурация источника должна быть объектом")
-        extra = set(configuration) - {"url", "query", "tags", "hits"}
-        if extra:
-            raise ValueError("Неизвестные параметры HN Algolia")
-        url = str(configuration.get("url", "")).strip()
-        parts = urlsplit(url)
-        if parts.scheme != "https" or not parts.netloc:
-            raise ValueError("Нужен абсолютный HTTPS URL источника")
-        query = " ".join(str(configuration.get("query", "")).split())
-        tags = " ".join(str(configuration.get("tags", "")).split())
-        hits = configuration.get("hits")
-        if not query or not tags:
-            raise ValueError("query и tags не могут быть пустыми")
-        if type(hits) is not int or not 1 <= hits <= 1000:
-            raise ValueError("hits должен быть от 1 до 1000")
-        return {"url": url, "query": query, "tags": tags, "hits": hits}
+        if provider == "telegram_group":
+            if not isinstance(configuration, dict) or set(configuration) != {"group_id"}:
+                raise ValueError("Нужен идентификатор Telegram-группы")
+            group_id = configuration["group_id"]
+            if not isinstance(group_id, str) or not group_id.strip():
+                raise ValueError("Нужен идентификатор Telegram-группы")
+            return {"group_id": group_id.strip()}
+        raise UnsupportedProvider(f"Источник {provider} не поддерживается")
 
-    def create(self, connection, *, client):
-        from postify.adapters.sources.hn_algolia import HnAlgoliaCandidateSource
-
+    def create(self, connection, *, client, telegram_reader=None):
         configuration = self.validate(connection.provider, connection.configuration)
-        factories = {
-            "hn_algolia": lambda: HnAlgoliaCandidateSource(
-                client=client,
-                url=configuration["url"],
-                query=configuration["query"],
-                tags=configuration["tags"],
-                hits=configuration["hits"],
-            )
-        }
-        try:
-            return factories[connection.provider]()
-        except KeyError:
-            raise UnsupportedProvider(
-                f"Источник {connection.provider} не поддерживается"
-            ) from None
+        if connection.provider == "telegram_group":
+            from postify.adapters.sources.telegram_group import TelegramGroupSource
+            return TelegramGroupSource(connection_id=connection.id, group_id=configuration["group_id"], reader=telegram_reader)
+        raise UnsupportedProvider(f"Источник {connection.provider} не поддерживается")

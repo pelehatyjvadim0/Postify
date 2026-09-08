@@ -23,10 +23,14 @@ class ReviewContent:
     def show(self, id):
         return self.r.get_package(id)
 
+    def save_plan(self, id, *, scheduled_at, route_id):
+        return self.r.save_plan(id, scheduled_at=scheduled_at, route_id=route_id, now=self.clock())
+
     def approve(self, id):
         return self.r.approve(id, now=self.clock())
 
     def reject(self, id):
         p = self.r.reject(id, now=self.clock(), reason=None)
-        self.m.delete(p.media_path)
+        if p.media_path:
+            self.m.delete(p.media_path)
         return p

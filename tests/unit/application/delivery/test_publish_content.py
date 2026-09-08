@@ -210,8 +210,8 @@ def test_failed_cleanup_remains_pending_without_telegram_or_failure_attempt() ->
 def test_real_media_cleanup_error_keeps_publication_pending_without_new_delivery_attempt(
     cleanup: bool,
 ) -> None:
-    # Поломка: LocalMediaProvider.delete поднимает MediaAcquireError, а action отменяет published.
-    from postify.adapters.media.local_media_provider import MediaAcquireError
+    # Поломка: ошибка удаления медиа не должна отменять published.
+    from postify.application.ports.media_provider import MediaCleanupError
 
     _, _, Result, *_ = _api()
     events: list[str] = []
@@ -219,7 +219,7 @@ def test_real_media_cleanup_error_keeps_publication_pending_without_new_delivery
     result = _action(
         RepositoryFake(events, claim=None if cleanup else claim, cleanup=claim if cleanup else None),
         PublisherFake(events),
-        MediaFake(events, error=MediaAcquireError()),
+        MediaFake(events, error=MediaCleanupError()),
     ).execute()
 
     assert result == Result("cleanup_pending", package_id=41)

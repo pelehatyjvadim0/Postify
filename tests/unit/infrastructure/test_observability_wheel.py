@@ -6,10 +6,10 @@ import subprocess
 from zipfile import ZipFile
 
 
-def test_clean_wheel_contains_observability_modules_and_wave_five_head(
+def test_clean_wheel_contains_operation_journal_modules(
     tmp_path: Path,
 ) -> None:
-    # Поломка: clean wheel теряет domain/action/port/repository/migration.
+    # Поломка: clean wheel теряет durable operation journal.
     project_root = Path(__file__).parents[3]
     isolated_source = tmp_path / "source"
     wheelhouse = tmp_path / "wheelhouse"
@@ -35,7 +35,6 @@ def test_clean_wheel_contains_observability_modules_and_wave_five_head(
     assert {
         "postify/domain/observability/models.py",
         "postify/application/observability/record_operation.py",
-        "postify/application/observability/show_status.py",
         "postify/application/ports/observability.py",
         "postify/infrastructure/repositories/sqlalchemy_observability.py",
         "postify/infrastructure/database/migrations/versions/20260809_05_add_operation_runs.py",

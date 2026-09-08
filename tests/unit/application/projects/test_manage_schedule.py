@@ -14,9 +14,9 @@ class Repository:
         self.calls.append(("get", project_id))
         return object()
 
-    def update_schedules(self, project_id, sources, routes, now):
-        self.calls.append(("update_schedules", project_id, sources, routes, now))
-        return {"sources": len(sources), "routes": len(routes)}
+    def update_schedules(self, project_id, sources, now):
+        self.calls.append(("update_schedules", project_id, sources, now))
+        return {"sources": len(sources)}
 
 
 def test_schedule_action_uses_one_atomic_repository_command_with_only_schedule_fields() -> None:
@@ -28,23 +28,17 @@ def test_schedule_action_uses_one_atomic_repository_command_with_only_schedule_f
         41,
         {
             "sources": [{"id": 1, "schedule": "0 8 * * *"}],
-            "routes": [{
-                "id": 9,
-                "autopublish": False,
-                "slots": ["08:30", "13:30", "18:30"],
-            }],
         },
         now=NOW,
     )
 
-    assert result == {"sources": 1, "routes": 1}
+    assert result == {"sources": 1}
     assert repository.calls == [
         ("get", 41),
         (
             "update_schedules",
             41,
             ({"id": 1, "schedule": "0 8 * * *"},),
-            ({"id": 9, "autopublish": False, "slots": ("08:30", "13:30", "18:30")},),
             NOW,
         ),
     ]
