@@ -472,6 +472,23 @@ def test_invalid_review_transition_is_a_conflict_not_validation_error() -> None:
     assert "details" not in response.text
 
 
+def test_expired_publication_plan_has_an_actionable_error_code() -> None:
+    from postify.domain.content.models import PublicationPlanExpired
+
+    stub = ApiStub()
+    client = client_for(stub)
+
+    def expired(project_id: int, package_id: int):
+        raise PublicationPlanExpired("internal details")
+
+    stub.approve = expired
+    response = client.post("/api/v1/projects/1/packages/7/approve")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "publication_plan_expired"
+    assert "internal details" not in response.text
+
+
 def test_all_project_commands_delegate_to_the_application_boundary() -> None:
     # Break caught: route handlers grow their own persistence/domain work instead of dispatching an application action.
     stub = ApiStub()

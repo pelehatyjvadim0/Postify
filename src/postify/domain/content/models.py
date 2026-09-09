@@ -13,6 +13,10 @@ class InvalidContentTransition(ContentValidationError):
     pass
 
 
+class PublicationPlanExpired(InvalidContentTransition):
+    pass
+
+
 class PackageStatus(StrEnum):
     NOT_STARTED = "not_started"
     PROCESSING = "processing"

@@ -191,6 +191,7 @@ function renderPackage(item, node) {
     const media = (delivery ? `<p><button class="button button--quiet" data-action="open-delivery" data-id="${delivery.delivery_id}">Результат отправки</button></p>` : "") + (item.media_available ? `<img class="package-media" src="/api/v1/projects/${escapeHtml(projectId)}/media/packages/${escapeHtml(item.package_id)}" alt="Вложение поста № ${escapeHtml(item.package_id)}">` : "");
 
     openDetail(shortTitle(item.post_text), `<article class="detail-prose">${statusBadge(published ? "published" : item.status)}${media}<div class="rewrite-region"><p class="post-text">${escapeHtml(item.post_text)}</p><div class="rewrite-progress" role="status" hidden>✍️ Пишем новый пост…</div></div>${packagePlanForm({...item, delivery_status: delivery?.status || item.delivery_status, confirmed_at: delivery?.confirmed_at || item.confirmed_at})}<details class="detail-disclosure"><summary>Оригинал</summary><p class="post-text" dir="auto">${escapeHtml(item.original_text || "Оригинал недоступен")}</p>${item.source_url ? externalLink(item.source_url) : ""}</details>${item.analysis ? `<details class="detail-disclosure"><summary>Почему выбран этот материал</summary><p>${escapeHtml(item.analysis)}</p></details>` : ""}</article>`, actions, node);
+    updatePlanApproval(detailContent.querySelector("[data-package-plan]"));
 }
 
 function localPlanTime(date, timezone) {
@@ -211,7 +212,7 @@ function planInstant(value, timezone) {
 
 async function rewritePost(node) {
   const form = detailContent.querySelector("[data-package-plan]");
-  const draft = {date: form.elements.scheduled_local.value, route: form.elements.route_id.value};
+  const draft = {date: form.elements.scheduled_local.value, route: form.elements.route_id.value, editing: !form.querySelector("[data-plan-fields]").hidden};
   const region = detailContent.querySelector(".rewrite-region");
   const scrollTop = detailContent.querySelector(".detail-body").scrollTop;
   const controls = [...detailContent.querySelectorAll("button, input, select")].map((control) => [control, control.disabled]);
@@ -231,6 +232,8 @@ async function rewritePost(node) {
     const updatedForm = detailContent.querySelector("[data-package-plan]");
     updatedForm.elements.scheduled_local.value = draft.date;
     updatedForm.elements.route_id.value = draft.route;
+    const dirty = updatePlanApproval(updatedForm);
+    if (dirty || draft.editing) setPlanEditing(updatedForm, true);
     detailContent.querySelector(".detail-body").scrollTop = scrollTop;
     paintCurrent();
     lastOpener = root.querySelector('[data-action="open-package"][data-id="' + item.package_id + '"]');
@@ -257,10 +260,43 @@ function packagePlanForm(item) {
   const timing = item.status === "published" || item.delivery_status === "published" ? `Опубликован ${relative}` : `Публикация ${relative}`;
   const summary = planned ? `<ul class="publication-plan-summary"><li>${escapeHtml(timing)}</li><li>${escapeHtml(exact)}</li></ul>` : "<p>Укажите дату и канал, чтобы одобрить пост.</p>";
   const hidden = planned ? " hidden" : "";
-  const change = planned && !locked ? `<button class="button button--secondary" type="button" data-action="edit-package-plan">Изменить дату публикации</button>` : "";
-  const routeControl = planned ? `<input type="hidden" name="route_id" value="${escapeHtml(item.route_id)}">` : `<label class="settings-field"><span>Канал</span><select name="route_id" required><option value="">Выберите канал</option>${routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === item.route_id ? " selected" : ""}>${escapeHtml(route.name)}</option>`).join("")}</select></label>`;
-  const form = locked ? "" : `<fieldset class="settings-grid" data-plan-fields${hidden}><label class="settings-field"><span>Дата и время</span><input type="datetime-local" name="scheduled_local" required value="${escapeHtml(saved)}"></label>${routeControl}<div class="plan-confirm-actions"><button class="button button--primary" type="submit">Подтвердить дату</button>${planned ? '<button class="button button--quiet" type="button" data-action="cancel-package-plan">Отмена</button>' : ""}</div></fieldset>`;
-  return `<form data-package-plan data-id="${escapeHtml(item.package_id)}" data-timezone="${escapeHtml(item.timezone)}"><h3>План публикации</h3>${summary}${change}${form}<p data-plan-error class="settings-error" role="alert"></p>${item.status === "approved" && !locked ? "<p>После изменения даты пост нужно одобрить заново.</p>" : ""}</form>`;
+  const change = planned && !locked ? `<button class="button button--secondary" type="button" data-action="edit-package-plan">${item.delivery_status ? "Изменить дату публикации" : "Изменить дату и канал"}</button>` : "";
+  const unavailableRoute = item.route_id && !routes.some(route => route.id === item.route_id);
+  const routeControl = item.delivery_status ? `<input type="hidden" name="route_id" value="${escapeHtml(item.route_id)}">` : `<label class="settings-field"><span>Канал</span><select name="route_id" required><option value=""${!item.route_id ? " selected" : ""}>Выберите канал</option>${unavailableRoute ? `<option value="${escapeHtml(item.route_id)}" selected disabled>Канал недоступен</option>` : ""}${routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === item.route_id ? " selected" : ""}>${escapeHtml(route.name)}</option>`).join("")}</select></label>`;
+  const form = locked ? "" : `<fieldset class="settings-grid" data-plan-fields${hidden}><label class="settings-field"><span>Дата и время</span><input type="datetime-local" name="scheduled_local" required value="${escapeHtml(saved)}"></label>${routeControl}<div class="plan-confirm-actions"><button class="button button--primary" type="submit">Сохранить план</button>${planned ? '<button class="button button--quiet" type="button" data-action="cancel-package-plan">Отмена</button>' : ""}</div></fieldset>`;
+  return `<form data-package-plan data-id="${escapeHtml(item.package_id)}" data-timezone="${escapeHtml(item.timezone)}" data-scheduled-at="${escapeHtml(item.scheduled_at || "")}" data-route-id="${escapeHtml(item.route_id || "")}"><h3>План публикации</h3>${summary}${change}${form}<p data-plan-error class="settings-error" role="alert"></p>${item.status === "approved" && !locked ? "<p>После изменения плана пост нужно одобрить заново.</p>" : ""}</form>`;
+}
+
+function updatePlanApproval(form) {
+  const date = form.elements.scheduled_local;
+  const route = form.elements.route_id;
+  if (!date || !route) return false;
+  const dirty = date.value !== date.defaultValue || route.value !== form.dataset.routeId;
+  const approve = detailContent.querySelector('[data-action="approve-package"]');
+  if (approve) approve.disabled = dirty || !date.defaultValue || !form.dataset.routeId || Boolean(route.selectedOptions?.[0]?.disabled);
+  return dirty;
+}
+
+function setPlanEditing(form, editing) {
+  form.querySelector("[data-plan-fields]").hidden = !editing;
+  const change = form.querySelector('[data-action="edit-package-plan"]');
+  if (change) change.hidden = editing;
+}
+
+function cancelPlan(form) {
+  form.reset();
+  form.querySelector("[data-plan-error]").textContent = "";
+  setPlanEditing(form, false);
+  updatePlanApproval(form);
+  form.querySelector('[data-action="edit-package-plan"]').focus();
+}
+
+function showExpiredPlan(packageId) {
+  const form = detailContent.querySelector("[data-package-plan]");
+  if (form?.dataset.id !== packageId || !form.querySelector("[data-plan-fields]")) return;
+  form.querySelector("[data-plan-error]").textContent = "Время публикации уже прошло. Измените дату публикации, прежде чем одобрить пост.";
+  setPlanEditing(form, true);
+  form.elements.scheduled_local.focus();
 }
 
 async function savePlan(form) {
@@ -300,7 +336,7 @@ async function savePlan(form) {
           ? "План не сохранён: проверьте дату и канал."
           : "План не сохранён из-за сбоя соединения. Повторите попытку.";
       controls.forEach(([control, disabled]) => { control.disabled = disabled; });
-      button.textContent = "Подтвердить дату";
+      button.textContent = "Сохранить план";
       return;
     }
   }
@@ -351,6 +387,12 @@ async function mutate(node) {
   node.disabled = true;
   try {
     if (action === "approve-package") {
+      const form = detailContent.querySelector("[data-package-plan]");
+      if (new Date(form.dataset.scheduledAt).getTime() <= Date.now()) {
+        showExpiredPlan(node.dataset.id);
+        node.disabled = false;
+        return;
+      }
       await approvePackage(projectId, node.dataset.id);
       closeDetail();
       showToast("Пост одобрен");
@@ -378,8 +420,9 @@ async function mutate(node) {
       showToast("Отправка повторяется");
     }
     await loadRoute();
-  } catch (_) {
-    showToast("Команда не выполнена. Повторите попытку.");
+  } catch (error) {
+    if (action === "approve-package" && error.code === "publication_plan_expired") showExpiredPlan(node.dataset.id);
+    else showToast("Команда не выполнена. Повторите попытку.");
     node.disabled = false;
     if (["new-run", "retry-analysis", "return-to-analysis", "regenerate-post", "retry-delivery"].includes(action)) {
       await loadRoute();
@@ -488,8 +531,8 @@ document.addEventListener("click", (event) => {
   else if (action === "open-delivery") openDelivery(node);
   else if (action === "open-run") openRun(node);
   else if (action === "close-detail") closeDetail();
-  else if (action === "edit-package-plan") { node.hidden = true; detailContent.querySelector("[data-plan-fields]").hidden = false; detailContent.querySelector('[name="scheduled_local"]')?.focus(); }
-  else if (action === "cancel-package-plan") { const fields = node.closest("[data-plan-fields]"); fields.hidden = true; detailContent.querySelector('[data-action="edit-package-plan"]').hidden = false; }
+  else if (action === "edit-package-plan") { setPlanEditing(node.closest("[data-package-plan]"), true); detailContent.querySelector('[name="scheduled_local"]')?.focus(); }
+  else if (action === "cancel-package-plan") cancelPlan(node.closest("[data-package-plan]"));
   else if (["approve-package", "reject-package", "new-run", "retry-analysis", "return-to-analysis", "regenerate-post", "retry-delivery"].includes(action)) mutate(node);
 });
 
@@ -507,10 +550,8 @@ document.addEventListener("input", (event) => {
     workState.query = event.target.value;
     paintCurrent(); root.querySelector("#work-search").focus(); return;
   }
-  if (event.target.closest("[data-package-plan]")) {
-    const approve = detailContent.querySelector('[data-action="approve-package"]');
-    if (approve) approve.disabled = true;
-  }
+  const plan = event.target.closest("[data-package-plan]");
+  if (plan) updatePlanApproval(plan);
   const form = event.target.closest("[data-settings-form]");
   if (!form) return;
   form.dataset.dirty = "true";
@@ -519,6 +560,8 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const plan = event.target.closest("[data-package-plan]");
+  if (plan) updatePlanApproval(plan);
   const form = event.target.closest("[data-settings-form]");
   if (!form) return;
   form.dataset.dirty = "true";

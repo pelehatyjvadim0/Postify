@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from postify.application.delivery.publish_content import PublishContent
 from postify.application.content.manual_operations import ManualContentOperations
 from postify.application.scheduling.project_scheduler import ProjectScheduler, ScheduledCommand
-from postify.domain.content.models import InvalidContentTransition
+from postify.domain.content.models import InvalidContentTransition, PublicationPlanExpired
 from postify.domain.delivery.models import PublishFailureKind, TelegramMessage
 from postify.infrastructure.repositories.sqlalchemy_content import SqlAlchemyContentRepository
 from postify.infrastructure.repositories.sqlalchemy_dashboard import SqlAlchemyDashboardRepository
@@ -61,6 +61,24 @@ def test_review_requires_saved_future_plan_and_is_idempotent(graph):
         repository.reject(package, now=NOW)
     with graph.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM content_package_status_history WHERE package_id=:id AND status='approved'"), {"id": package}).scalar_one() == 1
+
+
+@pytest.mark.parametrize("seconds_after", [0, 1, 4 * 86400])
+def test_expired_plan_cannot_be_approved_until_rescheduled(graph, seconds_after):
+    package = _seed_package(graph, status="awaiting_review")
+    repository = review(graph)
+    at = NOW + timedelta(minutes=5)
+    repository.save_plan(package, scheduled_at=at, route_id=401, now=NOW)
+    now = at + timedelta(seconds=seconds_after)
+
+    with pytest.raises(PublicationPlanExpired):
+        repository.approve(package, now=now)
+
+    assert repository.get_package(package).status == "awaiting_review"
+    with graph.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM content_package_status_history WHERE package_id=:id AND status='approved'"), {"id": package}).scalar_one() == 0
+    repository.save_plan(package, scheduled_at=now + timedelta(hours=1), route_id=401, now=now)
+    assert repository.approve(package, now=now).status == "approved"
 
 
 def test_regeneration_rechecks_approval_before_creating_an_attempt(graph):
@@ -120,6 +138,27 @@ def test_parallel_reservation_and_restart_uncertain_never_duplicate(graph):
         assert tuple(state) == ("uncertain", 1)
     with pytest.raises(InvalidContentTransition):
         review(graph).save_plan(package, scheduled_at=now + timedelta(hours=1), route_id=401, now=now)
+
+
+@pytest.mark.parametrize("status", ["awaiting_review", "approved"])
+def test_unavailable_channel_can_be_replaced_before_delivery_with_new_approval(graph, status):
+    package = _seed_package(graph, status="awaiting_review")
+    repository = review(graph)
+    at = NOW + timedelta(minutes=5)
+    repository.save_plan(package, scheduled_at=at, route_id=401, now=NOW)
+    if status == "approved":
+        repository.approve(package, now=NOW)
+    with graph.begin() as connection:
+        connection.execute(text("UPDATE channel_connections SET enabled=false WHERE id=301"))
+        connection.execute(text("INSERT INTO channel_connections(id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at) VALUES (302,1,'telegram','Replacement',true,'{}','ok',:now,:now)"), {"now": NOW})
+        connection.execute(text("INSERT INTO publication_routes(id,project_id,format_id,channel_id,enabled,created_at,updated_at) VALUES (402,1,201,302,true,:now,:now)"), {"now": NOW})
+    saved = repository.save_plan(package, scheduled_at=at, route_id=402, now=NOW)
+    assert (saved.status, saved.route_id, saved.scheduled_at) == ("awaiting_review", 402, at)
+    replacement = SqlAlchemyDeliveryRepository(sessionmaker(graph), route_id=402, channel_id=302)
+    assert replacement.reserve_next(now=at, package_id=package) is None
+    repository.approve(package, now=NOW)
+    assert delivery(graph).reserve_next(now=at, package_id=package) is None
+    assert replacement.reserve_next(now=at, package_id=package).package_id == package
 
 
 def test_changed_plan_requires_new_approval_and_is_visible_in_queue(graph):

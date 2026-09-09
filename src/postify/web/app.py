@@ -173,8 +173,10 @@ def create_app(
 
     @app.exception_handler(ValueError)
     async def invalid_domain_value(request: Request, error: ValueError) -> JSONResponse:
-        from postify.domain.content.models import InvalidContentTransition
+        from postify.domain.content.models import InvalidContentTransition, PublicationPlanExpired
 
+        if isinstance(error, PublicationPlanExpired):
+            return error_response(request, 409, "publication_plan_expired")
         if isinstance(error, InvalidContentTransition):
             return error_response(request, 409, "invalid_transition")
         return error_response(request, 422, "validation_error")

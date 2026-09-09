@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC
 import json
 from sqlalchemy import text
-from postify.domain.content.models import AUTOMATIC_CONTEXT, ContentPackage, InvalidContentTransition, validate_transition
+from postify.domain.content.models import AUTOMATIC_CONTEXT, ContentPackage, InvalidContentTransition, PublicationPlanExpired, validate_transition
 from postify.application.ports.content_repository import PackageDraft
 
 
@@ -442,7 +442,7 @@ class SqlAlchemyContentRepository:
                     if p.scheduled_at is None or p.route_id is None:
                         raise InvalidContentTransition("Сначала сохраните дату и канал публикации")
                     if p.scheduled_at <= now:
-                        raise InvalidContentTransition("Время прошло: перенесите публикацию")
+                        raise PublicationPlanExpired("Время прошло: измените дату публикации, прежде чем одобрить пост")
                     self._validate_route(s, p.route_id)
                 s.execute(text("UPDATE content_packages SET status=:s,updated_at=:n WHERE project_id=:project AND id=:id"), {"project": self.project_id, "s": status, "n": now, "id": id})
                 s.execute(text("INSERT INTO content_package_status_history(project_id,package_id,status,reason,created_at) VALUES (:project,:id,:s,:reason,:n)"), {"project": self.project_id, "id": id, "s": status, "reason": reason, "n": now})
