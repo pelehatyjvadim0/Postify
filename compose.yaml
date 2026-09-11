@@ -2,7 +2,7 @@ name: autoposttg
 
 services:
   db:
-    image: postgres:17-bookworm
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: autopost
       POSTGRES_PASSWORD: autopost-local
@@ -24,14 +24,14 @@ services:
       DATABASE_URL: postgresql+psycopg://autopost:autopost-local@db:5432/autoposttg
       CONTENT_MEDIA_DIR: /data/media
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       CONTENT_ANALYZER: ${CONTENT_ANALYZER:-codex}
       CONTENT_MODEL: ${CONTENT_MODEL:-gpt-5.6-terra}
       CODEX_HOME: /data/codex
       AUTOPOST_RELOAD: "1"
       AUTOPOST_BIND: ${AUTOPOST_BIND:-127.0.0.1}
-      POSTIFY_ACCESS_PASSWORD: ${POSTIFY_ACCESS_PASSWORD:-}
+      AUTH_BOT_TOKEN: ${AUTH_BOT_TOKEN:-}
+      AUTH_BOT_USERNAME: ${AUTH_BOT_USERNAME:-}
+      AUTH_ALLOWED_TELEGRAM_IDS: ${AUTH_ALLOWED_TELEGRAM_IDS:-}
       POSTIFY_TRUSTED_HOSTS: ${POSTIFY_TRUSTED_HOSTS:-}
     ports:
       - "${AUTOPOST_BIND:-127.0.0.1}:${AUTOPOST_PORT:-8000}:8000"
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   test-db:
-    image: postgres:17-bookworm
+    image: pgvector/pgvector:pg17
     profiles: [test]
     environment:
       POSTGRES_USER: autopost_test

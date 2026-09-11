@@ -6,83 +6,62 @@ from typing import Mapping
 
 
 @dataclass(frozen=True, slots=True)
-class Material:
-    candidate_id: int
-    source_name: str
-    title: str
-    url: str
-    discovered_at: datetime
-    retry_attempt_id: int | None = None
-    generation_status: str | None = None
-    generation_failure_code: str | None = None
-    original_text: str | None = None
+class PostHistoryEntry:
+    """Одна смена статуса поста: UI показывает её лентой в карточке."""
 
-
-@dataclass(frozen=True, slots=True)
-class PackageSummary:
-    package_id: int
-    status: str
-    source_url: str
-    post_text: str
-    media_available: bool
-    media_status: str
-    created_at: datetime
-    updated_at: datetime
-
-
-    scheduled_at: datetime | None = None
-    route_id: int | None = None
-    candidate_id: int | None = None
-    previous_package_id: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PackageHistoryEntry:
     status: str
     reason: str | None
     created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
-class PackageDetail:
-    package_id: int
+class PostSummary:
+    """Строка списка постов. Текст урезан: список не грузит полные посты."""
+
+    post_id: int
     status: str
-    source_url: str
-    post_text: str
-    analysis: str
+    excerpt: str
+    char_count: int
     media_available: bool
-    media_status: str
-    media_source_type: str | None
-    media_source_url: str | None
-    history: tuple[PackageHistoryEntry, ...]
-    generation_snapshot: Mapping[str, object]
     created_at: datetime
     updated_at: datetime
-    attempt_id: int | None = None
-    original_text: str = ""
     scheduled_at: datetime | None = None
-    route_id: int | None = None
     delivery_status: str | None = None
-    replacement_package_id: int | None = None
+
+    @property
+    def id(self) -> int:
+        """Контракт отдаёт поле ``id``; внутри читаем однозначное ``post_id``."""
+
+        return self.post_id
 
 
 @dataclass(frozen=True, slots=True)
-class QueueSlot:
-    route_id: int
-    provider: str
-    slot_time: str
-    assignment_kind: str
-    package_id: int | None
-    delivery_id: int | None
+class PostDetail:
+    """Карточка поста: полный текст, снимок генерации, история и доставка."""
 
-
+    post_id: int
+    status: str
+    post_text: str
+    char_count: int
+    media_available: bool
+    media_mime: str | None
+    generation: Mapping[str, object]
+    history: tuple[PostHistoryEntry, ...]
+    created_at: datetime
+    updated_at: datetime
     scheduled_at: datetime | None = None
-    status: str | None = None
+    # Доставка одна на пост, поэтому её исход лежит прямо в карточке.
     delivery_status: str | None = None
-    channel_name: str | None = None
-    post_text: str = ""
+    delivery_message_id: int | None = None
     failure_code: str | None = None
     failure_reason: str | None = None
+    published_at: datetime | None = None
+
+    @property
+    def id(self) -> int:
+        """См. ``PostSummary.id``."""
+
+        return self.post_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +78,7 @@ class PublicationAttempt:
 @dataclass(frozen=True, slots=True)
 class Publication:
     delivery_id: int
-    package_id: int
+    post_id: int
     provider: str | None
     status: str
     attempt_count: int
@@ -115,17 +94,16 @@ class Publication:
 
 @dataclass(frozen=True, slots=True)
 class Operation:
+    """Запись журнала операций; по ней же UI опрашивает длительную операцию."""
+
     run_id: int
-    kind: str
+    operation: str
     status: str
     outcome: str | None
     failure_code: str | None
+    mode: str
+    actor: str
+    result: Mapping[str, object]
     started_at: datetime
     finished_at: datetime | None
     duration: timedelta | None
-    mode: str = "automatic"
-    actor: str = "scheduler"
-    codex_model: str | None = None
-    codex_reasoning_effort: str | None = None
-    materials_taken: int = 0
-    packages_created: int = 0

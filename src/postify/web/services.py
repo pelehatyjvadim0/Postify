@@ -1,70 +1,81 @@
+"""Фасад веб-приложения: composition root и все действия HTTP-слоя.
+
+Роутеры знают только методы этого класса. Здесь же собираются репозитории,
+пул ограниченных операций и тик планировщика, поэтому веб-слой нигде не
+встречается с SQLAlchemy напрямую.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.orm import sessionmaker
 
-from postify.adapters.channels.registry import ChannelProviderRegistry
-from postify.adapters.sources.registry import SourceProviderRegistry
-from postify.adapters.http.public_url_policy import PublicHttpUrlPolicy
-from postify.adapters.media.local_media_provider import LocalMediaProvider
-from postify.application.content.manual_operations import (
-    ManualContentOperations,
-)
-from postify.application.delivery.manual_operations import (
-    DeliveryNotRetryable,
-    ManualDeliveryRetry,
-)
-from postify.application.observability.record_operation import (
-    content_operation_metadata,
-)
-from postify.application.projects.bootstrap_project import BootstrapProject
-from postify.application.projects.manage_project import ManageProject
-from postify.application.projects.manage_resources import ManageProjectResources
-from postify.application.projects.manage_schedule import ManageProjectSchedule
+from postify.application.delivery.manual_operations import DeliveryNotRetryable
 from postify.application.projects.check_channel import CheckChannel
+from postify.application.projects.manage_channel import (
+    RemoveProjectChannel,
+    SetProjectChannel,
+    channel_view,
+)
+from postify.application.projects.manage_project import ManageProject
+from postify.application.projects.manage_rubrics import ManageRubrics
 from postify.application.scheduling.project_scheduler import (
     ProjectScheduler,
     ScheduledCommand,
 )
-from postify.bootstrap import (
-    open_project_publish_once,
-    open_project_run_once,
-    project_manual_content_operations,
-    project_manual_delivery_retry,
-    project_review_content,
-)
-from postify.config import Settings, TelegramSettings
+from postify.bootstrap import open_project_publish_once, project_manual_delivery_retry
+from postify.config import Settings
 from postify.domain.observability.models import OperationKind
-from postify.domain.content.models import (
-    ExecutionActor,
-    ExecutionContext,
-    ExecutionMode,
-    ExecutionPurpose,
-)
+from postify.domain.projects.models import ContentProject
 from postify.infrastructure.database.engine import create_engine_from_settings
-from postify.infrastructure.repositories.sqlalchemy_dashboard import SqlAlchemyDashboardRepository
-from postify.infrastructure.repositories.sqlalchemy_projects import SqlAlchemyProjectRepository
-from postify.infrastructure.repositories.sqlalchemy_observability import SqlAlchemyOperationRunRepository
+from postify.infrastructure.repositories.sqlalchemy_dashboard import (
+    SqlAlchemyDashboardRepository,
+)
+from postify.infrastructure.repositories.sqlalchemy_observability import (
+    SqlAlchemyOperationRunRepository,
+)
+from postify.infrastructure.repositories.sqlalchemy_posts import SqlAlchemyPostRepository
+from postify.infrastructure.repositories.sqlalchemy_projects import (
+    SqlAlchemyProjectRepository,
+)
 from postify.infrastructure.repositories.sqlalchemy_schedule import (
     SqlAlchemyScheduleRepository,
 )
 from postify.infrastructure.security.secrets import SecretCipher
+from postify.web.errors import ConflictError, message_for
+
+
+# Поля контракта, за которыми ещё нет хранения: режим публикации, запас
+# времени на генерацию, политика повторов изображений и промпт проекта.
+# Значения совпадают с умолчаниями контракта, редактирование принесут треки
+# публикации, контент-плана, медиа и промптов.
+DEFAULT_PUBLICATION_MODE = "review"
+DEFAULT_GENERATION_LEAD_MINUTES = 1440
+DEFAULT_MEDIA_REUSE_DAYS = 30
+DEFAULT_PROJECT_PROMPT = ""
+
+# Операции, которые веб-слой умеет выполнять сам. Генерация и перегенерация
+# появятся вместе со шлюзом вызовов модели.
+SUPPORTED_OPERATIONS = frozenset(
+    {OperationKind.PUBLISH_ONCE, OperationKind.RETRY_DELIVERY}
+)
 
 
 class BoundedOperations:
-    """Limits concurrent UI operations and atomically rejects duplicate kinds."""
+    """Ограничивает параллельные операции UI и отсекает дубли по виду."""
 
     def __init__(self, max_workers: int = 2) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="postify-web")
-        self._capacity = max_workers
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="postify-web"
+        )
         self._active: set[tuple[int, str]] = set()
         self._lock = Lock()
         self._closed = False
@@ -94,424 +105,474 @@ class BoundedOperations:
 
 
 class WebApplication:
-    """Composition facade; HTTP routes only map transport into these actions/queries."""
+    """Composition facade; роутеры только отображают транспорт в эти действия."""
 
-    def __init__(self, settings: Settings, telegram: TelegramSettings | None) -> None:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._telegram = telegram
         self._engine = create_engine_from_settings(settings)
         self._sessions = sessionmaker(self._engine)
         self._projects = SqlAlchemyProjectRepository(self._sessions)
         self._dashboard = SqlAlchemyDashboardRepository(self._sessions)
-        self._operations = BoundedOperations()
         self._schedule_repository = SqlAlchemyScheduleRepository(self._sessions)
         self._scheduler = ProjectScheduler(
             self._schedule_repository, self._submit_scheduled
         )
+        self._operations = BoundedOperations()
         self._cipher = (
             SecretCipher(settings.postify_secret_key.get_secret_value())
             if settings.postify_secret_key is not None
             else None
         )
-        self._source_providers = SourceProviderRegistry()
-        self._channel_providers = ChannelProviderRegistry()
-        BootstrapProject(
-            self._projects,
-            self._source_providers,
-            self._channel_providers,
-            cipher=self._cipher,
-            clock=lambda: datetime.now(UTC),
-        ).execute(settings, telegram)
-        self._resources = ManageProjectResources(
-            self._projects,
-            self._source_providers,
-            self._channel_providers,
-            cipher=self._cipher,
-            clock=lambda: datetime.now(UTC),
-        )
+        self._manage_projects = ManageProject(self._projects, clock=self._now)
+        self._manage_rubrics = ManageRubrics(self._projects, clock=self._now)
 
-    def bootstrap(self) -> dict[str, object]:
-        project = self._projects.active_project()
-        if project is None:
-            raise LookupError(1)
-        return {
-            "activeProject": _project(project),
-            "providers": {
-                "sources": self._source_providers.catalog(),
-                "channels": self._channel_providers.catalog(),
-            },
-        }
+    # --- жизненный цикл ---------------------------------------------------
 
     def scheduler_tick(self) -> tuple[ScheduledCommand, ...]:
-        return self._scheduler.tick(datetime.now(UTC))
+        return self._scheduler.tick(self._now())
 
     def close(self) -> None:
         self._operations.close()
         self._engine.dispose()
 
-    def materials(self, project_id: int, **filters: object) -> dict[str, object]:
-        self._projects.get(project_id)
-        return {"items": [_values(item) for item in self._dashboard.materials(project_id, **filters)]}
+    # --- проекты ----------------------------------------------------------
 
-    def packages(self, project_id: int, **filters: object) -> dict[str, object]:
-        self._projects.get(project_id)
-        return {"items": [_values(item) for item in self._dashboard.packages(project_id, **filters)]}
+    def list_projects(self, *, owner_id: int) -> list[dict[str, Any]]:
+        """Проекты одного пользователя.
 
-    def package(self, project_id: int, package_id: int) -> dict[str, object]:
-        project = self._projects.get(project_id)
-        channels = {item["id"]: item for item in self._resources.list(project_id, "channels")}
-        routes = [
-            {"id": item["id"], "name": channels[item["channel_id"]]["name"]}
-            for item in self._resources.list(project_id, "routes")
-            if item["enabled"] and item["channel_id"] in channels
-            and channels[item["channel_id"]]["enabled"]
+        Фильтр по владельцу обязан быть в самом запросе: коллекция проектов —
+        единственный маршрут без ``project_id``, а значит и без общей проверки
+        владения.
+        """
+        return [
+            {
+                "id": project.id,
+                "name": project.name,
+                "channel_title": self._channel_view(project.id)["chat_id"] or None,
+                "publication_mode": DEFAULT_PUBLICATION_MODE,
+                "counts": self._projects.post_counts(project.id),
+            }
+            for project in self._manage_projects.list(owner_id=owner_id)
         ]
-        return _values(self._dashboard.package(project_id, package_id)) | {
-            "timezone": project.timezone, "routes": routes,
-        }
 
-    def save_plan(self, project_id: int, package_id: int, *, scheduled_at: datetime, route_id: int):
-        self._projects.get(project_id)
-        with self._review(project_id) as action:
-            action.save_plan(package_id, scheduled_at=scheduled_at, route_id=route_id)
-        return self.package(project_id, package_id)
-
-    def approve(self, project_id: int, package_id: int) -> dict[str, object]:
-        with self._review(project_id) as action:
-            action.approve(package_id)
-        return _values(self._dashboard.package(project_id, package_id))
-
-    def reject(self, project_id: int, package_id: int) -> dict[str, object]:
-        with self._review(project_id) as action:
-            action.reject(package_id)
-        return _values(self._dashboard.package(project_id, package_id))
-
-    def queue(self, project_id: int) -> dict[str, object]:
-        project = self._projects.get(project_id)
-        day, _, _ = _day_boundaries(project.timezone)
-        return {"items": [_values(item) for item in self._dashboard.queue(project_id, day)]}
-
-    def publications(self, project_id: int, **filters: object) -> dict[str, object]:
-        self._projects.get(project_id)
-        return {"items": [_values(item) for item in self._dashboard.publications(project_id, **filters)]}
-
-    def operations(self, project_id: int, **filters: object) -> dict[str, object]:
-        project = self._projects.get(project_id)
-        return {
-            "items": [
-                _values(item)
-                for item in self._dashboard.operations(project_id, **filters)
-            ],
-        }
-
-    def operation(self, project_id: int, operation_run_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        return _values(self._dashboard.operation(project_id, operation_run_id))
-
-    def run_once(self, project_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        self._submit_operation(
-            project_id,
-            "run_once",
-            context=ExecutionContext(
-                mode=ExecutionMode.MANUAL,
-                actor=ExecutionActor.UI,
-                purpose=ExecutionPurpose.RUN_ONCE,
-            ),
+    def create_project(
+        self, payload: dict[str, object], *, owner_id: int
+    ) -> dict[str, Any]:
+        """Заводит проект на текущего пользователя: владелец обязателен."""
+        return self._project_view(
+            self._manage_projects.create(payload, owner_id=owner_id)
         )
-        return {"status": "accepted"}
 
-    def manual_search(self, project_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = ExecutionContext(
-            mode=ExecutionMode.MANUAL,
-            actor=ExecutionActor.UI,
-            purpose=ExecutionPurpose.MANUAL_SEARCH,
+    def project(self, project_id: int) -> dict[str, Any]:
+        return self._project_view(self._manage_projects.get(project_id))
+
+    def update_project(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]:
+        return self._project_view(self._manage_projects.update(project_id, payload))
+
+    def delete_project(self, project_id: int) -> None:
+        self._manage_projects.delete(project_id)
+
+    # --- канал ------------------------------------------------------------
+
+    def set_channel(
+        self, project_id: int, *, bot_token: str, chat_id: str
+    ) -> dict[str, Any]:
+        SetProjectChannel(self._projects, self._cipher, clock=self._now).execute(
+            project_id, bot_token=bot_token, chat_id=chat_id
         )
-        run_id = self._submit_operation(project_id, "manual_search", context=context)
-        return {"status": "accepted", "operationRunId": run_id}
+        return self._channel_view(project_id)
 
-    def retry_analysis(self, project_id: int, attempt_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = self._manual_content_for(project_id).retry_analysis(attempt_id)
-        run_id = self._submit_operation(project_id, "retry_analysis", context=context)
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def return_to_analysis(self, project_id: int, package_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = self._manual_content_for(project_id).return_to_analysis(package_id)
-        run_id = self._submit_operation(project_id, "return_to_analysis", context=context)
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def regenerate_post(self, project_id: int, package_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        context = self._manual_content_for(project_id).regenerate_post(package_id)
-        run_id = self._submit_operation(project_id, "regenerate_post", context=context)
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def retry_delivery(self, project_id: int, delivery_id: int) -> dict[str, object]:
-        self._projects.get(project_id)
-        try:
-            route_id, context = self._manual_delivery_for(project_id).prepare(delivery_id)
-        except DeliveryNotRetryable as error:
-            from postify.web.errors import ConflictError
-
-            raise ConflictError("delivery_not_retryable") from error
-        run_id = self._submit_operation(
-            project_id,
-            "retry_delivery",
-            route_id=route_id,
-            delivery_id=delivery_id,
-            context=context,
-        )
-        return {"status": "accepted", "operationRunId": run_id}
-
-    def settings(self, project_id: int) -> dict[str, object]:
-        return {
-            "project": _project(self._projects.get(project_id)),
-            "sources": self._resources.list(project_id, "sources"),
-            "formats": self._formats(project_id),
-            "channels": self._resources.list(project_id, "channels"),
-            "routes": self._resources.list(project_id, "routes"),
-        }
-
-    def update_settings(self, project_id: int, section: str, payload: dict[str, object]) -> dict[str, object]:
-        if section == "schedule":
-            return ManageProjectSchedule(self._projects).update(
-                project_id, payload, now=datetime.now(UTC)
-            )
-        return _project(ManageProject(self._projects).update(project_id, section, payload, now=datetime.now(UTC)))
-
-    def resources(self, project_id: int, resource: str) -> dict[str, object]:
-        return {"items": self._resources.list(project_id, resource)}
-
-    def create_resource(self, project_id: int, resource: str, payload: dict[str, object]) -> dict[str, object]:
-        return self._resources.create(project_id, resource, payload)
-
-    def update_resource(self, project_id: int, resource: str, resource_id: int, payload: dict[str, object]) -> dict[str, object]:
-        return self._resources.update(project_id, resource, resource_id, payload)
-
-    def delete_resource(self, project_id: int, resource: str, resource_id: int) -> None:
-        self._resources.delete(project_id, resource, resource_id)
-
-    def check_channel(self, project_id: int, channel_id: int) -> dict[str, object]:
+    def check_channel(self, project_id: int) -> dict[str, Any]:
         from postify.adapters.channels.telegram_check import TelegramChannelChecker
 
         with httpx.Client() as client:
-            return CheckChannel(
+            CheckChannel(
                 self._projects,
                 self._cipher,
                 TelegramChannelChecker(client),
-                clock=lambda: datetime.now(UTC),
-            ).execute(project_id, channel_id)
+                clock=self._now,
+            ).execute(project_id)
+        return self._channel_view(project_id)
 
-    def remove_channel_secret(
-        self, project_id: int, channel_id: int
-    ) -> dict[str, object]:
-        return self._resources.remove_channel_secret(project_id, channel_id)
+    def remove_channel(self, project_id: int) -> None:
+        RemoveProjectChannel(self._projects).execute(project_id)
 
-    def package_media(self, project_id: int, package_id: int) -> tuple[bytes, str]:
-        media_path, media_mime = self._dashboard.package_media_path(
-            project_id, package_id
+    # --- рубрики ----------------------------------------------------------
+
+    def rubrics(self, project_id: int) -> list[dict[str, Any]]:
+        return [_rubric(item) for item in self._manage_rubrics.list(project_id)]
+
+    def create_rubric(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]:
+        return _rubric(self._manage_rubrics.create(project_id, payload))
+
+    def update_rubric(
+        self, project_id: int, rubric_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]:
+        return _rubric(self._manage_rubrics.update(project_id, rubric_id, payload))
+
+    def delete_rubric(self, project_id: int, rubric_id: int) -> None:
+        self._manage_rubrics.delete(project_id, rubric_id)
+
+    # --- посты ------------------------------------------------------------
+
+    def posts(
+        self,
+        project_id: int,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        zone = self._zone(project_id)
+        items = self._dashboard.posts(
+            project_id, status=status, limit=limit, offset=offset
         )
+        return [_post_summary(item, zone) for item in items]
+
+    def post(self, project_id: int, post_id: int) -> dict[str, Any]:
+        detail = self._dashboard.post(project_id, post_id)
+        return _post(detail, self._zone(project_id), project_id=project_id)
+
+    def update_post(
+        self,
+        project_id: int,
+        post_id: int,
+        *,
+        post_text: str | None = None,
+        scheduled_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Правка редактора: время публикации и текст поста.
+
+        ``scheduled_at`` здесь временно — до появления слотов контент-плана,
+        которые станут единственным местом планирования.
+        """
+        posts = self._posts_for(project_id)
+        if scheduled_at is not None:
+            posts.save_plan(post_id, scheduled_at=scheduled_at, now=self._now())
+        if post_text is not None:
+            posts.save_text(post_id, post_text=post_text, now=self._now())
+        return self.post(project_id, post_id)
+
+    def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]:
+        self._posts_for(project_id).approve(post_id, now=self._now())
+        return self.post(project_id, post_id)
+
+    def reject_post(self, project_id: int, post_id: int) -> dict[str, Any]:
+        self._posts_for(project_id).reject(post_id, now=self._now())
+        return self.post(project_id, post_id)
+
+    def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]:
+        media_path, media_mime = self._dashboard.post_media_path(project_id, post_id)
         try:
-            return open(media_path, "rb").read(), media_mime
+            return Path(media_path).read_bytes(), media_mime
         except OSError:
-            raise LookupError(package_id) from None
+            # Файл удалён уборкой после публикации: для клиента это 404.
+            raise LookupError(post_id) from None
 
-    def _formats(self, project_id: int) -> list[dict[str, object]]:
-        from postify.infrastructure.database.models import ContentFormatModel
-        from sqlalchemy import select
+    # --- журнал и публикации ---------------------------------------------
 
-        with self._sessions() as session:
-            return [
-                {"id": row.id, "name": row.name, "kind": row.kind, "instructions": row.instructions, "enabled": row.enabled}
-                for row in session.scalars(select(ContentFormatModel).where(ContentFormatModel.project_id == project_id)).all()
-            ]
+    def operations(
+        self, project_id: int, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        zone = self._zone(project_id)
+        return [
+            _operation(item, zone)
+            for item in self._dashboard.operations(
+                project_id, limit=limit, offset=offset
+            )
+        ]
 
-    def _manual_content_for(self, project_id: int) -> ManualContentOperations:
-        return project_manual_content_operations(self._sessions, project_id)
-
-    def _manual_delivery_for(self, project_id: int) -> ManualDeliveryRetry:
-        return project_manual_delivery_retry(self._sessions, project_id)
-
-    @contextmanager
-    def _review(self, project_id: int):
-        yield project_review_content(
-            self._sessions,
-            project_id,
-            LocalMediaProvider(self._settings.content_media_dir),
-            clock=lambda: datetime.now(UTC),
+    def operation(self, project_id: int, operation_id: int) -> dict[str, Any]:
+        return _operation(
+            self._dashboard.operation(project_id, operation_id), self._zone(project_id)
         )
 
-    def _run_once(self, project_id: int, *, context: ExecutionContext):
-        with open_project_run_once(
-            self._settings,
-            project_id=project_id,
-            record_operation=False,
-            context=context,
-        ) as action:
-            return action.execute()
+    def publications(
+        self, project_id: int, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        zone = self._zone(project_id)
+        return [
+            _publication(item, zone)
+            for item in self._dashboard.publications(
+                project_id, limit=limit, offset=offset
+            )
+        ]
+
+    def retry_delivery(self, project_id: int, delivery_id: int) -> dict[str, Any]:
+        try:
+            project_manual_delivery_retry(self._sessions, project_id).prepare(
+                delivery_id
+            )
+        except DeliveryNotRetryable as error:
+            raise ConflictError("delivery_not_retryable") from error
+        run_id = self._submit_operation(
+            project_id,
+            OperationKind.RETRY_DELIVERY,
+            delivery_id=delivery_id,
+            mode="manual",
+            actor="user",
+        )
+        return {"operation_id": run_id, "status": "running"}
+
+    # --- внутреннее -------------------------------------------------------
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(UTC)
+
+    def _posts_for(self, project_id: int) -> SqlAlchemyPostRepository:
+        return SqlAlchemyPostRepository(self._sessions, project_id)
+
+    def _zone(self, project_id: int) -> ZoneInfo:
+        """Контракт отдаёт время в таймзоне проекта, база хранит его в UTC."""
+        return ZoneInfo(self._projects.get(project_id).timezone)
+
+    def _channel_view(self, project_id: int) -> dict[str, Any]:
+        channel = self._projects.get_channel(project_id)
+        connection = channel[0] if channel is not None else None
+        view = dict(channel_view(connection))
+        view["checked_at"] = getattr(connection, "last_checked_at", None)
+        return view
+
+    def _project_view(self, project: ContentProject) -> dict[str, Any]:
+        return {
+            "id": project.id,
+            "name": project.name,
+            "timezone": project.timezone,
+            "language": project.language,
+            "audience": project.audience,
+            "tone": project.configuration.tone,
+            "project_prompt": DEFAULT_PROJECT_PROMPT,
+            "publication_mode": DEFAULT_PUBLICATION_MODE,
+            "generation_lead_minutes": DEFAULT_GENERATION_LEAD_MINUTES,
+            "media_reuse_days": DEFAULT_MEDIA_REUSE_DAYS,
+            "channel": self._channel_view(project.id),
+            "media": {"total": 0, "available": 0},
+        }
 
     def _submit_scheduled(self, command: ScheduledCommand) -> None:
         self._projects.get(command.project_id)
         self._submit_operation(
             command.project_id,
-            command.kind,
+            OperationKind(command.kind),
             accepted_run_id=command.operation_run_id,
-            route_id=command.route_id,
             scheduled_job_id=command.job_id,
-            package_id=command.package_id,
-            context=ExecutionContext(
-                mode=ExecutionMode.AUTOMATIC,
-                actor=ExecutionActor.SCHEDULER,
-                purpose=ExecutionPurpose(command.kind),
-            ),
+            post_id=command.post_id,
         )
 
     def _submit_operation(
         self,
         project_id: int,
-        kind: str,
+        operation: OperationKind,
         *,
         accepted_run_id: int | None = None,
-        route_id: int | None = None,
         scheduled_job_id: int | None = None,
-        package_id: int | None = None,
+        post_id: int | None = None,
         delivery_id: int | None = None,
-        context: ExecutionContext,
+        mode: str = "automatic",
+        actor: str = "scheduler",
     ) -> int:
-        operation_kind = OperationKind(kind)
-        journal = SqlAlchemyOperationRunRepository(
-            self._sessions, project_id=project_id
-        )
+        journal = SqlAlchemyOperationRunRepository(self._sessions, project_id)
+        failure_code = f"{operation.value}_failed"
         run_id = (
             accepted_run_id
             if accepted_run_id is not None
-            else journal.start(
-                operation_kind, now=datetime.now(UTC),
-                mode=(context.mode if context else "automatic"),
-                actor=(context.actor if context else "scheduler"),
-            )
+            else journal.start(operation, now=self._now(), mode=mode, actor=actor)
         )
 
-        def operation() -> None:
-            metadata = {
-                "codex_model": None,
-                "codex_reasoning_effort": None,
-                "materials_taken": 0,
-                "packages_created": 0,
-            }
+        def run() -> None:
             try:
-                if kind in {"run_once", "manual_search"}:
-                    result = self._run_once(project_id, context=context)
-                    content_result = result.content_result
-                    metadata = content_operation_metadata(content_result)
-                    if (
-                        context.is_manual
-                        and content_result is not None
-                        and content_result.failed
-                    ):
-                        raise RuntimeError("manual_content_failed")
-                    outcome = "completed"
-                elif kind in {"retry_analysis", "return_to_analysis", "regenerate_post"}:
-                    from postify.bootstrap import open_project_run_once
-                    with open_project_run_once(
-                        self._settings, project_id=project_id, record_operation=False,
-                        context=context,
-                    ) as action:
-                        result = action.process_content()
-                    metadata = content_operation_metadata(result)
-                    if result.failed:
-                        raise RuntimeError("manual_content_failed")
-                    outcome = "completed" if result.packages_created else "empty"
-                elif kind in {"publish_once", "retry_delivery"}:
-                    with open_project_publish_once(
-                        self._settings,
-                        project_id=project_id,
-                        route_id=route_id,
-                        record_operation=False,
-                        package_id=package_id,
-                        delivery_id=delivery_id,
-                    ) as action:
-                        outcome = action.execute(package_id=package_id, delivery_id=delivery_id).outcome
-                else:
-                    raise ValueError("unsupported_operation")
+                if operation not in SUPPORTED_OPERATIONS:
+                    raise RuntimeError("unsupported_operation")
+                with open_project_publish_once(
+                    self._settings,
+                    project_id=project_id,
+                    record_operation=False,
+                    post_id=post_id,
+                    delivery_id=delivery_id,
+                ) as action:
+                    outcome = action.execute(
+                        post_id=post_id, delivery_id=delivery_id
+                    ).outcome
             except BaseException:
-                try:
-                    journal.fail(
-                        run_id,
-                        failure_code=f"{kind}_failed",
-                        now=datetime.now(UTC),
-                        **metadata,
-                    )
-                except BaseException:
-                    pass
-                if scheduled_job_id is not None:
-                    self._schedule_repository.acknowledge(
-                        scheduled_job_id, succeeded=False, now=datetime.now(UTC)
-                    )
+                self._finish(journal, run_id, scheduled_job_id, code=failure_code)
                 raise
-            journal.succeed(
-                run_id, outcome=outcome, now=datetime.now(UTC), **metadata
-            )
-            if scheduled_job_id is not None:
-                self._schedule_repository.acknowledge(
-                    scheduled_job_id, succeeded=True, now=datetime.now(UTC)
-                )
+            self._finish(journal, run_id, scheduled_job_id, outcome=outcome)
 
         try:
-            self._operations.submit(project_id, kind, operation)
+            self._operations.submit(project_id, operation.value, run)
         except BaseException:
-            try:
-                journal.fail(
-                    run_id,
-                    failure_code=f"{kind}_failed",
-                    now=datetime.now(UTC),
-                )
-            except BaseException:
-                pass
+            # Строку журнала оставлять running нельзя: UI опрашивает её вечно.
+            self._finish(journal, run_id, None, code=failure_code)
             raise
         return run_id
 
+    def _finish(
+        self,
+        journal: SqlAlchemyOperationRunRepository,
+        run_id: int,
+        scheduled_job_id: int | None,
+        *,
+        outcome: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Закрывает строку журнала и снимает аренду задачи планировщика."""
+        now = self._now()
+        try:
+            if outcome is not None:
+                journal.succeed(run_id, outcome=outcome, now=now)
+            else:
+                journal.fail(run_id, failure_code=code, now=now)
+        except BaseException:
+            pass
+        if scheduled_job_id is not None:
+            self._schedule_repository.acknowledge(
+                scheduled_job_id, succeeded=outcome is not None, now=now
+            )
+
 
 def build_web_api() -> WebApplication:
-    settings = Settings()
-    try:
-        telegram: TelegramSettings | None = TelegramSettings()
-    except Exception:
-        telegram = None
-    return WebApplication(settings, telegram)
+    return WebApplication(Settings())
 
 
-def _values(value: object) -> dict[str, object]:
-    if is_dataclass(value):
-        return {
-            field.name: _plain_value(getattr(value, field.name))
-            for field in fields(value)
+def _rubric(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "instructions": item.instructions,
+        "enabled": item.enabled,
+    }
+
+
+def _at(value: datetime | None, zone: ZoneInfo) -> datetime | None:
+    return None if value is None else value.astimezone(zone)
+
+
+def _post_summary(item, zone: ZoneInfo) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "status": item.status,
+        "excerpt": item.excerpt,
+        "char_count": item.char_count,
+        "media_available": item.media_available,
+        "scheduled_at": _at(item.scheduled_at, zone),
+        "delivery_status": item.delivery_status,
+        "created_at": _at(item.created_at, zone),
+        "updated_at": _at(item.updated_at, zone),
+    }
+
+
+def _post(item, zone: ZoneInfo, *, project_id: int) -> dict[str, Any]:
+    delivery = (
+        None
+        if item.delivery_status is None
+        else {
+            "status": item.delivery_status,
+            "message_id": item.delivery_message_id,
+            "failure_code": item.failure_code,
+            "failure_reason": item.failure_reason,
+            "published_at": _at(item.published_at, zone),
         }
-    if isinstance(value, dict):
-        return value
-    return {"result": value}
+    )
+    return {
+        "id": item.id,
+        # Слот контент-плана появится вместе со своим треком.
+        "slot_id": None,
+        "status": item.status,
+        "post_text": item.post_text,
+        "char_count": item.char_count,
+        "scheduled_at": _at(item.scheduled_at, zone),
+        "media": (
+            {
+                "url": f"/api/projects/{project_id}/posts/{item.id}/media",
+                "mime": item.media_mime,
+            }
+            if item.media_available
+            else None
+        ),
+        "generation": _plain(item.generation),
+        # Отчёт слоёв проверок принесёт свой трек.
+        "validation": None,
+        "delivery": delivery,
+        "published": _at(item.published_at, zone),
+        "history": [
+            {
+                "status": entry.status,
+                "reason": entry.reason,
+                "created_at": _at(entry.created_at, zone),
+            }
+            for entry in item.history
+        ],
+        "created_at": _at(item.created_at, zone),
+        "updated_at": _at(item.updated_at, zone),
+    }
+
+
+def _operation(item, zone: ZoneInfo) -> dict[str, Any]:
+    return {
+        "operation_id": item.run_id,
+        "purpose": item.operation,
+        "status": item.status,
+        "actor": item.actor,
+        "mode": item.mode,
+        "outcome": item.outcome,
+        "result": _plain(item.result),
+        "error": (
+            None
+            if item.failure_code is None
+            else {
+                "code": item.failure_code,
+                "message": message_for(item.failure_code),
+            }
+        ),
+        "started_at": _at(item.started_at, zone),
+        "finished_at": _at(item.finished_at, zone),
+    }
+
+
+def _publication(item, zone: ZoneInfo) -> dict[str, Any]:
+    return {
+        "delivery_id": item.delivery_id,
+        "post_id": item.post_id,
+        "provider": item.provider,
+        "status": item.status,
+        "attempt_count": item.attempt_count,
+        "message_id": item.message_id,
+        "failure_code": item.failure_code,
+        "failure_reason": item.failure_reason,
+        "sending_started_at": _at(item.sending_started_at, zone),
+        "confirmed_at": _at(item.confirmed_at, zone),
+        "created_at": _at(item.created_at, zone),
+        "updated_at": _at(item.updated_at, zone),
+        "attempts": [
+            {
+                "attempt_no": attempt.attempt_no,
+                "outcome": attempt.outcome,
+                "code": attempt.code,
+                "reason": attempt.reason,
+                "message_id": attempt.message_id,
+                "started_at": _at(attempt.started_at, zone),
+                "finished_at": _at(attempt.finished_at, zone),
+            }
+            for attempt in item.attempts
+        ],
+    }
+
+
+def _plain(value: object) -> dict[str, Any]:
+    """Снимает MappingProxyType, который не переживает сериализацию JSON."""
+    if isinstance(value, Mapping):
+        return {str(key): _plain_value(item) for key, item in value.items()}
+    return {}
 
 
 def _plain_value(value: object) -> object:
     if isinstance(value, Mapping):
-        return {str(key): _plain_value(item) for key, item in value.items()}
+        return _plain(value)
     if isinstance(value, (tuple, list)):
         return [_plain_value(item) for item in value]
-    if is_dataclass(value):
-        return _values(value)
     return value
-
-
-def _project(value) -> dict[str, object]:
-    result = _values(value)
-    result["configuration"] = _values(value.configuration)
-    return result
-
-
-def _day_boundaries(timezone: str):
-    local = datetime.now(UTC).astimezone(ZoneInfo(timezone))
-    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start.date(), start, start + timedelta(days=1)

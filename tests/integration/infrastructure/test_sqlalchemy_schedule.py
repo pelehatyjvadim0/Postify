@@ -1,46 +1,134 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from postify.infrastructure.repositories.sqlalchemy_schedule import SqlAlchemyScheduleRepository
+from postify.infrastructure.repositories.sqlalchemy_schedule import (
+    SqlAlchemyScheduleRepository,
+)
 
 
 pytestmark = pytest.mark.integration
 
-
-def _seed_schedule_graph(database_url: str) -> None:
-    engine = create_engine(database_url)
-    now = datetime(2026, 8, 12, tzinfo=UTC)
-    try:
-        with engine.begin() as connection:
-            for statement in (
-                "UPDATE content_projects SET timezone='UTC' WHERE id=1",
-                """INSERT INTO source_connections
-                    (id,project_id,provider,name,enabled,configuration,schedule,created_at,updated_at)
-                    VALUES (101,1,'telegram_account','Source',true,'{}','0 9 * * *',:now,:now)""",
-                """INSERT INTO content_formats
-                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
-                    VALUES (201,1,'Format','post','Text',true,:now,:now)""",
-                """INSERT INTO channel_connections
-                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-                    VALUES (301,1,'telegram','Channel',true,'{}','ok',:now,:now)""",
-                """INSERT INTO publication_routes
-                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
-                    VALUES (401,1,201,301,true,:now,:now)""",
-            ):
-                connection.execute(text(statement), {"now": now})
-    finally:
-        engine.dispose()
+NOW = datetime(2026, 9, 11, 12, tzinfo=UTC)
 
 
-def test_schedule_reads_source_cron_without_route_autopublish_slots(migrated_database_url: str) -> None:
-    _seed_schedule_graph(migrated_database_url)
+def _seed(engine, *, status: str, scheduled_at: datetime | None, channel: bool = True) -> int:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users(id,telegram_user_id,telegram_username,display_name,"
+                "created_at,is_active) VALUES (1,'101','','',:now,true)"
+            ),
+            {"now": NOW},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO content_projects(id,owner_id,name,topic,language,audience,"
+                "timezone,configuration,created_at,updated_at)"
+                " VALUES (1,1,'Агротех','Тема','ru','Все','Europe/Moscow','{}'::jsonb,"
+                ":now,:now)"
+            ),
+            {"now": NOW},
+        )
+        if channel:
+            connection.execute(
+                text(
+                    "INSERT INTO channel_connections(id,project_id,provider,name,enabled,"
+                    "configuration,connection_status,created_at,updated_at)"
+                    " VALUES (1,1,'telegram','@agrotech',true,'{}'::jsonb,'ok',:now,:now)"
+                ),
+                {"now": NOW},
+            )
+        return connection.execute(
+            text(
+                "INSERT INTO posts(project_id,post_text,status,scheduled_at,"
+                "created_at,updated_at)"
+                " VALUES (1,'Текст',:status,:scheduled_at,:now,:now) RETURNING id"
+            ),
+            {"status": status, "scheduled_at": scheduled_at, "now": NOW},
+        ).scalar_one()
+
+
+def _repository(engine) -> SqlAlchemyScheduleRepository:
+    return SqlAlchemyScheduleRepository(sessionmaker(engine))
+
+
+def test_schedule_lists_every_project_with_its_timezone(migrated_database_url: str) -> None:
     engine = create_engine(migrated_database_url)
     try:
-        schedules = SqlAlchemyScheduleRepository(sessionmaker(engine)).list_schedules()
+        _seed(engine, status="approved", scheduled_at=NOW - timedelta(minutes=1))
+
+        schedules = _repository(engine).list_schedules()
     finally:
         engine.dispose()
 
-    assert schedules[0].sources[0].cron == "0 9 * * *"
+    assert [(item.project_id, item.timezone) for item in schedules] == [
+        (1, "Europe/Moscow")
+    ]
+
+
+def test_due_approved_post_becomes_a_publish_command(migrated_database_url: str) -> None:
+    engine = create_engine(migrated_database_url)
+    try:
+        post_id = _seed(engine, status="approved", scheduled_at=NOW - timedelta(minutes=1))
+
+        commands = _repository(engine).due_publications(project_id=1, now=NOW)
+    finally:
+        engine.dispose()
+
+    assert [(item.kind, item.post_id) for item in commands] == [("publish_once", post_id)]
+
+
+def test_post_without_channel_or_time_is_not_due(migrated_database_url: str) -> None:
+    # Поломка: планировщик берёт пост, который отправить некуда, и жжёт попытки.
+    engine = create_engine(migrated_database_url)
+    try:
+        _seed(
+            engine,
+            status="approved",
+            scheduled_at=NOW - timedelta(minutes=1),
+            channel=False,
+        )
+
+        assert _repository(engine).due_publications(project_id=1, now=NOW) == ()
+    finally:
+        engine.dispose()
+
+
+def test_future_and_unapproved_posts_wait(migrated_database_url: str) -> None:
+    engine = create_engine(migrated_database_url)
+    try:
+        _seed(engine, status="approved", scheduled_at=NOW + timedelta(hours=1))
+        with create_engine(migrated_database_url).begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO posts(project_id,post_text,status,scheduled_at,"
+                    "created_at,updated_at)"
+                    " VALUES (1,'Ещё на ревью','needs_review',:past,:now,:now)"
+                ),
+                {"past": NOW - timedelta(hours=1), "now": NOW},
+            )
+
+        assert _repository(engine).due_publications(project_id=1, now=NOW) == ()
+    finally:
+        engine.dispose()
+
+
+def test_accepted_command_claims_the_slot_once(migrated_database_url: str) -> None:
+    engine = create_engine(migrated_database_url)
+    try:
+        _seed(engine, status="approved", scheduled_at=NOW - timedelta(minutes=1))
+        repository = _repository(engine)
+        command = repository.due_publications(project_id=1, now=NOW)[0]
+
+        accepted = repository.accept(command)
+        repeated = repository.accept(command)
+    finally:
+        engine.dispose()
+
+    assert accepted is not None
+    assert accepted.operation_run_id is not None and accepted.job_id is not None
+    # Тот же слот второй раз не занимается: иначе один пост уйдёт дважды.
+    assert repeated is None

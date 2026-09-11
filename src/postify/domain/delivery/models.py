@@ -21,7 +21,7 @@ class PublishFailureKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class DeliveryClaim:
     delivery_id: int
-    package_id: int
+    post_id: int
     attempt_no: int
     post_text: str
     media_path: str | None
@@ -36,7 +36,7 @@ class TelegramMessage:
 @dataclass(frozen=True, slots=True)
 class PublishContentResult:
     outcome: str
-    package_id: int | None = None
+    post_id: int | None = None
     message_id: int | None = None
 
 

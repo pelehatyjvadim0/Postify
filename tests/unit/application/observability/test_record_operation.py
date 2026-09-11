@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,7 +19,7 @@ def _api():
     return RecordedAction, OperationKind
 
 
-class SourceFailure(RuntimeError):
+class ActionFailure(RuntimeError):
     pass
 
 
@@ -73,21 +74,31 @@ class FakeJournal:
         return 41
 
     def succeed(
-        self, run_id: int, *, outcome: str, now: datetime, **metadata: object
+        self,
+        run_id: int,
+        *,
+        outcome: str,
+        now: datetime,
+        result: Mapping[str, object] | None = None,
     ) -> None:
         event: tuple[object, ...] = ("succeed", run_id, outcome, now)
-        if metadata:
-            event += (metadata,)
+        if result is not None:
+            event += (dict(result),)
         self.events.append(event)
         if self.succeed_error is not None:
             raise self.succeed_error
 
     def fail(
-        self, run_id: int, *, failure_code: str, now: datetime, **metadata: object
+        self,
+        run_id: int,
+        *,
+        failure_code: str,
+        now: datetime,
+        result: Mapping[str, object] | None = None,
     ) -> None:
         event: tuple[object, ...] = ("fail", run_id, failure_code, now)
-        if metadata:
-            event += (metadata,)
+        if result is not None:
+            event += (dict(result),)
         self.events.append(event)
         if self.fail_error is not None:
             raise self.fail_error
@@ -106,18 +117,18 @@ def _recorded(
     success_outcome: str | Any = "empty",
     failure_code: str = "publish_once_failed",
     result_metadata=None,
+    mode: str = "automatic",
+    actor: str = "scheduler",
 ):
     RecordedAction, OperationKind = _api()
-    kind = {
-        "run_once": OperationKind.RUN_ONCE,
-        "publish_once": OperationKind.PUBLISH_ONCE,
-    }[operation]
     return RecordedAction(
         action,
         journal,
-        operation=kind,
+        operation=OperationKind(operation),
         success_outcome=success_outcome,
         failure_code=failure_code,
+        mode=mode,
+        actor=actor,
         result_metadata=result_metadata,
         clock=_clock(STARTED, FINISHED),
     )
@@ -140,6 +151,20 @@ def test_recorded_action_preserves_result_and_saves_safe_outcome() -> None:
         ("action",),
         ("succeed", 41, "empty", FINISHED),
     ]
+
+
+def test_manual_operation_is_journalled_with_its_own_mode_and_actor() -> None:
+    # Поломка: ручной запуск из UI попадает в журнал как работа планировщика.
+    events: list[tuple[object, ...]] = []
+
+    _recorded(
+        FakeAction(events, result=object()),
+        FakeJournal(events),
+        mode="manual",
+        actor="user",
+    ).execute()
+
+    assert events[0] == ("start", "publish_once", "manual", "user", STARTED)
 
 
 def test_callable_success_outcome_uses_result_without_replacing_it() -> None:
@@ -166,7 +191,7 @@ def test_callable_success_outcome_uses_result_without_replacing_it() -> None:
 def test_action_failure_saves_only_fixed_code_and_reraises_original_exception() -> None:
     # Поломка: в failure journal попадают exception text, URL, token или новое исключение.
     events: list[tuple[object, ...]] = []
-    original = SourceFailure(
+    original = ActionFailure(
         "original https://private.invalid 123456:SENTINEL-TOKEN /media/private.png"
     )
     recorded = _recorded(
@@ -174,7 +199,7 @@ def test_action_failure_saves_only_fixed_code_and_reraises_original_exception() 
         FakeJournal(events),
     )
 
-    with pytest.raises(SourceFailure, match="original") as raised:
+    with pytest.raises(ActionFailure, match="original") as raised:
         recorded.execute()
 
     assert raised.value is original
@@ -190,15 +215,15 @@ def test_action_failure_saves_only_fixed_code_and_reraises_original_exception() 
 
 
 def test_failure_journal_error_never_masks_original_exception() -> None:
-    # Поломка: failure journal error маскирует исходный Telegram/source failure.
+    # Поломка: failure journal error маскирует исходную ошибку доставки.
     events: list[tuple[object, ...]] = []
-    original = SourceFailure("original")
+    original = ActionFailure("original")
     recorded = _recorded(
         FakeAction(events, error=original),
         FakeJournal(events, fail_error=JournalFailure("journal unavailable")),
     )
 
-    with pytest.raises(SourceFailure, match="original") as raised:
+    with pytest.raises(ActionFailure, match="original") as raised:
         recorded.execute()
 
     assert raised.value is original
@@ -236,29 +261,28 @@ def test_success_journal_failure_does_not_repeat_underlying_action() -> None:
     assert events[-1] == ("succeed", 41, "empty", FINISHED)
 
 
-def test_run_once_uses_its_own_operation_and_failure_codes() -> None:
+def test_generation_uses_its_own_operation_and_failure_codes() -> None:
     # Поломка: два action смешиваются в журнале или сохраняют небезопасную ошибку.
     events: list[tuple[object, ...]] = []
-    original = SourceFailure("secret source payload")
     recorded = _recorded(
-        FakeAction(events, error=original),
+        FakeAction(events, error=ActionFailure("secret prompt payload")),
         FakeJournal(events),
-        operation="run_once",
+        operation="generate_post",
         success_outcome="completed",
-        failure_code="run_once_failed",
+        failure_code="generate_post_failed",
     )
 
-    with pytest.raises(SourceFailure):
+    with pytest.raises(ActionFailure):
         recorded.execute()
 
     assert events[0] == (
         "start",
-        "run_once",
+        "generate_post",
         "automatic",
         "scheduler",
         STARTED,
     )
-    assert events[-1] == ("fail", 41, "run_once_failed", FINISHED)
+    assert events[-1] == ("fail", 41, "generate_post_failed", FINISHED)
 
 
 def test_invalid_callable_success_outcome_does_not_reach_journal() -> None:
@@ -280,46 +304,29 @@ def test_invalid_callable_success_outcome_does_not_reach_journal() -> None:
     ]
 
 
-def test_run_once_records_codex_profile_and_counts_from_shared_result() -> None:
-    from postify.application.content.process_content import ProcessContentResult
-    from postify.application.ingestion.import_candidates import ImportResult
-    from postify.application.jobs.run_once import RunOnceResult
-    from postify.application.observability.record_operation import (
-        run_once_operation_metadata,
-    )
+def test_result_metadata_is_persisted_as_the_operation_result_payload() -> None:
+    # Поломка: UI опрашивает операцию и не получает id созданного поста.
+    from postify.domain.delivery.models import PublishContentResult
 
     events: list[tuple[object, ...]] = []
-    result = RunOnceResult(
-        ImportResult(3, 2, 1),
-        ProcessContentResult(
-            claimed=2,
-            packages_created=1,
-            materials_taken=2,
-            codex_model="gpt-5.6-luna",
-            codex_reasoning_effort="high",
-        ),
-    )
+    result = PublishContentResult("published", post_id=77, message_id=731)
 
     _recorded(
         FakeAction(events, result=result),
         FakeJournal(events),
-        operation="run_once",
-        success_outcome="completed",
-        failure_code="run_once_failed",
-        result_metadata=run_once_operation_metadata,
+        success_outcome=lambda value: value.outcome,
+        result_metadata=lambda value: {
+            "post_id": value.post_id,
+            "message_id": value.message_id,
+        },
     ).execute()
 
     assert events[-1] == (
         "succeed",
         41,
-        "completed",
+        "published",
         FINISHED,
-        {
-            "codex_model": "gpt-5.6-luna",
-            "codex_reasoning_effort": "high",
-            "materials_taken": 2,
-            "packages_created": 1,
-        },
+        {"post_id": 77, "message_id": 731},
     )
 
 
@@ -329,7 +336,7 @@ def test_invalid_failure_code_is_rejected_before_action_starts() -> None:
 
     with pytest.raises(ValueError, match="failure"):
         _recorded(
-            FakeAction(events, error=SourceFailure("original")),
+            FakeAction(events, error=ActionFailure("original")),
             FakeJournal(events),
             failure_code="private failure",
         )

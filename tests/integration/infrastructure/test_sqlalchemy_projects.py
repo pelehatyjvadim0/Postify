@@ -1,248 +1,232 @@
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
-from alembic import command
 from cryptography.fernet import Fernet
-from pydantic import SecretStr
-from sqlalchemy import create_engine
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
+from postify.application.projects.check_channel import CheckChannel
+from postify.application.projects.manage_channel import (
+    RemoveProjectChannel,
+    SetProjectChannel,
+)
+from postify.application.projects.manage_project import ManageProject
+from postify.application.projects.manage_rubrics import ManageRubrics
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
 )
 from postify.infrastructure.security.secrets import SecretCipher
-from postify.adapters.channels.registry import ChannelProviderRegistry
-from postify.adapters.sources.registry import SourceProviderRegistry
-from postify.application.projects.bootstrap_project import BootstrapProject
-from tests.unit.application.projects.test_bootstrap_project import settings
-from tests.unit.domain.projects.test_models import configuration
 
 
 pytestmark = pytest.mark.integration
 
 
-def test_project_repository_updates_identity_without_losing_configuration(
-    alembic_config, isolated_database_url
-) -> None:
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    now = datetime(2026, 8, 12, 9, tzinfo=UTC)
+OWNER_ID = 101
+NOW = datetime(2026, 9, 11, 9, tzinfo=UTC)
+LATER = datetime(2026, 9, 11, 10, tzinfo=UTC)
+
+
+@pytest.fixture
+def repository(migrated_database_url: str):
+    engine = create_engine(migrated_database_url)
     try:
-        repository.replace_default(
-            name="Технологии просто",
-            topic="Практичная автоматизация",
-            language="ru",
-            audience="Продуктовые команды",
-            timezone="Europe/Moscow",
-            configuration=configuration(),
-            now=now,
-        )
-        project = repository.get(1)
-        repository.save(
-            type(project)(
-                project.id,
-                "Новая редакция",
-                project.topic,
-                project.language,
-                project.audience,
-                project.timezone,
-                project.configuration,
-                project.created_at,
-                datetime(2026, 8, 12, 10, tzinfo=UTC),
-            )
-        )
-
-        updated = repository.get(1)
-        assert updated.name == "Новая редакция"
-        assert updated.configuration == configuration()
-    finally:
-        engine.dispose()
-
-
-def test_project_repository_does_not_return_another_project(
-    alembic_config, isolated_database_url
-) -> None:
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    try:
-        with pytest.raises(LookupError):
-            repository.get(999)
-    finally:
-        engine.dispose()
-
-
-def test_bootstrap_repository_creates_full_graph_once(
-    alembic_config, isolated_database_url
-) -> None:
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    action = BootstrapProject(
-        repository,
-        SourceProviderRegistry(),
-        ChannelProviderRegistry(),
-        cipher=None,
-        clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
-    )
-    try:
-        first = action.execute(settings(), telegram=None)
-        second = action.execute(settings(), telegram=None)
-
-        assert first.id == second.id == 1
-        with engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT count(*) FROM source_connections"
-            ).scalar_one() == 0
-    finally:
-        engine.dispose()
-
-
-def test_repository_removes_only_channel_secret_and_keeps_connection(
-    alembic_config, isolated_database_url
-) -> None:
-    # Break caught: explicit credential removal deletes the channel or leaves encrypted material readable.
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    try:
-        channel = repository.create_resource(
-            1,
-            "channels",
-            {
-                "provider": "telegram",
-                "name": "Основной",
-                "enabled": True,
-                "configuration": {"chat_id": "-100123"},
-                "encrypted_secret": "encrypted-token",
-            },
-            datetime(2026, 8, 12, 9, tzinfo=UTC),
-        )
-
-        result = repository.remove_channel_secret(
-            1, channel["id"], datetime(2026, 8, 12, 10, tzinfo=UTC)
-        )
-        stored = repository.get_resource(1, "channels", channel["id"])
-
-        assert result["secretConfigured"] is False
-        assert result["connection_status"] == "unconfigured"
-        assert stored["encrypted_secret"] is None
-        assert stored["configuration"] == {"chat_id": "-100123"}
-    finally:
-        engine.dispose()
-
-
-def test_schedule_transaction_rolls_back_every_change_when_commit_fails(
-    alembic_config, isolated_database_url
-) -> None:
-    # Break caught: ingestion schedule commits before publication schedule failure and leaves a partially saved section.
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    normal = SqlAlchemyProjectRepository(sessionmaker(engine))
-
-    class FailingCommitSession(Session):
-        def commit(self) -> None:
-            self.flush()
-            raise RuntimeError("forced commit failure")
-
-    try:
-        source = normal.create_resource(
-            1,
-            "sources",
-            {"provider": "telegram_group", "name": "Источник", "enabled": True,
-             "configuration": {"chat_id": "-100-source"}, "schedule": "0 7 * * 1-5"},
-            datetime(2026, 8, 12, 9, tzinfo=UTC),
-        )
-        failing = SqlAlchemyProjectRepository(
-            sessionmaker(engine, class_=FailingCommitSession)
-        )
-
-        with pytest.raises(RuntimeError, match="forced commit failure"):
-            failing.update_schedules(
-                1,
-                ({"id": source["id"], "schedule": "0 8 * * *"},),
-                datetime(2026, 8, 12, 10, tzinfo=UTC),
-            )
-
-        assert normal.get_resource(1, "sources", source["id"])["schedule"] == "0 7 * * 1-5"
-    finally:
-        engine.dispose()
-
-
-def test_route_references_are_project_scoped_in_repository_and_database(
-    alembic_config, isolated_database_url
-) -> None:
-    # Поломка review: global FK разрешает route project 1 -> resources project 2.
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    repository = SqlAlchemyProjectRepository(sessionmaker(engine))
-    now = datetime(2026, 8, 12, 9, tzinfo=UTC)
-    try:
+        # Проект принадлежит пользователю, поэтому владелец нужен даже тестам.
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    """INSERT INTO content_projects
-                    (id,name,topic,language,audience,timezone,configuration,created_at,updated_at)
-                    VALUES (2,'P2','Topic','ru','Audience','UTC','{}',:now,:now)"""
+                    "INSERT INTO users(id,telegram_user_id,telegram_username,"
+                    "display_name,created_at,is_active)"
+                    " VALUES (:id,:telegram_id,'','',:now,true)"
                 ),
-                {"now": now},
+                {"id": OWNER_ID, "telegram_id": str(OWNER_ID), "now": NOW},
             )
-            connection.execute(
-                text(
-                    """INSERT INTO content_formats
-                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
-                    VALUES (202,2,'P2 format','text','Text',true,:now,:now)"""
-                ),
-                {"now": now},
-            )
-            connection.execute(
-                text(
-                    """INSERT INTO channel_connections
-                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-                    VALUES (302,2,'telegram','P2 channel',true,
-                            '{\"chat_id\":\"2\"}','configured',:now,:now)"""
-                ),
-                {"now": now},
-            )
-
-        with pytest.raises(LookupError):
-            repository.validate_route_references(1, 202, 302)
-
-        with pytest.raises(IntegrityError):
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """INSERT INTO publication_routes
-                        (project_id,format_id,channel_id,enabled,created_at,updated_at)
-                        VALUES (1,202,302,true,:now,:now)"""
-                    ),
-                    {"now": now},
-                )
+        yield SqlAlchemyProjectRepository(sessionmaker(engine, expire_on_commit=False))
     finally:
         engine.dispose()
 
 
-def test_operational_write_without_project_id_fails_closed(
-    alembic_config, isolated_database_url
-) -> None:
-    # Поломка review: temporary default=1 скрывает потерю scope.
-    command.upgrade(alembic_config, "head")
-    engine = create_engine(isolated_database_url)
-    try:
-        with pytest.raises(IntegrityError):
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        """INSERT INTO candidates
-                        (source_name,source_id,title,url,discovered_at,raw_payload)
-                        VALUES ('source','missing-scope','Title','https://example.test',
-                                :now,'{}')"""
-                    ),
-                    {"now": datetime(2026, 8, 12, 9, tzinfo=UTC)},
-                )
-    finally:
-        engine.dispose()
+def cipher() -> SecretCipher:
+    return SecretCipher(Fernet.generate_key().decode("ascii"))
+
+
+def make_project(repository, name: str = "Агротех", timezone: str = "Europe/Moscow"):
+    return ManageProject(repository, clock=lambda: NOW).create(
+        {"name": name, "timezone": timezone}, owner_id=OWNER_ID
+    )
+
+
+def test_project_update_keeps_configuration_and_bumps_timestamp(repository) -> None:
+    project = make_project(repository)
+
+    ManageProject(repository, clock=lambda: LATER).update(
+        project.id, {"name": "Новая редакция", "tone": "Дружелюбный"}
+    )
+    stored = repository.get(project.id)
+
+    assert stored.name == "Новая редакция"
+    assert stored.configuration.tone == "Дружелюбный"
+    assert stored.configuration.media_max_bytes == project.configuration.media_max_bytes
+    assert stored.updated_at == LATER
+
+
+def test_unknown_project_is_not_readable(repository) -> None:
+    with pytest.raises(LookupError):
+        repository.get(999)
+
+
+def test_rubrics_of_another_project_are_invisible_and_unchangeable(repository) -> None:
+    # Поломка: rubric_id без фильтра по проекту выдаёт и правит чужие рубрики.
+    mine = make_project(repository, name="Мой проект")
+    other = make_project(repository, name="Чужой проект")
+    rubrics = ManageRubrics(repository, clock=lambda: NOW)
+    stranger = rubrics.create(other.id, {"name": "Чужая", "instructions": "Секрет"})
+
+    assert rubrics.list(mine.id) == ()
+    with pytest.raises(LookupError):
+        rubrics.update(mine.id, stranger.id, {"enabled": False})
+    with pytest.raises(LookupError):
+        repository.update_rubric(mine.id, stranger.id, values={"enabled": False}, now=LATER)
+    with pytest.raises(LookupError):
+        repository.delete_rubric(mine.id, stranger.id)
+    assert rubrics.list(other.id)[0].instructions == "Секрет"
+
+
+def test_rubric_lifecycle_persists_partial_update(repository) -> None:
+    project = make_project(repository)
+    rubrics = ManageRubrics(repository, clock=lambda: NOW)
+    created = rubrics.create(project.id, {"name": "Кейс", "instructions": "Разбор задачи"})
+
+    rubrics.update(project.id, created.id, {"instructions": "Разбор задачи клиента"})
+    stored = rubrics.list(project.id)
+
+    assert [(item.name, item.instructions, item.enabled) for item in stored] == [
+        ("Кейс", "Разбор задачи клиента", True)
+    ]
+
+    rubrics.delete(project.id, created.id)
+    assert rubrics.list(project.id) == ()
+
+
+def test_rubric_names_are_unique_inside_one_project(repository) -> None:
+    project = make_project(repository)
+    rubrics = ManageRubrics(repository, clock=lambda: NOW)
+    rubrics.create(project.id, {"name": "Кейс", "instructions": "Разбор"})
+
+    with pytest.raises(IntegrityError):
+        rubrics.create(project.id, {"name": "Кейс", "instructions": "Другое"})
+
+
+def test_channel_is_single_per_project_and_hides_its_token(repository) -> None:
+    # Поломка: повторное подключение плодит вторую запись канала или светит токен.
+    project = make_project(repository)
+    secrets = cipher()
+    action = SetProjectChannel(repository, secrets, clock=lambda: NOW)
+
+    action.execute(project.id, bot_token="123:first", chat_id="@first")
+    view = action.execute(project.id, bot_token="123:second", chat_id="@second")
+
+    connection, encrypted_secret = repository.get_channel(project.id)
+    assert view == {"configured": True, "chat_id": "@second", "status": "configured"}
+    assert connection.secret_configured is True
+    assert "second" not in encrypted_secret
+    assert secrets.decrypt(encrypted_secret) == "123:second"
+    assert connection.configuration == {"chat_id": "@second"}
+
+
+def test_channel_check_stores_observed_status(repository) -> None:
+    project = make_project(repository)
+    secrets = cipher()
+    SetProjectChannel(repository, secrets, clock=lambda: NOW).execute(
+        project.id, bot_token="123:secret", chat_id="@agrotech"
+    )
+
+    class Checker:
+        last_reason = "Добавьте бота администратором Telegram-канала."
+
+        def check(self, configuration, secret):
+            assert configuration == {"chat_id": "@agrotech"}
+            assert secret == "123:secret"
+            return "failed"
+
+    result = CheckChannel(repository, secrets, Checker(), clock=lambda: LATER).execute(
+        project.id
+    )
+    connection, _ = repository.get_channel(project.id)
+
+    assert result["status"] == "failed"
+    assert connection.connection_status == "failed"
+
+
+def test_channel_of_another_project_is_not_reachable(repository) -> None:
+    mine = make_project(repository, name="Мой проект")
+    other = make_project(repository, name="Чужой проект")
+    SetProjectChannel(repository, cipher(), clock=lambda: NOW).execute(
+        other.id, bot_token="123:secret", chat_id="@other"
+    )
+
+    assert repository.get_channel(mine.id) is None
+    with pytest.raises(LookupError):
+        CheckChannel(repository, cipher(), object(), clock=lambda: LATER).execute(mine.id)
+    with pytest.raises(LookupError):
+        repository.set_channel_status(mine.id, "ok", LATER)
+    RemoveProjectChannel(repository).execute(mine.id)
+    assert repository.get_channel(other.id) is not None
+
+
+def test_channel_removal_is_blocked_while_delivery_is_in_flight(repository) -> None:
+    # Поломка: канал уходит вместе с секретом, а отправка остаётся без токена.
+    project = make_project(repository)
+    SetProjectChannel(repository, cipher(), clock=lambda: NOW).execute(
+        project.id, bot_token="123:secret", chat_id="@agrotech"
+    )
+    connection, _ = repository.get_channel(project.id)
+    with repository._session_factory() as session:
+        session.execute(
+            text(
+                "INSERT INTO posts (project_id, post_text, status, generation,"
+                " created_at, updated_at) VALUES (:project, 'Текст', 'approved',"
+                " '{}'::jsonb, :now, :now)"
+            ),
+            {"project": project.id, "now": NOW},
+        )
+        post_id = session.execute(
+            text("SELECT id FROM posts WHERE project_id=:project"),
+            {"project": project.id},
+        ).scalar_one()
+        session.execute(
+            text(
+                "INSERT INTO deliveries (project_id, post_id, channel_id, status,"
+                " attempt_no, sending_started_at, created_at, updated_at)"
+                " VALUES (:project, :post, :channel, 'sending', 1, :now, :now, :now)"
+            ),
+            {
+                "project": project.id,
+                "post": post_id,
+                "channel": connection.id,
+                "now": NOW,
+            },
+        )
+        session.commit()
+
+    with pytest.raises(RuntimeError, match="channel_delivery_in_flight"):
+        RemoveProjectChannel(repository).execute(project.id)
+
+    assert repository.get_channel(project.id) is not None
+
+
+def test_project_delete_removes_its_rubrics_and_channel(repository) -> None:
+    project = make_project(repository)
+    ManageRubrics(repository, clock=lambda: NOW).create(
+        project.id, {"name": "Кейс", "instructions": "Разбор"}
+    )
+    SetProjectChannel(repository, cipher(), clock=lambda: NOW).execute(
+        project.id, bot_token="123:secret", chat_id="@agrotech"
+    )
+
+    ManageRubrics(repository, clock=lambda: NOW).delete(project.id, repository.list_rubrics(project.id)[0].id)
+    RemoveProjectChannel(repository).execute(project.id)
+    ManageProject(repository, clock=lambda: LATER).delete(project.id)
+
+    with pytest.raises(LookupError):
+        repository.get(project.id)

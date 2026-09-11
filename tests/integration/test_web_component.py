@@ -1,412 +1,288 @@
+"""Компонентный тест веб-слоя на настоящей PostgreSQL.
+
+Поднимается весь стек кроме входа: HTTP, фасад, действия и репозитории. Вход
+подменён, потому что он проверяется своим треком; здесь важно, что маршруты
+доходят до базы и возвращают контракт.
+"""
+
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 import json
-from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
-from sqlalchemy import text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
 
-from postify.adapters.channels.registry import ChannelProviderRegistry
-from postify.adapters.sources.registry import SourceProviderRegistry
-from postify.application.projects.bootstrap_project import BootstrapProject
-from postify.infrastructure.database.engine import create_engine_from_settings
-from postify.infrastructure.repositories.sqlalchemy_projects import SqlAlchemyProjectRepository
+from postify.config import Settings
+from postify.domain.projects.models import ProjectConfiguration
 from postify.web.app import create_app
 from postify.web.dependencies import WebContainer
 from postify.web.services import WebApplication
-from tests.integration.test_import_component import configured_settings
-from tests.unit.web.test_api import ApiClient
+from tests.unit.web.test_api import OWNER, ApiClient, AuthStub
 
 
 pytestmark = pytest.mark.integration
 
 
-def test_component_bootstrap_uses_real_project_scoped_repositories(
-    migrated_database_url: str,
-) -> None:
-    # Break caught: composition root returns demo data instead of the active project.
-    settings = configured_settings(migrated_database_url)
-    engine = create_engine_from_settings(settings)
-    try:
-        projects = SqlAlchemyProjectRepository(sessionmaker(engine))
-        BootstrapProject(
-            projects,
-            SourceProviderRegistry(),
-            ChannelProviderRegistry(),
-            cipher=None,
-            clock=lambda: datetime(2026, 8, 12, 9, tzinfo=UTC),
-        ).execute(settings, telegram=None)
-        client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
-
-        bootstrap = client.get("/api/v1/bootstrap")
-
-        assert bootstrap.status_code == 200
-        assert bootstrap.json()["activeProject"]["id"] == 1
-        assert bootstrap.json()["providers"]["channels"][0]["credential"] == {
-            "name": "token",
-            "label": "Токен бота",
-            "input_type": "password",
-        }
-    finally:
-        engine.dispose()
-
-
-def test_real_bootstrap_drives_channel_secret_create_replace_and_remove(
-    migrated_database_url: str,
-) -> None:
-    # Поломка final review: fixture и production bootstrap расходятся,
-    # из-за чего UI не может создать, заменить и удалить token.
-    settings = configured_settings(migrated_database_url).model_copy(
-        update={
-            "postify_secret_key": SecretStr(
-                Fernet.generate_key().decode("ascii")
-            )
-        }
+NOW = datetime(2026, 9, 11, 12, tzinfo=UTC)
+OWN_PROJECT = 1
+FOREIGN_PROJECT = 2
+CONFIGURATION = json.dumps(
+    asdict(
+        ProjectConfiguration(media_max_bytes=10_000_000, analysis_timeout_seconds=60)
     )
-    engine = create_engine_from_settings(settings)
-    api = WebApplication(settings, None)
-    client = ApiClient(create_app(WebContainer(api=api)))
-    first_token = "component-first-secret"
-    replacement_token = "component-replacement-secret"
-    try:
-        bootstrap = client.get("/api/v1/bootstrap")
-        provider = bootstrap.json()["providers"]["channels"][0]
-        assert provider["credential"] == {
-            "name": "token",
-            "label": "Токен бота",
-            "input_type": "password",
-        }
-        assert "secret" not in provider
-
-        created = client.post(
-            "/api/v1/projects/1/channels",
-            json={
-                "provider": provider["code"],
-                "name": "Component lifecycle",
-                "enabled": True,
-                "configuration": {"chat_id": "-100-component"},
-                provider["credential"]["name"]: first_token,
-            },
-        )
-        assert created.status_code == 201
-        channel_id = created.json()["id"]
-        assert created.json()["secretConfigured"] is True
-
-        replaced = client.put(
-            f"/api/v1/projects/1/channels/{channel_id}",
-            json={
-                "provider": provider["code"],
-                "name": "Component lifecycle",
-                "enabled": True,
-                "configuration": {"chat_id": "-100-component"},
-                provider["credential"]["name"]: replacement_token,
-            },
-        )
-        listed = client.get("/api/v1/projects/1/channels")
-        removed = client.post(
-            f"/api/v1/projects/1/channels/{channel_id}/secret/remove"
-        )
-        listed_after = client.get("/api/v1/projects/1/channels")
-
-        assert replaced.status_code == 200
-        assert replaced.json()["secretConfigured"] is True
-        assert listed.json()["items"][0]["secretConfigured"] is True
-        assert removed.status_code == 200
-        assert removed.json()["secretConfigured"] is False
-        assert listed_after.json()["items"][0]["secretConfigured"] is False
-        outbound = json.dumps(
-            [
-                bootstrap.json(),
-                created.json(),
-                replaced.json(),
-                listed.json(),
-                removed.json(),
-                listed_after.json(),
-            ]
-        )
-        assert first_token not in outbound
-        assert replacement_token not in outbound
-
-        with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT encrypted_secret FROM channel_connections "
-                    "WHERE project_id=1 AND id=:id"
-                ),
-                {"id": channel_id},
-            ).scalar_one_or_none() is None
-    finally:
-        api.close()
-        engine.dispose()
-
-
-def test_component_media_uses_persisted_mime(
-    migrated_database_url: str, tmp_path: Path
-) -> None:
-    # Поломка review: every stored PNG/WebP отдаётся как image/jpeg.
-    settings = configured_settings(migrated_database_url).model_copy(
-        update={"content_media_dir": tmp_path}
-    )
-    engine = create_engine_from_settings(settings)
-    media = tmp_path / "component.webp"
-    media.write_bytes(b"RIFF-component-webp")
-    try:
-        client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
-        now = datetime(2026, 8, 12, 9, tzinfo=UTC)
-        with engine.begin() as connection:
-            candidate_id = connection.execute(
-                text(
-                    """INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                    VALUES (1,'source','component-media','Media',
-                            'https://example.test/media',:now,'{}') RETURNING id"""
-                ),
-                {"now": now},
-            ).scalar_one()
-            attempt_id = connection.execute(
-                text(
-                    """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'packaged',
-                            'https://example.test/media',:now) RETURNING id"""
-                ),
-                {"candidate": candidate_id, "now": now},
-            ).scalar_one()
-            package_id = connection.execute(
-                text(
-                    """INSERT INTO content_packages
-                    (project_id,attempt_id,source_url,context,analysis,post_text,
-                     media_path,media_mime,media_source_type,media_source_url,
-                     status,generation_snapshot,created_at,updated_at)
-                    VALUES (1,:attempt,'https://example.test/media','Context','Анализ',
-                            'Post',:path,'image/webp','og','https://cdn.test/a.webp',
-                            'approved','{}',:now,:now) RETURNING id"""
-                ),
-                {"attempt": attempt_id, "path": str(media), "now": now},
-            ).scalar_one()
-            future = datetime.now(UTC) + timedelta(days=1)
-            connection.execute(text("""
-                INSERT INTO content_formats
-                    (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
-                VALUES (401,1,'Тестовый формат','text','Короткий пост',true,:now,:now)
-            """), {"now": now})
-            connection.execute(text("""
-                INSERT INTO channel_connections
-                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-                VALUES (401,1,'telegram','Тестовый канал',true,'{"chat_id":"-100-review"}',
-                        'configured',:now,:now)
-            """), {"now": now})
-            connection.execute(text("""
-                INSERT INTO publication_routes
-                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
-                VALUES (401,1,401,401,true,:now,:now)
-            """), {"now": now})
-            connection.execute(text("""
-                UPDATE content_packages SET scheduled_at=:scheduled,route_id=401
-                WHERE project_id=1 AND id=:id
-            """), {"scheduled": future, "id": package_id})
-
-        response = client.get(f"/api/v1/projects/1/media/packages/{package_id}")
-
-        assert response.status_code == 200, response.text
-        assert response.headers["content-type"] == "image/webp"
-        assert response.content == b"RIFF-component-webp"
-    finally:
-        engine.dispose()
-
-
-def test_component_queue_returns_planned_package_in_project_timezone(
-    migrated_database_url: str,
-) -> None:
-    settings = configured_settings(migrated_database_url).model_copy(
-        update={"postify_timezone": "Europe/Moscow"}
-    )
-    engine = create_engine_from_settings(settings)
-    api = WebApplication(settings, None)
-    client = ApiClient(create_app(WebContainer(api=api)))
-    now = datetime.now(UTC)
-    scheduled_at = now + timedelta(hours=1)
-    try:
-        with engine.begin() as connection:
-            candidate_id = connection.execute(text("""
-                INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                VALUES (1,'source','queue-component','Queue package',
-                        'https://example.test/queue',:now,'{}'::jsonb)
-                RETURNING id
-            """), {"now": now}).scalar_one()
-            attempt_id = connection.execute(text("""
-                INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
-                VALUES (1,:candidate,1,'packaged','https://example.test/queue',:now)
-                RETURNING id
-            """), {"candidate": candidate_id, "now": now}).scalar_one()
-            package_id = connection.execute(text("""
-                INSERT INTO content_packages
-                    (project_id,attempt_id,source_url,context,analysis,post_text,status,
-                     generation_snapshot,created_at,updated_at)
-                VALUES (1,:attempt,'https://example.test/queue','Context','Analysis',
-                        'Planned post','awaiting_review','{}'::jsonb,:now,:now)
-                RETURNING id
-            """), {"attempt": attempt_id, "now": now}).scalar_one()
-            connection.execute(text("""
-                INSERT INTO channel_connections
-                    (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-                VALUES (501,1,'telegram','Queue channel',true,'{"chat_id":"-100-queue"}',
-                        'configured',:now,:now)
-            """), {"now": now})
-            connection.execute(text("""
-                INSERT INTO publication_routes
-                    (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
-                VALUES (501,1,1,501,true,:now,:now)
-            """), {"now": now})
-            connection.execute(text("""
-                UPDATE content_packages
-                SET scheduled_at=:scheduled_at, route_id=501
-                WHERE project_id=1 AND id=:package_id
-            """), {"scheduled_at": scheduled_at, "package_id": package_id})
-
-        response = client.get("/api/v1/projects/1/queue")
-
-        assert response.status_code == 200, response.text
-        item = next(item for item in response.json()["items"] if item["package_id"] == package_id)
-        assert item["status"] == "awaiting_review"
-        assert datetime.fromisoformat(item["scheduled_at"]) == scheduled_at
-        assert item["slot_time"] == scheduled_at.astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
-    finally:
-        api.close()
-        engine.dispose()
-
-
-@pytest.mark.parametrize(
-    ("action", "expected_status"),
-    [("approve", "approved"), ("reject", "rejected")],
 )
-def test_component_review_returns_the_committed_package_status(
-    migrated_database_url: str,
-    tmp_path: Path,
-    action: str,
-    expected_status: str,
-) -> None:
-    # Break caught: the transition commits, but reconstructing the domain package
-    # raises afterwards and the real API reports a false 422 to the browser.
-    settings = configured_settings(migrated_database_url).model_copy(
-        update={"content_media_dir": tmp_path}
+
+
+def _settings(database_url: str, tmp_path) -> Settings:
+    return Settings(
+        database_url=database_url,
+        content_media_dir=tmp_path,
+        postify_secret_key=SecretStr(Fernet.generate_key().decode("ascii")),
     )
-    engine = create_engine_from_settings(settings)
-    api = WebApplication(settings, None)
-    client = ApiClient(create_app(WebContainer(api=api)))
-    media = tmp_path / f"review-{action}.png"
-    media.write_bytes(b"review-media")
-    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
-    try:
-        with engine.begin() as connection:
-            candidate_id = connection.execute(
-                text(
-                    """INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                    VALUES (1,'source',:source_id,'Review package',
-                            'https://example.test/review',:now,'{}'::jsonb)
-                    RETURNING id"""
-                ),
-                {"source_id": f"component-review-{action}", "now": now},
-            ).scalar_one()
-            attempt_id = connection.execute(
-                text(
-                    """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'packaged',
-                            'https://example.test/review',:now) RETURNING id"""
-                ),
-                {"candidate": candidate_id, "now": now},
-            ).scalar_one()
-            package_id = connection.execute(
-                text(
-                    """INSERT INTO content_packages
-                    (project_id,attempt_id,source_url,context,analysis,post_text,
-                     media_path,media_mime,media_source_type,media_source_url,
-                     status,generation_snapshot,created_at,updated_at)
-                    VALUES (1,:attempt,'https://example.test/review','Context','Analysis',
-                            'Generated post without source link',:path,'image/png','og',
-                            'https://cdn.test/review.png','awaiting_review','{}'::jsonb,
-                            :now,:now) RETURNING id"""
-                ),
-                {"attempt": attempt_id, "path": str(media), "now": now},
-            ).scalar_one()
-
-        with engine.begin() as connection:
-            future = datetime.now(UTC) + timedelta(days=1)
-            connection.execute(text("""INSERT INTO content_formats
-                (id,project_id,name,kind,instructions,enabled,created_at,updated_at)
-                VALUES (402,1,'Плановый формат','text','Короткий пост',true,:now,:now)"""), {"now": now})
-            connection.execute(text("""INSERT INTO channel_connections
-                (id,project_id,provider,name,enabled,configuration,connection_status,created_at,updated_at)
-                VALUES (402,1,'telegram','Плановый канал',true,'{"chat_id":"-100-plan"}','configured',:now,:now)"""), {"now": now})
-            connection.execute(text("""INSERT INTO publication_routes
-                (id,project_id,format_id,channel_id,enabled,created_at,updated_at)
-                VALUES (402,1,402,402,true,:now,:now)"""), {"now": now})
-            connection.execute(text("UPDATE content_packages SET scheduled_at=:at,route_id=402 WHERE id=:id"), {"at": future, "id": package_id})
-
-        response = client.post(
-            f"/api/v1/projects/1/packages/{package_id}/{action}"
-        )
-
-        assert response.status_code == 200
-        assert response.json()["status"] == expected_status
-    finally:
-        api.close()
-        engine.dispose()
 
 
-def test_component_lists_persisted_packages_without_status_filter(
-    migrated_database_url: str,
-) -> None:
-    # Break caught: PostgreSQL cannot infer the type of a None status bind and returns 503.
-    settings = configured_settings(migrated_database_url)
-    engine = create_engine_from_settings(settings)
-    try:
-        client = ApiClient(create_app(WebContainer(api=WebApplication(settings, None))))
-        now = datetime(2026, 8, 12, 9, tzinfo=UTC)
-        with engine.begin() as connection:
-            candidate_id = connection.execute(
-                text(
-                    """INSERT INTO candidates
-                    (project_id,source_name,source_id,title,url,discovered_at,raw_payload)
-                    VALUES (1,'source','component-package','Пакет компонента',
-                            'https://example.test/package',:now,'{}'::jsonb)
-                    RETURNING id"""
-                ),
-                {"now": now},
-            ).scalar_one()
-            attempt_id = connection.execute(
-                text(
-                    """INSERT INTO content_attempts
-                    (project_id,candidate_id,attempt_no,status,source_url,started_at)
-                    VALUES (1,:candidate,1,'packaged',
-                            'https://example.test/package',:now) RETURNING id"""
-                ),
-                {"candidate": candidate_id, "now": now},
-            ).scalar_one()
+def _seed(engine) -> None:
+    """Два пользователя с проектом у каждого: чужой проект должен быть невидим."""
+    with engine.begin() as connection:
+        for user_id, telegram in ((OWNER.id, "101"), (OWNER.id + 1, "202")):
             connection.execute(
                 text(
-                    """INSERT INTO content_packages
-                    (project_id,attempt_id,source_url,context,analysis,post_text,
-                     status,generation_snapshot,created_at,updated_at)
-                    VALUES (1,:attempt,'https://example.test/package','Контекст',
-                            'Анализ','Текст пакета','awaiting_review',
-                            '{}'::jsonb,:now,:now)"""
+                    "INSERT INTO users(id,telegram_user_id,telegram_username,"
+                    "display_name,created_at,is_active)"
+                    " VALUES (:id,:telegram,:username,:name,:now,true)"
                 ),
-                {"attempt": attempt_id, "now": now},
+                {
+                    "id": user_id,
+                    "telegram": telegram,
+                    "username": f"user_{telegram}",
+                    "name": f"Пользователь {telegram}",
+                    "now": NOW,
+                },
+            )
+        for project_id, owner_id, name in (
+            (OWN_PROJECT, OWNER.id, "Агротех"),
+            (FOREIGN_PROJECT, OWNER.id + 1, "Чужой"),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO content_projects(id,name,topic,language,audience,"
+                    "timezone,configuration,created_at,updated_at,owner_id)"
+                    " VALUES (:id,:name,:topic,'ru','Фермеры','Europe/Moscow',"
+                    "CAST(:configuration AS jsonb),:now,:now,:owner)"
+                ),
+                {
+                    "id": project_id,
+                    "name": name,
+                    "topic": name,
+                    "configuration": CONFIGURATION,
+                    "now": NOW,
+                    "owner": owner_id,
+                },
+            )
+        # Строки вставлены с явными id, поэтому последовательность надо
+        # подвинуть: иначе следующий INSERT возьмёт занятый id.
+        for table in ("users", "content_projects"):
+            connection.execute(
+                text(
+                    f"SELECT setval(pg_get_serial_sequence('{table}','id'),"
+                    f" (SELECT max(id) FROM {table}))"
+                )
             )
 
-        response = client.get("/api/v1/projects/1/packages")
 
-        assert response.status_code == 200
-        assert response.json()["items"][0]["post_text"] == "Текст пакета"
+def _seed_post(engine, *, post_id: int, scheduled_at: datetime) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO posts(id,project_id,post_text,status,scheduled_at,"
+                "generation,created_at,updated_at)"
+                " VALUES (:id,:project,:post_text,'needs_review',:scheduled_at,"
+                "CAST(:generation AS jsonb),:now,:now)"
+            ),
+            {
+                "id": post_id,
+                "project": OWN_PROJECT,
+                "post_text": "Первая версия поста",
+                "scheduled_at": scheduled_at,
+                "generation": json.dumps({"provider": "codex"}),
+                "now": NOW,
+            },
+        )
+
+
+@pytest.fixture
+def component(migrated_database_url: str, tmp_path):
+    engine = create_engine(migrated_database_url)
+    _seed(engine)
+    api = WebApplication(_settings(migrated_database_url, tmp_path))
+    app = create_app(
+        WebContainer(api=api), auth=AuthStub(owned=(OWN_PROJECT,))
+    )
+    try:
+        yield ApiClient(app), engine
     finally:
+        api.close()
         engine.dispose()
+
+
+def test_project_is_read_and_edited_through_the_real_repository(component) -> None:
+    client, _ = component
+
+    read = client.get(f"/api/projects/{OWN_PROJECT}")
+    updated = client.put(
+        f"/api/projects/{OWN_PROJECT}",
+        json={"name": "Агротех+", "tone": "Дружелюбный"},
+    )
+    reread = client.get(f"/api/projects/{OWN_PROJECT}")
+
+    assert read.status_code == 200
+    assert read.json()["channel"] == {
+        "configured": False,
+        "chat_id": "",
+        "status": "unconfigured",
+        "checked_at": None,
+    }
+    assert updated.status_code == 200
+    assert reread.json()["name"] == "Агротех+"
+    assert reread.json()["tone"] == "Дружелюбный"
+
+
+def test_rubrics_survive_the_round_trip(component) -> None:
+    client, _ = component
+
+    created = client.post(
+        f"/api/projects/{OWN_PROJECT}/rubrics",
+        json={"name": "Кейс", "instructions": "Разбор задачи"},
+    )
+    rubric_id = created.json()["id"]
+    disabled = client.put(
+        f"/api/projects/{OWN_PROJECT}/rubrics/{rubric_id}", json={"enabled": False}
+    )
+    listed = client.get(f"/api/projects/{OWN_PROJECT}/rubrics")
+    deleted = client.delete(f"/api/projects/{OWN_PROJECT}/rubrics/{rubric_id}")
+    empty = client.get(f"/api/projects/{OWN_PROJECT}/rubrics")
+
+    assert created.status_code == 201
+    assert disabled.json()["enabled"] is False
+    assert listed.json()[0]["instructions"] == "Разбор задачи"
+    assert deleted.status_code == 204
+    assert empty.json() == []
+
+
+def test_channel_token_is_stored_encrypted_and_never_returned(component) -> None:
+    client, engine = component
+
+    saved = client.put(
+        f"/api/projects/{OWN_PROJECT}/channel",
+        json={"bot_token": "123:super-secret", "chat_id": "@agrotech"},
+    )
+    with engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT encrypted_secret FROM channel_connections"
+                " WHERE project_id=:project"
+            ),
+            {"project": OWN_PROJECT},
+        ).scalar_one()
+    removed = client.delete(f"/api/projects/{OWN_PROJECT}/channel")
+    after = client.get(f"/api/projects/{OWN_PROJECT}")
+
+    assert saved.status_code == 200
+    assert saved.json()["configured"] is True
+    assert "super-secret" not in saved.text
+    assert "super-secret" not in stored
+    assert removed.status_code == 204
+    assert after.json()["channel"]["configured"] is False
+
+
+def test_post_is_planned_and_approved_through_http(component) -> None:
+    client, engine = component
+    scheduled_at = datetime.now(UTC) + timedelta(days=1)
+    _seed_post(engine, post_id=77, scheduled_at=scheduled_at)
+    client.put(
+        f"/api/projects/{OWN_PROJECT}/channel",
+        json={"bot_token": "123:secret", "chat_id": "@agrotech"},
+    )
+
+    listed = client.get(f"/api/projects/{OWN_PROJECT}/posts?status=needs_review")
+    edited = client.patch(
+        f"/api/projects/{OWN_PROJECT}/posts/77", json={"post_text": "Правка редактора"}
+    )
+    approved = client.post(f"/api/projects/{OWN_PROJECT}/posts/77/approve")
+
+    assert [item["id"] for item in listed.json()] == [77]
+    # Время отдаётся в таймзоне проекта, а не в UTC.
+    assert listed.json()[0]["scheduled_at"].endswith("+03:00")
+    assert edited.json()["post_text"] == "Правка редактора"
+    assert approved.json()["status"] == "approved"
+    assert [entry["status"] for entry in approved.json()["history"]] == [
+        "needs_review",
+        "approved",
+    ]
+
+
+def test_expired_plan_is_a_conflict_not_a_crash(component) -> None:
+    client, engine = component
+    _seed_post(engine, post_id=78, scheduled_at=NOW)
+    client.put(
+        f"/api/projects/{OWN_PROJECT}/channel",
+        json={"bot_token": "123:secret", "chat_id": "@agrotech"},
+    )
+
+    response = client.post(f"/api/projects/{OWN_PROJECT}/posts/78/approve")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "publication_plan_expired"
+    assert response.json()["error"]["message"]
+
+
+def test_journals_are_empty_but_readable(component) -> None:
+    client, _ = component
+
+    operations = client.get(f"/api/projects/{OWN_PROJECT}/operations")
+    publications = client.get(f"/api/projects/{OWN_PROJECT}/publications")
+
+    assert operations.json() == []
+    assert publications.json() == []
+
+
+def test_foreign_project_is_invisible_on_real_data(component) -> None:
+    """Чужой проект существует в базе, но пользователю отвечают 404."""
+    client, _ = component
+
+    read = client.get(f"/api/projects/{FOREIGN_PROJECT}")
+    posts = client.get(f"/api/projects/{FOREIGN_PROJECT}/posts")
+    edited = client.put(
+        f"/api/projects/{FOREIGN_PROJECT}", json={"name": "Захвачено"}
+    )
+
+    for response in (read, posts, edited):
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "not_found"
+        assert "Чужой" not in response.text
+
+
+def test_project_is_created_for_the_current_owner(component) -> None:
+    """Проект заводится на вошедшего: ``content_projects.owner_id`` NOT NULL."""
+    client, engine = component
+
+    created = client.post(
+        "/api/projects", json={"name": "Новый", "timezone": "Europe/Moscow"}
+    )
+
+    assert created.status_code == 201
+    with engine.connect() as connection:
+        owner = connection.execute(
+            text("SELECT owner_id FROM content_projects WHERE id=:id"),
+            {"id": created.json()["id"]},
+        ).scalar_one()
+    assert owner == OWNER.id
+    listed = client.get("/api/projects")
+    assert {item["id"] for item in listed.json()} == {
+        OWN_PROJECT,
+        created.json()["id"],
+    }

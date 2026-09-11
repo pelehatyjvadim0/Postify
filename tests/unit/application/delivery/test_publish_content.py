@@ -41,9 +41,9 @@ class RepositoryFake:
         self.events.append("cleanup:find")
         return self.cleanup
 
-    def reserve_next(self, *, now: datetime, package_id: int | None = None, delivery_id: int | None = None):
-        package = getattr(self.claim, "package_id", "none")
-        self.events.append(f"reserve:{package}")
+    def reserve_next(self, *, now: datetime, post_id: int | None = None, delivery_id: int | None = None):
+        post = getattr(self.claim, "post_id", "none")
+        self.events.append(f"reserve:{post}")
         return self.claim
 
     def record_failure(self, claim, *, kind, code: str, reason: str, now: datetime) -> None:
@@ -65,7 +65,7 @@ class PublisherFake:
     error: Exception | None = None
 
     def publish(self, claim):
-        self.events.append(f"telegram:{claim.package_id}")
+        self.events.append(f"telegram:{claim.post_id}")
         if self.error is not None:
             raise self.error
         _, _, _, _, TelegramMessage, _ = _api()
@@ -94,7 +94,7 @@ def _action(repository, publisher, media, timeout_seconds: float = 10):
     )
 
 
-def test_empty_slot_converts_stale_before_reserving_one_package() -> None:
+def test_empty_slot_converts_stale_before_reserving_one_post() -> None:
     # Поломка: stale sending не закрывается до claim или empty вызывает Telegram.
     _, _, Result, *_ = _api()
     events: list[str] = []
@@ -119,7 +119,7 @@ def test_confirmation_is_committed_before_media_delete() -> None:
         RepositoryFake(events, claim=claim), PublisherFake(events), MediaFake(events)
     ).execute()
 
-    assert result == Result("published", package_id=41, message_id=731)
+    assert result == Result("published", post_id=41, message_id=731)
     assert events[-5:] == [
         "reserve:41",
         "telegram:41",
@@ -154,7 +154,7 @@ def test_typed_publish_failure_is_persisted_without_confirmation_or_delete(outco
         MediaFake(events),
     ).execute()
 
-    assert result == Result(outcome, package_id=41)
+    assert result == Result(outcome, post_id=41)
     assert events[-1] == f"failure:{outcome}:telegram_failure:Безопасная причина:1"
     assert not any(item.startswith(("commit:", "delete:", "deleted:")) for item in events)
 
@@ -171,7 +171,7 @@ def test_pending_cleanup_is_completed_before_claim_without_telegram() -> None:
         MediaFake(events),
     ).execute()
 
-    assert result == Result("cleanup_completed", package_id=41)
+    assert result == Result("cleanup_completed", post_id=41)
     assert events[-3:] == ["cleanup:find", "delete:/media/41.png", "deleted:11"]
     assert not any(item.startswith(("reserve:", "telegram:")) for item in events)
 
@@ -185,9 +185,9 @@ def test_targeted_publish_skips_unrelated_cleanup() -> None:
         RepositoryFake(events, claim=approved_claim(), cleanup=approved_claim()),
         PublisherFake(events),
         MediaFake(events),
-    ).execute(package_id=41)
+    ).execute(post_id=41)
 
-    assert result == Result("published", package_id=41, message_id=731)
+    assert result == Result("published", post_id=41, message_id=731)
     assert "cleanup:find" not in events
 
 
@@ -202,7 +202,7 @@ def test_failed_cleanup_remains_pending_without_telegram_or_failure_attempt() ->
         MediaFake(events, error=OSError("disk")),
     ).execute()
 
-    assert result == Result("cleanup_pending", package_id=41)
+    assert result == Result("cleanup_pending", post_id=41)
     assert not any(item.startswith(("reserve:", "telegram:", "failure:", "deleted:")) for item in events)
 
 
@@ -222,7 +222,7 @@ def test_real_media_cleanup_error_keeps_publication_pending_without_new_delivery
         MediaFake(events, error=MediaCleanupError()),
     ).execute()
 
-    assert result == Result("cleanup_pending", package_id=41)
+    assert result == Result("cleanup_pending", post_id=41)
     assert "failure:" not in " ".join(events)
     assert not any(item.startswith("deleted:") for item in events)
     if cleanup:

@@ -2,83 +2,143 @@ from datetime import UTC, datetime
 
 import pytest
 
-from postify.application.projects.manage_project import ManageProject
+from postify.application.projects.manage_project import (
+    DEFAULT_AUDIENCE,
+    DEFAULT_LANGUAGE,
+    ManageProject,
+)
 from postify.domain.projects.models import ContentProject
 from tests.unit.domain.projects.test_models import configuration
 
 
-class MemoryProjects:
-    def __init__(self, project: ContentProject) -> None:
-        self.project = project
-
-    def get(self, project_id: int) -> ContentProject:
-        if self.project.id != project_id:
-            raise LookupError(project_id)
-        return self.project
-
-    def save(self, project: ContentProject) -> ContentProject:
-        self.project = project
-        return project
+NOW = datetime(2026, 9, 11, 9, tzinfo=UTC)
+LATER = datetime(2026, 9, 11, 10, tzinfo=UTC)
 
 
 def project() -> ContentProject:
-    now = datetime(2026, 8, 12, 8, tzinfo=UTC)
     return ContentProject(
         1,
         "Старое название",
-        "AI",
+        "Старое название",
         "ru",
         "Команды",
         "Europe/Moscow",
         configuration(),
-        now,
-        now,
+        NOW,
+        NOW,
     )
 
 
-def test_update_main_changes_only_editable_identity_fields() -> None:
-    repository = MemoryProjects(project())
-    changed_at = datetime(2026, 8, 12, 9, tzinfo=UTC)
+class MemoryProjects:
+    def __init__(self, existing: ContentProject | None = None) -> None:
+        self.project = existing
+        self.created: dict[str, object] | None = None
+        self.deleted: list[int] = []
 
-    updated = ManageProject(repository).update(
+    def get(self, project_id: int) -> ContentProject:
+        if self.project is None or self.project.id != project_id:
+            raise LookupError(project_id)
+        return self.project
+
+    def create(self, **values) -> ContentProject:
+        self.created = values
+        self.project = ContentProject(
+            1,
+            values["name"],
+            values["topic"],
+            values["language"],
+            values["audience"],
+            values["timezone"],
+            values["configuration"],
+            values["now"],
+            values["now"],
+            values["owner_id"],
+        )
+        return self.project
+
+    def save(self, updated: ContentProject) -> ContentProject:
+        self.project = updated
+        return updated
+
+    def delete(self, project_id: int) -> None:
+        self.deleted.append(project_id)
+
+
+def action(repository: MemoryProjects) -> ManageProject:
+    return ManageProject(repository, clock=lambda: LATER)
+
+
+def test_create_fills_defaults_for_everything_except_name_and_timezone() -> None:
+    repository = MemoryProjects()
+
+    created = ManageProject(repository, clock=lambda: NOW).create(
+        {"name": "  Агротех  ", "timezone": "Europe/Moscow"}, owner_id=7
+    )
+
+    assert created.name == "Агротех"
+    assert created.timezone == "Europe/Moscow"
+    assert (created.language, created.audience) == (DEFAULT_LANGUAGE, DEFAULT_AUDIENCE)
+    assert created.configuration.tone == "Нейтральный"
+    assert repository.created["now"] == NOW
+    assert created.owner_id == 7
+
+
+def test_create_rejects_unknown_timezone_before_writing() -> None:
+    # Поломка: невалидный часовой пояс ложится в базу и падает только при чтении.
+    repository = MemoryProjects()
+
+    with pytest.raises(ValueError, match="часовой пояс"):
+        action(repository).create(
+            {"name": "Агротех", "timezone": "Europe/Нигде"}, owner_id=7
+        )
+
+    assert repository.created is None
+
+
+def test_update_changes_editable_fields_and_keeps_configuration_limits() -> None:
+    repository = MemoryProjects(project())
+
+    updated = action(repository).update(
         1,
-        "main",
         {
             "name": "Новая редакция",
-            "topic": "Практичная автоматизация",
-            "language": "ru",
+            "language": "en",
             "audience": "Продуктовые команды",
-            "timezone": "Europe/Moscow",
+            "tone": "Дружелюбный",
         },
-        now=changed_at,
     )
 
     assert updated.name == "Новая редакция"
-    assert updated.configuration == project().configuration
-    assert updated.updated_at == changed_at
+    assert updated.audience == "Продуктовые команды"
+    assert updated.configuration.tone == "Дружелюбный"
+    assert updated.configuration.media_max_bytes == configuration().media_max_bytes
+    assert updated.updated_at == LATER
 
 
-def test_update_rejects_unknown_section_without_saving() -> None:
+def test_update_rejects_fields_outside_the_contract_without_saving() -> None:
+    # Поломка: PUT проектом переписывает лимиты модели или чужие поля.
     repository = MemoryProjects(project())
 
-    with pytest.raises(ValueError, match="секция"):
-        ManageProject(repository).update(
-            1,
-            "billing",
-            {},
-            now=datetime(2026, 8, 12, 9, tzinfo=UTC),
-        )
+    with pytest.raises(ValueError, match="Недопустимые поля"):
+        action(repository).update(1, {"analysis_model": "gpt-3"})
 
     assert repository.project == project()
 
 
-def test_update_configuration_revalidates_technical_limits() -> None:
+def test_foreign_project_id_is_not_readable_or_editable() -> None:
     repository = MemoryProjects(project())
 
-    with pytest.raises(ValueError, match="analysis_batch_size"):
-        ManageProject(repository).update(
-            1,
-            "configuration",
-            {"analysis_batch_size": 0},
-            now=datetime(2026, 8, 12, 9, tzinfo=UTC),
-        )
+    with pytest.raises(LookupError):
+        action(repository).get(2)
+    with pytest.raises(LookupError):
+        action(repository).update(2, {"name": "Чужой"})
+
+    assert repository.project == project()
+
+
+def test_delete_passes_project_to_repository() -> None:
+    repository = MemoryProjects(project())
+
+    action(repository).delete(1)
+
+    assert repository.deleted == [1]

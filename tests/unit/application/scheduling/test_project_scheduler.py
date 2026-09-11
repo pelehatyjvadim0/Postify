@@ -4,7 +4,6 @@ from postify.application.scheduling.project_scheduler import (
     ProjectSchedule,
     ProjectScheduler,
     ScheduledCommand,
-    SourceSchedule,
 )
 
 
@@ -12,16 +11,17 @@ class Repository:
     def __init__(self, publications: tuple[ScheduledCommand, ...] = ()) -> None:
         self.publications = publications
         self.recovered_at = None
+        self.pending: tuple[ScheduledCommand, ...] = ()
 
     def recover_stale_deliveries(self, *, now):
         self.recovered_at = now
         return 0
 
     def claim_pending(self, *, now):
-        return ()
+        return self.pending
 
     def list_schedules(self):
-        return (ProjectSchedule(1, "UTC", (SourceSchedule(True, "0 9 * * *"),)),)
+        return (ProjectSchedule(project_id=1, timezone="UTC"),)
 
     def due_publications(self, *, project_id, now):
         return self.publications
@@ -30,23 +30,82 @@ class Repository:
         return command
 
     def claim_job(self, job_id, *, now):
-        return next((item for item in self.publications if item.job_id == job_id), ScheduledCommand(1, "run_once", now, job_id=job_id))
+        return next(
+            (item for item in self.publications if item.job_id == job_id), None
+        )
 
 
-def test_due_approved_package_keeps_its_utc_date_route_and_target() -> None:
-    planned = ScheduledCommand(1, "publish_once", datetime(2026, 9, 5, 9, tzinfo=UTC), route_id=8, package_id=41, job_id=17)
+def test_due_approved_post_keeps_its_utc_slot_and_target() -> None:
+    planned = ScheduledCommand(
+        1, "publish_once", datetime(2026, 9, 5, 9, tzinfo=UTC), post_id=41, job_id=17
+    )
     repository = Repository((planned,))
     submitted = []
 
-    commands = ProjectScheduler(repository, submitted.append).tick(datetime(2026, 9, 5, 10, tzinfo=UTC))
+    commands = ProjectScheduler(repository, submitted.append).tick(
+        datetime(2026, 9, 5, 10, tzinfo=UTC)
+    )
 
-    assert commands[0] == planned
-    assert submitted[0] == planned
+    assert commands == (planned,)
+    assert submitted == [planned]
 
 
 def test_stale_delivery_recovery_runs_before_due_plan_claim() -> None:
     repository = Repository()
 
-    ProjectScheduler(repository, lambda command: None).tick(datetime(2026, 9, 5, 10, tzinfo=UTC))
+    ProjectScheduler(repository, lambda command: None).tick(
+        datetime(2026, 9, 5, 10, tzinfo=UTC)
+    )
 
     assert repository.recovered_at == datetime(2026, 9, 5, 10, tzinfo=UTC)
+
+
+def test_recovered_jobs_run_before_the_schedule_is_read() -> None:
+    # Задача, пережившая перезапуск, обязана уйти в работу без нового слота.
+    recovered = ScheduledCommand(
+        1, "publish_once", datetime(2026, 9, 5, 9, tzinfo=UTC), post_id=7, job_id=3
+    )
+    repository = Repository()
+    repository.pending = (recovered,)
+    submitted = []
+
+    commands = ProjectScheduler(repository, submitted.append).tick(
+        datetime(2026, 9, 5, 10, tzinfo=UTC)
+    )
+
+    assert commands == (recovered,)
+    assert submitted == [recovered]
+
+
+def test_lost_lease_drops_the_command() -> None:
+    # claim_job вернул None: слот занял другой процесс, запускать нечего.
+    planned = ScheduledCommand(
+        1, "publish_once", datetime(2026, 9, 5, 9, tzinfo=UTC), post_id=41, job_id=99
+    )
+    repository = Repository((planned,))
+    repository.publications = (planned,)
+    submitted = []
+
+    class LostLease(Repository):
+        def claim_job(self, job_id, *, now):
+            return None
+
+    lost = LostLease((planned,))
+    commands = ProjectScheduler(lost, submitted.append).tick(
+        datetime(2026, 9, 5, 10, tzinfo=UTC)
+    )
+
+    assert commands == ()
+    assert submitted == []
+
+
+def test_naive_now_is_rejected() -> None:
+    repository = Repository()
+    try:
+        ProjectScheduler(repository, lambda command: None).tick(
+            datetime(2026, 9, 5, 10)
+        )
+    except ValueError as error:
+        assert "timezone" in str(error)
+    else:
+        raise AssertionError("Планировщик обязан требовать таймзону")
