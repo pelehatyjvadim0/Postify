@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Check, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { dateTimeLabel } from '@/lib/dates'
 import { SLOT_STATUS } from '@/lib/status'
@@ -8,8 +8,6 @@ import type { Slot } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const WIDTH = 320
-/** Ширина правой панели поста: предпросмотр не должен её перекрывать. */
-const PANEL_WIDTH = 400
 
 export interface PeekActions {
   onEditTopic: (slot: Slot) => void
@@ -49,9 +47,7 @@ export function useSlotPeek() {
     showTimer.current = window.setTimeout(() => {
       const rect = element.getBoundingClientRect()
       const gap = 10
-      // Справа заканчиваем до панели поста, иначе карточка накрывает её кнопки.
-      // Узкий экран панели рядом не показывает — там весь экран наш.
-      const limit = (innerWidth >= 768 ? innerWidth - PANEL_WIDTH : innerWidth) - 8
+      const limit = innerWidth - 8
       let left = rect.right + gap
       if (left + WIDTH > limit) left = rect.left - WIDTH - gap
       if (left < 8) left = Math.max(8, Math.min(rect.right + gap, limit - WIDTH))
@@ -173,7 +169,7 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
         <TopicBox topic={slot.topic} />
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Агент пишет пост и проходит слои проверок.
+          Агент пишет пост. Статус обновится автоматически.
         </div>
       </div>
     )
@@ -193,7 +189,6 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
     )
 
   const post = slot.post
-  const checks = post?.checks_summary
   return (
     <div className="px-3.5 pb-3.5">
       {post?.media_thumb_url && (
@@ -204,22 +199,6 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
       <p className="mb-2.5 line-clamp-5 text-[12.5px] leading-relaxed">
         {post?.excerpt ?? slot.topic}
       </p>
-      {checks &&
-        (checks.passed ? (
-          <div className="flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-400">
-            <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={2.5} />
-            <span>Все проверки пройдены</span>
-          </div>
-        ) : (
-          <div className="flex items-start gap-1.5 text-[12px] text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2.5} />
-            <span>
-              {checks.blocking > 0
-                ? `${checks.blocking} блокирующих нарушения`
-                : `${checks.warnings} замечание в проверках`}
-            </span>
-          </div>
-        ))}
       <div className="mt-3 flex gap-2">
         {slot.status === 'published' ? (
           <Button size="sm" className="flex-1" onClick={() => actions.onOpen(slot)}>

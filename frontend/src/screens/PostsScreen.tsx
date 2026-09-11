@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { AlertTriangle, Check, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -53,7 +53,7 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
     void load()
   }, [load])
 
-  /** Открывает пост в плане: там полный текст, отчёт проверок и решения. */
+  /** Открывает пост в модальном просмотре плана. */
   function open(post: PostSummary) {
     navigate('plan', dayKey(post.publish_at), String(post.slot_id))
   }
@@ -129,21 +129,8 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                   <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
                     {post.excerpt}
                   </p>
-                  <div className="mt-2 flex items-center gap-2">
-                    {post.checks_summary.passed ? (
-                      <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-400">
-                        <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
-                        Проверки пройдены
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 text-[12px] text-amber-600 dark:text-amber-400">
-                        <AlertTriangle className="h-3.5 w-3.5" strokeWidth={2.5} />
-                        {post.checks_summary.blocking > 0
-                          ? `${post.checks_summary.blocking} блокирующих`
-                          : `${post.checks_summary.warnings} замечание`}
-                      </span>
-                    )}
-                    <div className="ml-auto flex gap-2">
+                  <div className="mt-2 flex justify-end gap-2">
+                    <div className="flex gap-2">
                       <Button size="xs" onClick={(event) => { event.stopPropagation(); open(post) }}>
                         Открыть
                       </Button>

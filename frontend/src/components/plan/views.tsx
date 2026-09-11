@@ -55,13 +55,13 @@ export function ListView({ slots, selectedId, today, onSelect, onAdd, bindPeek }
 
   if (groups.length === 0)
     return (
-      <div className="mx-auto max-w-3xl p-4 md:p-6">
+      <div className="w-full p-4 md:p-6">
         <EmptyPlan onAdd={() => onAdd(today)} />
       </div>
     )
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-4 md:p-6">
+    <div className="w-full space-y-5 p-4 md:p-6">
       {groups.map(([date, items]) => {
         const [, month, day] = date.split('-').map(Number)
         return (

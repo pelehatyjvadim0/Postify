@@ -32,9 +32,6 @@ export function Sidebar({
     .slice(0, 2)
     .map((word) => word[0]?.toUpperCase() ?? '')
     .join('')
-  const media = project?.media
-  const share = media && media.total > 0 ? Math.round((media.available / media.total) * 100) : 0
-
   React.useEffect(() => {
     if (open) {
       wasOpen.current = true
@@ -147,23 +144,6 @@ export function Sidebar({
         ))}
       </nav>
 
-      {media && (
-        <div className="mt-auto p-3">
-          <div className="rounded-lg border border-border p-3">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Пул изображений</span>
-              <span className="font-medium tabular-nums">{media.total}</span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-              <div className="h-full rounded-full bg-primary" style={{ width: `${share}%` }} />
-            </div>
-            <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-              {media.available} доступны, {media.total - media.available} недавно выходили или
-              без описания
-            </p>
-          </div>
-        </div>
-      )}
       </aside>
     </>
   )

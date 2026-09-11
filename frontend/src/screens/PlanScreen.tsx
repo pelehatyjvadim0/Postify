@@ -247,8 +247,8 @@ export function PlanScreen({
         </div>
       </AppHeader>
 
-      <div className="flex min-h-0 flex-1">
-        <section className="min-w-0 flex-1 overflow-auto" onScroll={peek.close}>
+      <div className="min-h-0 flex-1 overflow-auto" onScroll={peek.close}>
+        <section className="min-w-0">
           {notFound ? (
             <div className="p-4 md:p-6">
               <Alert tone="error" title="Проект не найден">
@@ -256,7 +256,7 @@ export function PlanScreen({
               </Alert>
             </div>
           ) : loading ? (
-            <div className="mx-auto max-w-3xl space-y-3 p-4 md:p-6">
+            <div className="w-full space-y-3 p-4 md:p-6">
               <Skeleton className="h-11 w-full" />
               <Skeleton className="h-11 w-full" />
               <Skeleton className="h-11 w-full" />
@@ -284,30 +284,35 @@ export function PlanScreen({
             />
           )}
         </section>
-
-        <PostPanel
-          projectId={project.id}
-          slot={selected}
-          operationRunning={operation.running}
-          onEditTopic={(slot) => setDraft({ slot, date: slot.publish_at.slice(0, 10) })}
-          onGenerate={generate}
-          onRegenerate={regenerate}
-          onSkip={skip}
-          onDelete={(slot) => setPendingDelete(slot)}
-          onClose={() => setSelectedId(null)}
-          onChanged={() => {
-            void load()
-            onProjectChanged()
-          }}
-        />
       </div>
+
+      <PostPanel
+        projectId={project.id}
+        slot={selected}
+        operationRunning={operation.running}
+        onEditTopic={(slot) => {
+          setSelectedId(null)
+          setDraft({ slot, date: slot.publish_at.slice(0, 10) })
+        }}
+        onGenerate={generate}
+        onRegenerate={regenerate}
+        onSkip={skip}
+        onDelete={(slot) => {
+          setSelectedId(null)
+          setPendingDelete(slot)
+        }}
+        onClose={() => setSelectedId(null)}
+        onChanged={() => {
+          void load()
+          onProjectChanged()
+        }}
+      />
 
       <SlotPeek
         peek={peek}
         actions={{
           onEditTopic: (slot) => {
             peek.close()
-            setSelectedId(slot.id)
             setDraft({ slot, date: slot.publish_at.slice(0, 10) })
           },
           onGenerate: generate,
