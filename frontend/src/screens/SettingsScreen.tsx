@@ -138,7 +138,15 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
 
       <Section title="Публикация">
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Режим">
+          <Field
+            label="Режим"
+            help={
+              <FieldHelp title="Режим публикации">
+                Ревью — каждый пост ждёт вашего одобрения. Автопубликация — пост уходит сам, если
+                все проверки зелёные; любое нарушение отправляет его на ревью.
+              </FieldHelp>
+            }
+          >
             <Select
               value={draft.publication_mode}
               onValueChange={(value) => set('publication_mode', value as Project['publication_mode'])}
@@ -153,7 +161,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
             </Select>
           </Field>
           <Field
-            label="Запас на генерацию, минут"
+            label="Запас на генерацию, мин"
             help={
               <FieldHelp title="Запас на генерацию">
                 За сколько минут до публикации агент начинает писать пост. 1440 минут — сутки.
@@ -555,9 +563,9 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        <Label>{label}</Label>
-        {help}
+      <div className="flex min-h-[16px] items-center gap-1.5">
+        <Label className="truncate whitespace-nowrap">{label}</Label>
+        {help && <span className="ml-auto shrink-0">{help}</span>}
       </div>
       {children}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
