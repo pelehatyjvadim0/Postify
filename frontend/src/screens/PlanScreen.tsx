@@ -84,7 +84,12 @@ export function PlanScreen({
     return { from: ymd(year, month, 1), to: ymd(year, month, daysInMonth(year, month)) }
   }, [view, anchor, year, month])
 
+  // Ответ на отменённый запрос (сменили проект или период) не должен
+  // перетирать актуальные данные.
+  const requestId = React.useRef(0)
+
   const load = React.useCallback(async () => {
+    const id = ++requestId.current
     setLoading(true)
     setNotFound(false)
     try {
@@ -92,14 +97,16 @@ export function PlanScreen({
         api.plan(project.id, range.from, range.to),
         api.rubrics(project.id),
       ])
+      if (id !== requestId.current) return
       setSlots(plan)
       setRubrics(rubricList)
     } catch (error) {
+      if (id !== requestId.current) return
       // Контракт: чужой project_id отвечает 404 — для UI это «нет объекта».
       if (error instanceof ApiError && error.isNotFound) setNotFound(true)
       else toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить план')
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
   }, [project.id, range.from, range.to, toast])
 

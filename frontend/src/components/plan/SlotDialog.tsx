@@ -48,11 +48,18 @@ export function SlotDialog({
     setError(null)
     setDate(slot ? dayKey(slot.publish_at) : draft.date)
     setTime(slot ? timeOf(slot.publish_at) : '10:00')
-    setRubricId(slot?.rubric ? String(slot.rubric.id) : (rubrics[0] ? String(rubrics[0].id) : 'none'))
+    // Рубрика не назначается молча: пустое значение так и уходит пустым.
+    setRubricId(slot?.rubric ? String(slot.rubric.id) : 'none')
     setTopic(slot?.topic ?? '')
   }, [draft, slot, rubrics])
 
   if (!draft) return null
+
+  // Выключенная рубрика в списке не нужна, но уже назначенную не прячем —
+  // иначе сохранение молча сбросило бы её.
+  const offered = rubrics.filter(
+    (rubric) => rubric.enabled || rubric.id === slot?.rubric?.id,
+  )
 
   const topicLocked = Boolean(slot?.post)
 
@@ -112,7 +119,7 @@ export function SlotDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Без рубрики</SelectItem>
-                  {rubrics.map((rubric) => (
+                  {offered.map((rubric) => (
                     <SelectItem key={rubric.id} value={String(rubric.id)}>
                       {rubric.name}
                     </SelectItem>

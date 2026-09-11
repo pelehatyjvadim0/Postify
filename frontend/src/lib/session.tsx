@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { api, restoreCsrfToken, setCsrfToken } from './api'
+import { api, hasCsrfToken, restoreCsrfToken, setCsrfToken, setSessionLostHandler } from './api'
 import { ApiError } from './errors'
+import { supportLog } from './support'
 import type { User } from './types'
 
 interface SessionValue {
@@ -22,13 +23,31 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     restoreCsrfToken()
     api
       .me()
-      .then(setUser)
+      .then((loaded) => {
+        if (hasCsrfToken()) {
+          setUser(loaded)
+          return
+        }
+        // Кука жива, а токен защиты потерян (очищено хранилище, приватный
+        // режим). Без него не пройдёт ни одно изменение, включая выход, —
+        // поэтому сразу отправляем на вход, а не в неработающий интерфейс.
+        supportLog('session_without_csrf', { user_id: loaded.id })
+        setUser(null)
+      })
       .catch((error) => {
         // 401 — обычное состояние до входа, а не сбой.
         if (!(error instanceof ApiError && error.isUnauthorized)) console.error(error)
         setUser(null)
       })
       .finally(() => setLoading(false))
+  }, [])
+
+  React.useEffect(() => {
+    setSessionLostHandler(() => {
+      setCsrfToken(null)
+      setUser(null)
+    })
+    return () => setSessionLostHandler(null)
   }, [])
 
   const value = React.useMemo<SessionValue>(
@@ -41,9 +60,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         setUser(signedUser)
       },
       logout: async () => {
-        await api.logout()
-        setCsrfToken(null)
-        setUser(null)
+        // Даже если запрос не прошёл, из интерфейса выходим: держать человека
+        // в сессии, из которой он просил выйти, нельзя.
+        try {
+          await api.logout()
+        } finally {
+          setCsrfToken(null)
+          setUser(null)
+        }
       },
     }),
     [user, loading],

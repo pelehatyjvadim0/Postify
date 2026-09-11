@@ -31,14 +31,21 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
   const toast = useToast()
   const operation = useOperation(project.id)
 
+  // Смена проекта или фильтра: поздний ответ прежнего запроса игнорируется.
+  const requestId = React.useRef(0)
+
   const load = React.useCallback(async () => {
+    const id = ++requestId.current
     setLoading(true)
     try {
-      setPosts(await api.posts(project.id, filter === 'all' ? undefined : filter))
+      const page = await api.posts(project.id, filter === 'all' ? undefined : filter)
+      if (id !== requestId.current) return
+      setPosts(page)
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить посты')
+      if (id === requestId.current)
+        toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить посты')
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
   }, [project.id, filter, toast])
 

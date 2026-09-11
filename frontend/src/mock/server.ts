@@ -57,15 +57,24 @@ interface State {
   nextId: number
 }
 
+const media: Record<number, MediaAsset[]> = { 3: buildMedia(3), 8: buildMedia(8) }
+
 const state: State = {
   user: { ...seedUser },
   loggedIn: readSession(),
-  projects: seedProjects.map((p) => ({ ...p })),
+  // Счётчики проекта считаются по фактическому пулу: интерфейс показывает их
+  // человеку, расхождение с содержимым выглядело бы ошибкой.
+  projects: seedProjects.map((p) => ({
+    ...p,
+    media: media[p.id]
+      ? { total: media[p.id].length, available: media[p.id].filter((a) => a.available).length }
+      : p.media,
+  })),
   rubrics: structuredClone(seedRubrics),
   rules: structuredClone(seedRules),
   slots: { 3: buildSlots(3), 8: buildSlots(8) },
   posts: { 3: buildPosts(), 8: [] },
-  media: { 3: buildMedia(3), 8: buildMedia(8) },
+  media,
   operations: [],
   publications: [
     { id: 1, post_id: 101, published_at: '2026-10-02T18:00:00+03:00', message_url: 'https://t.me/agrotech/1021', status: 'delivered' },
@@ -577,7 +586,12 @@ function handle(
       if (q && !(asset.caption ?? '').toLowerCase().includes(q)) return false
       return true
     })
-    return { items, next_cursor: null }
+    // Постраничная выдача — чтобы догрузка проверялась и на заглушках.
+    const limit = Number(query.get('limit') ?? 60) || 60
+    const offset = Number(query.get('cursor') ?? 0) || 0
+    const page = items.slice(offset, offset + limit)
+    const next = offset + limit
+    return { items: page, next_cursor: next < items.length ? String(next) : null }
   }
   if (rest === '/media' && method === 'POST') {
     const files = form ? form.getAll('files') : []

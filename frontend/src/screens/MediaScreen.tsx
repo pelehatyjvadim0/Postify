@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Loader2, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { FieldHelp } from '@/components/FieldHelp'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +26,9 @@ const CAPTION_LABEL: Record<MediaAsset['caption_status'], { text: string; tone: 
 
 export function MediaScreen({ project, onChanged }: { project: Project; onChanged: () => void }) {
   const [items, setItems] = React.useState<MediaAsset[]>([])
+  const [cursor, setCursor] = React.useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = React.useState(false)
+  const [removing, setRemoving] = React.useState<MediaAsset | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [query, setQuery] = React.useState('')
   // Запрос уходит не на каждый символ, и поздний ответ не перетирает свежий.
@@ -34,6 +38,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   const [uploadError, setUploadError] = React.useState<string | null>(null)
   const fileInput = React.useRef<HTMLInputElement>(null)
   const toast = useToast()
+  const act = useAction()
   const operation = useOperation(project.id)
 
   React.useEffect(() => {
@@ -52,6 +57,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
       })
       if (id !== requestId.current) return
       setItems(page.items)
+      setCursor(page.next_cursor)
     } catch (error) {
       if (id === requestId.current)
         toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пул')
@@ -63,6 +69,28 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   React.useEffect(() => {
     void load()
   }, [load])
+
+  /** Пул больше страницы: остальное догружается по кнопке, а не теряется. */
+  async function loadMore() {
+    if (!cursor) return
+    const id = requestId.current
+    setLoadingMore(true)
+    try {
+      const page = await api.media(project.id, {
+        available: availableOnly || undefined,
+        q: search || undefined,
+        limit: 60,
+        cursor,
+      })
+      if (id !== requestId.current) return
+      setItems((current) => [...current, ...page.items])
+      setCursor(page.next_cursor)
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить ещё')
+    } finally {
+      if (id === requestId.current) setLoadingMore(false)
+    }
+  }
 
   async function upload(files: FileList | null) {
     if (!files || files.length === 0) return
@@ -82,7 +110,6 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   }
 
   const noCaption = items.filter((item) => item.caption_status === 'failed').length
-  const available = items.filter((item) => item.available).length
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -155,12 +182,12 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
 
           {!operation.running && !uploadError && noCaption > 0 && (
             <Alert tone="error" title="Подбор изображения недоступен">
-              У {noCaption} изображений не получилось составить описание. Такие картинки агент
-              выбрать не может — попробуйте «Описать заново» на карточке.
+              Среди показанных изображений у {noCaption} не получилось составить описание. Такие
+              картинки агент выбрать не может — попробуйте «Описать заново» на карточке.
             </Alert>
           )}
 
-          {!loading && available === 0 && items.length > 0 && (
+          {!loading && project.media.available === 0 && project.media.total > 0 && (
             <Alert tone="warning" title="Нет доступных изображений">
               Все картинки либо выключены, либо уже выходили за последние{' '}
               {project.media_reuse_days} дней. Агенту нечего выбрать — загрузите новые.
@@ -186,12 +213,40 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
                   projectId={project.id}
                   onChanged={load}
                   operation={operation}
+                  onRemoveRequest={setRemoving}
                 />
               ))}
             </div>
           )}
+
+          {!loading && cursor && (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
+                {loadingMore && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Показать ещё
+              </Button>
+            </div>
+          )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Удалить изображение?"
+        description="Картинка исчезнет из пула безвозвратно. Если нужно просто убрать её из подбора, воспользуйтесь переключателем на карточке."
+        onConfirm={async () => {
+          const asset = removing
+          if (!asset) return
+          const { ok } = await act(() => api.deleteAsset(project.id, asset.id), {
+            ok: 'Изображение удалено',
+          })
+          if (ok) {
+            await load()
+            onChanged()
+          }
+        }}
+        onClose={() => setRemoving(null)}
+      />
     </div>
   )
 }
@@ -201,11 +256,13 @@ function AssetCard({
   projectId,
   onChanged,
   operation,
+  onRemoveRequest,
 }: {
   asset: MediaAsset
   projectId: number
   onChanged: () => Promise<void>
   operation: ReturnType<typeof useOperation>
+  onRemoveRequest: (asset: MediaAsset) => void
 }) {
   const caption = CAPTION_LABEL[asset.caption_status]
   const act = useAction()
@@ -271,12 +328,7 @@ function AssetCard({
             className="ml-auto"
             title="Удалить из пула"
             aria-label="Удалить изображение из пула"
-            onClick={async () => {
-              const { ok } = await act(() => api.deleteAsset(projectId, asset.id), {
-                ok: 'Изображение удалено',
-              })
-              if (ok) await onChanged()
-            }}
+            onClick={() => onRemoveRequest(asset)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>

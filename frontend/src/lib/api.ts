@@ -18,13 +18,27 @@ import type {
   User,
 } from './types'
 
-// Бэкенда пока нет — по умолчанию работаем на моках.
-// Переключение: VITE_USE_MOCKS=false при сборке против живого API.
+// Заглушки включаются только явным флагом сборки: npm run dev и build:mock.
 export { ApiError }
 
-export const USE_MOCKS = import.meta.env.VITE_USE_MOCKS !== 'false'
+export const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true'
 
 let csrfToken: string | null = null
+
+/**
+ * Сессия живёт в httpOnly-куке, а токен защиты от подделки запросов — только
+ * в браузере. Если кука есть, а токена нет, изменить ничего нельзя: такую
+ * сессию считаем потерянной и возвращаем человека на вход.
+ */
+let onSessionLost: (() => void) | null = null
+
+export function setSessionLostHandler(handler: (() => void) | null) {
+  onSessionLost = handler
+}
+
+export function hasCsrfToken() {
+  return csrfToken !== null
+}
 
 export function setCsrfToken(token: string | null) {
   csrfToken = token
@@ -99,6 +113,8 @@ async function request<T>(method: Method, path: string, options: RequestOptions 
       status: response.status,
       code: error?.code ?? 'unknown_error',
     })
+    // Сессия кончилась посреди работы — не сыпать тостами, а вернуть на вход.
+    if (response.status === 401) onSessionLost?.()
     throw new ApiError(
       response.status,
       error?.code ?? 'unknown_error',
@@ -171,7 +187,13 @@ export const api = {
   // Правила
   rules: (id: number) => request<Rule[]>('GET', `${p(id)}/rules`),
   saveRules: (id: number, rules: Rule[]) =>
-    request<Rule[]>('PUT', `${p(id)}/rules`, { body: { rules } }),
+    // У ещё не сохранённого правила идентификатора нет: отрицательный номер
+    // нужен только как ключ списка в браузере, наружу он не уходит.
+    request<Rule[]>('PUT', `${p(id)}/rules`, {
+      body: {
+        rules: rules.map(({ id: ruleId, ...rest }) => (ruleId > 0 ? { id: ruleId, ...rest } : rest)),
+      },
+    }),
   deriveRules: (id: number) =>
     request<{ operation_id: number; status: 'running' }>('POST', `${p(id)}/rules/derive`),
 

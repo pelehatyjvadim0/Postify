@@ -334,7 +334,8 @@ const captions = [
 ]
 
 export function buildMedia(projectId: number): MediaAsset[] {
-  const total = projectId === 3 ? 24 : 6
+  // Больше страницы — чтобы догрузка пула была видна на заглушках.
+  const total = projectId === 3 ? 74 : 6
   return Array.from({ length: total }, (_, index) => {
     const id = 40 + index
     // Три крайних случая в выдаче: подпись считается, подпись не сделалась,
