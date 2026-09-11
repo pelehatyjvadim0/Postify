@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Loader2, Plus, Trash2, Wand2 } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
+import { FieldHelp } from '@/components/FieldHelp'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -151,14 +152,30 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Запас на генерацию, минут">
+          <Field
+            label="Запас на генерацию, минут"
+            help={
+              <FieldHelp title="Запас на генерацию">
+                За сколько минут до публикации агент начинает писать пост. 1440 минут — сутки.
+                Запас даёт время прочитать текст и поправить его до выхода.
+              </FieldHelp>
+            }
+          >
             <Input
               type="number"
               value={draft.generation_lead_minutes}
               onChange={(event) => set('generation_lead_minutes', Number(event.target.value))}
             />
           </Field>
-          <Field label="Повтор изображений, дней">
+          <Field
+            label="Повтор изображений, дней"
+            help={
+              <FieldHelp title="Повтор изображений">
+                Сколько дней изображение не возвращается в подбор после использования. Не даёт
+                одной и той же картинке выходить в канал слишком часто.
+              </FieldHelp>
+            }
+          >
             <Input
               type="number"
               value={draft.media_reuse_days}
@@ -528,15 +545,20 @@ function AccountForm() {
 function Field({
   label,
   hint,
+  help,
   children,
 }: {
   label: string
   hint?: string
+  help?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
+      <div className="flex items-center gap-1.5">
+        <Label>{label}</Label>
+        {help}
+      </div>
       {children}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
