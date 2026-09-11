@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Мокап 2 — Vue + PrimeVue (Aura)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/primevue@3.53.1/resources/themes/aura-light-blue/theme.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/primeicons@7.0.0/primeicons.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--surface-ground);color:var(--text-color);font-size:14px}
+.shell{display:flex;height:100vh;overflow:hidden}
+.side{width:250px;flex:none;background:var(--surface-card);border-right:1px solid var(--surface-border);display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:.6rem;padding:1.15rem 1.25rem;font-weight:700;font-size:1rem}
+.brand i{color:var(--primary-color);font-size:1.25rem}
+.switch{margin:0 .75rem 1rem;display:flex;align-items:center;gap:.6rem;padding:.6rem .75rem;border:1px solid var(--surface-border);border-radius:6px;cursor:pointer;background:var(--surface-0)}
+.switch:hover{background:var(--surface-50)}
+.switch b{flex:1;font-weight:600;font-size:.875rem}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.top{height:64px;flex:none;background:var(--surface-card);border-bottom:1px solid var(--surface-border);display:flex;align-items:center;gap:1rem;padding:0 1.5rem}
+.top h1{font-size:1.125rem;font-weight:600;margin:0}
+.nav{display:flex;align-items:center;gap:.25rem;margin-left:.5rem}
+.month{font-weight:600;padding:0 .5rem;min-width:9.5rem;text-align:center}
+.body{flex:1;display:flex;min-height:0}
+.cal{flex:1;min-width:0;overflow:auto;padding:1.25rem}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--surface-border);border:1px solid var(--surface-border);border-radius:8px;overflow:hidden}
+.dow{background:var(--surface-50);padding:.6rem .75rem;font-size:.75rem;font-weight:600;color:var(--text-color-secondary);text-transform:uppercase;letter-spacing:.03em}
+.cell{background:var(--surface-0);min-height:122px;padding:.5rem}
+.cell.out{opacity:.4}
+.num{font-size:.8125rem;color:var(--text-color-secondary);font-variant-numeric:tabular-nums;display:block;margin-bottom:.4rem}
+.num.today{background:var(--primary-color);color:var(--primary-color-text);width:1.5rem;height:1.5rem;line-height:1.5rem;text-align:center;border-radius:999px;font-weight:600}
+.slot{border:1px solid var(--surface-border);border-radius:6px;background:var(--surface-0);padding:.5rem;cursor:pointer;transition:box-shadow .15s,border-color .15s}
+.slot:hover{box-shadow:0 2px 8px rgba(0,0,0,.07)}
+.slot.sel{border-color:var(--primary-color);box-shadow:0 0 0 2px var(--primary-50)}
+.slot .meta{display:flex;gap:.4rem;align-items:center;font-size:.6875rem;font-weight:600;margin-bottom:.25rem}
+.slot .meta .t{color:var(--text-color-secondary);font-variant-numeric:tabular-nums}
+.slot p{margin:0;font-size:.75rem;line-height:1.35}
+.slot p.none{font-style:italic;color:var(--text-color-secondary)}
+.panel{width:410px;flex:none;background:var(--surface-card);border-left:1px solid var(--surface-border);overflow:auto;padding:1.25rem}
+.sect{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--text-color-secondary);margin:0 0 .5rem}
+.prev{width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#fde8c8,#f6d9b8,#dfd8cc);display:grid;place-items:center;font-size:.75rem;color:#8a7a68;border-radius:6px 6px 0 0}
+.post{font-size:.8125rem;line-height:1.6;margin:.75rem 0 .5rem}
+.dim{font-size:.75rem;color:var(--text-color-secondary);font-variant-numeric:tabular-nums}
+.chk{display:flex;gap:.6rem;padding:.6rem .75rem;border:1px solid var(--surface-border);border-radius:6px;margin-bottom:.4rem;background:var(--surface-0)}
+.chk.warn{border-color:var(--yellow-300);background:var(--yellow-50)}
+.chk i{font-size:1rem;margin-top:.1rem}
+.chk b{display:block;font-size:.8125rem;font-weight:600}
+.chk span{font-size:.75rem;color:var(--text-color-secondary)}
+.acts{display:flex;gap:.5rem;margin-top:1rem}
+.mini{margin:auto .75rem 1rem;border:1px solid var(--surface-border);border-radius:8px;padding:.75rem}
+.mini .row{display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:.5rem}
+.p-menu .p-menuitem-link{display:flex;align-items:center;padding:.65rem .75rem;border-radius:6px;text-decoration:none}
+.p-menu .p-menuitem-link:hover{background:var(--surface-100)}
+.p-menu .p-menuitem-icon{margin-right:.65rem;font-size:1rem;color:var(--text-color-secondary)}
+.p-menu .p-menuitem-text{font-size:.875rem}
+.p-menu .p-menuitem{margin-bottom:2px}
+</style></head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><i class="pi pi-send"></i>AutoPostTG</div>
+    <div class="switch"><div class="p-avatar p-component" style="background:var(--primary-100);color:var(--primary-700);font-size:.75rem;font-weight:600">АТ</div><b>Агротех</b><i class="pi pi-chevron-down" style="font-size:.7rem;color:var(--text-color-secondary)"></i></div>
+    <div class="p-menu p-component" style="border:0;width:auto;margin:0 .5rem;background:transparent">
+      <ul class="p-menu-list p-reset">
+        <li class="p-menuitem"><a class="p-menuitem-link" style="background:var(--primary-50);border-radius:6px"><span class="p-menuitem-icon pi pi-calendar" style="color:var(--primary-color)"></span><span class="p-menuitem-text" style="color:var(--primary-700);font-weight:600">Контент-план</span></a></li>
+        <li class="p-menuitem"><a class="p-menuitem-link"><span class="p-menuitem-icon pi pi-list"></span><span class="p-menuitem-text">Посты</span><span class="p-badge p-component" style="margin-left:auto">3</span></a></li>
+        <li class="p-menuitem"><a class="p-menuitem-link"><span class="p-menuitem-icon pi pi-images"></span><span class="p-menuitem-text">Изображения</span></a></li>
+        <li class="p-menuitem"><a class="p-menuitem-link"><span class="p-menuitem-icon pi pi-cog"></span><span class="p-menuitem-text">Настройки</span></a></li>
+      </ul>
+    </div>
+    <div class="mini">
+      <div class="row"><span style="color:var(--text-color-secondary)">Пул изображений</span><b>128</b></div>
+      <div class="p-progressbar p-component p-progressbar-determinate" style="height:6px"><div class="p-progressbar-value p-progressbar-value-animate" style="width:64%;display:flex"></div></div>
+      <p style="margin:.5rem 0 0;font-size:.6875rem;color:var(--text-color-secondary);line-height:1.4">82 доступны, 46 использованы за 30 дней</p>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="top">
+      <h1>Контент-план</h1>
+      <div class="nav">
+        <button class="p-button p-component p-button-text p-button-rounded p-button-icon-only"><span class="p-button-icon pi pi-chevron-left"></span></button>
+        <span class="month">Октябрь 2026</span>
+        <button class="p-button p-component p-button-text p-button-rounded p-button-icon-only"><span class="p-button-icon pi pi-chevron-right"></span></button>
+      </div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:.75rem">
+        <span class="p-tag p-component p-tag-success"><span class="p-tag-value">Режим: ревью</span></span>
+        <button class="p-button p-component"><span class="p-button-icon p-button-icon-left pi pi-plus"></span><span class="p-button-label">Добавить слот</span></button>
+      </div>
+    </header>
+
+    <div class="body">
+      <section class="cal">
+        <div class="grid" id="grid"></div>
+      </section>
+
+      <aside class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.35rem">
+          <span class="sect" style="margin:0">9 октября, 18:00 · Подборка</span>
+          <span class="p-tag p-component p-tag-warning"><span class="p-tag-value">На ревью</span></span>
+        </div>
+        <h2 style="margin:0 0 1rem;font-size:1.0625rem;font-weight:600">5 ошибок при хранении зерна</h2>
+
+        <div class="p-panel p-component" style="margin-bottom:1rem">
+          <div class="p-panel-header"><span class="p-panel-title" style="font-size:.8125rem">Тема от редактора</span></div>
+          <div class="p-toggleable-content"><div class="p-panel-content" style="font-size:.8125rem;line-height:1.6;color:var(--text-color-secondary)">
+            Разобрать 5 ошибок при хранении зерна. Обязательно упомянуть влажность 14% и температуру не выше +10 °C.</div></div>
+        </div>
+
+        <div class="p-card p-component" style="margin-bottom:1rem;overflow:hidden">
+          <div class="prev">зернохранилище_силосы_закат.jpg</div>
+          <div class="p-card-body" style="padding:0 1rem 1rem"><div class="p-card-content" style="padding:0">
+            <p class="post">Влажность выше 14% — главная причина порчи зерна при хранении. Второе по частоте — температура в силосе выше +10 °C.<br><br>Что проверить перед закладкой:<br>• влажность каждой партии отдельно<br>• работу вентиляции<br>• герметичность люков<br><br>Какую ошибку вы встречали чаще всего?</p>
+            <span class="dim">412 знаков · 2 итерации · gpt-5.6-terra</span>
+          </div></div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <p class="sect">Проверки</p><span style="font-size:.75rem;font-weight:600;color:var(--yellow-700)">1 замечание</span></div>
+        <div class="chk"><i class="pi pi-check-circle" style="color:var(--green-500)"></i><div><b>Формальные правила</b><span>6 из 6 · длина, язык, разметка, ссылки</span></div></div>
+        <div class="chk"><i class="pi pi-check-circle" style="color:var(--green-500)"></i><div><b>Следование инструкциям</b><span>4 из 4 · тон, структура, вопрос в конце</span></div></div>
+        <div class="chk warn"><i class="pi pi-exclamation-triangle" style="color:var(--yellow-600)"></i><div><b>Конкретика сверх плана</b><span>«−30% потерь» отсутствует в теме слота</span></div></div>
+        <div class="chk"><i class="pi pi-check-circle" style="color:var(--green-500)"></i><div><b>Картинка соответствует тексту</b><span>Зернохранилище, силосы · не использовалась 90 дней</span></div></div>
+
+        <div class="acts">
+          <button class="p-button p-component" style="flex:1;justify-content:center"><span class="p-button-icon p-button-icon-left pi pi-check"></span><span class="p-button-label">Одобрить</span></button>
+          <button class="p-button p-component p-button-outlined"><span class="p-button-icon p-button-icon-left pi pi-refresh"></span><span class="p-button-label">Переписать</span></button>
+          <button class="p-button p-component p-button-outlined p-button-danger p-button-icon-only"><span class="p-button-icon pi pi-trash"></span></button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script>
+const dows=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const slots={2:['18:00','Подборка','Сроки сева озимых','pub'],5:['10:00','Кейс','Экономия топлива на 18%','pub'],
+7:['10:00','Новость','Субсидии на технику','pub'],9:['18:00','Подборка','5 ошибок при хранении зерна','rev'],
+12:['10:00','Кейс','Переход на точное земледелие','gen'],14:['10:00','Новость','Отчёт по урожаю','plan'],
+16:['18:00','Подборка','Подготовка техники к зиме','plan'],19:['10:00','Кейс','Обновление парка','plan'],
+21:['10:00','Новость','Цены на удобрения','plan'],23:['18:00','Подборка','Зимнее хранение','plan'],
+26:['10:00','Кейс','','empty'],28:['10:00','Новость','','empty'],30:['18:00','Подборка','','empty']};
+const tag={pub:['Опубликован','p-tag-secondary'],rev:['На ревью','p-tag-warning'],gen:['Готов','p-tag-success'],
+plan:['В плане','p-tag-info'],empty:['Тема не задана','p-tag-danger']};
+let h=dows.map(d=>`<div class="dow">${d}</div>`).join('');
+for(let i=0;i<35;i++){const day=i-2,inM=day>=1&&day<=31,lab=inM?day:(day<1?30+day:day-31),s=inM?slots[day]:null;
+h+=`<div class="cell ${inM?'':'out'}"><span class="num ${day===9?'today':''}">${lab}</span>`;
+if(s){const[t,r,n,st]=s,[tx,cl]=tag[st];
+h+=`<div class="slot ${st==='rev'?'sel':''}"><div class="meta"><span class="t">${t}</span><span>${r}</span></div>
+<p class="${n?'':'none'}">${n||'нет темы'}</p>
+<span class="p-tag p-component ${cl}" style="margin-top:.35rem;font-size:.625rem;padding:.1rem .35rem"><span class="p-tag-value">${tx}</span></span></div>`;}
+h+='</div>';}
+document.getElementById('grid').innerHTML=h;
+</script>
+</body></html>

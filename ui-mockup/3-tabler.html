@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Мокап 3 — Tabler (без сборки)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.1/dist/tabler-icons.min.css">
+<style>
+html,body{height:100%}
+body{overflow:hidden}
+.app{display:flex;height:100vh}
+.sb{width:250px;flex:none;background:#fff;border-right:1px solid var(--tblr-border-color);display:flex;flex-direction:column}
+.mn{flex:1;display:flex;flex-direction:column;min-width:0}
+.bd{flex:1;display:flex;min-height:0}
+.calwrap{flex:1;min-width:0;overflow:auto;padding:1.25rem}
+.rp{width:410px;flex:none;background:#fff;border-left:1px solid var(--tblr-border-color);overflow:auto;padding:1.25rem}
+.cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--tblr-border-color);border:1px solid var(--tblr-border-color);border-radius:var(--tblr-border-radius);overflow:hidden}
+.cdow{background:var(--tblr-bg-surface-secondary);padding:.5rem .75rem;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--tblr-secondary)}
+.ccell{background:#fff;min-height:122px;padding:.5rem}
+.ccell.out{opacity:.4}
+.cnum{font-size:.8125rem;color:var(--tblr-secondary);font-variant-numeric:tabular-nums;display:block;margin-bottom:.35rem}
+.cnum.today{background:var(--tblr-primary);color:#fff;width:1.5rem;height:1.5rem;line-height:1.5rem;text-align:center;border-radius:50%;font-weight:600}
+.cslot{border:1px solid var(--tblr-border-color);border-radius:var(--tblr-border-radius);padding:.5rem;cursor:pointer;background:#fff}
+.cslot:hover{box-shadow:var(--tblr-box-shadow-sm)}
+.cslot.sel{border-color:var(--tblr-primary);box-shadow:0 0 0 2px rgba(var(--tblr-primary-rgb),.18)}
+.cmeta{display:flex;gap:.35rem;align-items:center;font-size:.6875rem;font-weight:600;margin-bottom:.2rem}
+.cmeta .t{color:var(--tblr-secondary);font-variant-numeric:tabular-nums}
+.cslot p{margin:0;font-size:.75rem;line-height:1.35}
+.cslot p.none{font-style:italic;color:var(--tblr-secondary)}
+.prev{width:100%;aspect-ratio:16/9;background:linear-gradient(135deg,#fde8c8,#f6d9b8,#dfd8cc);display:grid;place-items:center;font-size:.75rem;color:#8a7a68}
+</style></head>
+<body>
+<div class="app">
+  <aside class="sb">
+    <div class="p-3 border-bottom">
+      <span class="navbar-brand navbar-brand-autodark m-0 fw-bold"><i class="ti ti-send text-primary me-2 fs-3"></i>AutoPostTG</span>
+    </div>
+    <div class="p-2">
+      <button class="btn w-100 justify-content-start">
+        <span class="avatar avatar-xs bg-primary-lt me-2">АТ</span>
+        <span class="flex-fill text-start fw-medium">Агротех</span>
+        <i class="ti ti-selector text-secondary"></i>
+      </button>
+    </div>
+    <ul class="navbar-nav px-2">
+      <li class="nav-item active"><a class="nav-link"><span class="nav-link-icon"><i class="ti ti-calendar-month"></i></span><span class="nav-link-title">Контент-план</span></a></li>
+      <li class="nav-item"><a class="nav-link"><span class="nav-link-icon"><i class="ti ti-list-details"></i></span><span class="nav-link-title">Посты</span><span class="badge bg-secondary-lt ms-auto">3</span></a></li>
+      <li class="nav-item"><a class="nav-link"><span class="nav-link-icon"><i class="ti ti-photo"></i></span><span class="nav-link-title">Изображения</span></a></li>
+      <li class="nav-item"><a class="nav-link"><span class="nav-link-icon"><i class="ti ti-settings"></i></span><span class="nav-link-title">Настройки</span></a></li>
+    </ul>
+    <div class="mt-auto p-3">
+      <div class="card card-sm"><div class="card-body">
+        <div class="d-flex justify-content-between mb-2"><span class="text-secondary small">Пул изображений</span><span class="fw-bold">128</span></div>
+        <div class="progress progress-sm"><div class="progress-bar" style="width:64%"></div></div>
+        <div class="text-secondary mt-2" style="font-size:.6875rem">82 доступны, 46 использованы за 30 дней</div>
+      </div></div>
+    </div>
+  </aside>
+
+  <div class="mn">
+    <header class="navbar navbar-expand-md d-print-none border-bottom bg-white" style="min-height:64px">
+      <div class="container-xl flex-nowrap">
+        <h2 class="page-title mb-0 me-3">Контент-план</h2>
+        <div class="btn-group me-2">
+          <button class="btn btn-icon btn-ghost-secondary"><i class="ti ti-chevron-left"></i></button>
+          <span class="btn btn-ghost-secondary fw-bold" style="pointer-events:none;min-width:9.5rem">Октябрь 2026</span>
+          <button class="btn btn-icon btn-ghost-secondary"><i class="ti ti-chevron-right"></i></button>
+        </div>
+        <div class="ms-auto d-flex align-items-center gap-2">
+          <span class="badge bg-green-lt"><i class="ti ti-eye-check me-1"></i>Режим: ревью</span>
+          <button class="btn btn-primary"><i class="ti ti-plus me-1"></i>Добавить слот</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="bd">
+      <section class="calwrap"><div class="cgrid" id="grid"></div></section>
+
+      <aside class="rp">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <span class="text-secondary text-uppercase fw-bold" style="font-size:.7rem;letter-spacing:.04em">9 октября, 18:00 · Подборка</span>
+          <span class="badge bg-yellow-lt">На ревью</span>
+        </div>
+        <h3 class="mb-3">5 ошибок при хранении зерна</h3>
+
+        <div class="card mb-3">
+          <div class="card-header py-2"><h4 class="card-title mb-0" style="font-size:.8125rem">Тема от редактора</h4></div>
+          <div class="card-body py-2 text-secondary" style="font-size:.8125rem;line-height:1.6">
+            Разобрать 5 ошибок при хранении зерна. Обязательно упомянуть влажность 14% и температуру не выше +10 °C.</div>
+        </div>
+
+        <div class="card mb-3">
+          <div class="prev">зернохранилище_силосы_закат.jpg</div>
+          <div class="card-body">
+            <p style="font-size:.8125rem;line-height:1.6">Влажность выше 14% — главная причина порчи зерна при хранении. Второе по частоте — температура в силосе выше +10 °C.<br><br>Что проверить перед закладкой:<br>• влажность каждой партии отдельно<br>• работу вентиляции<br>• герметичность люков<br><br>Какую ошибку вы встречали чаще всего?</p>
+            <div class="text-secondary small">412 знаков · 2 итерации · gpt-5.6-terra</div>
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-secondary text-uppercase fw-bold" style="font-size:.7rem;letter-spacing:.04em">Проверки</span>
+          <span class="text-yellow fw-bold small">1 замечание</span></div>
+
+        <div class="list-group list-group-flush mb-3 border rounded">
+          <div class="list-group-item py-2"><div class="row align-items-start g-2">
+            <div class="col-auto"><i class="ti ti-circle-check text-green fs-3"></i></div>
+            <div class="col"><div class="fw-bold" style="font-size:.8125rem">Формальные правила</div><div class="text-secondary" style="font-size:.75rem">6 из 6 · длина, язык, разметка, ссылки</div></div></div></div>
+          <div class="list-group-item py-2"><div class="row align-items-start g-2">
+            <div class="col-auto"><i class="ti ti-circle-check text-green fs-3"></i></div>
+            <div class="col"><div class="fw-bold" style="font-size:.8125rem">Следование инструкциям</div><div class="text-secondary" style="font-size:.75rem">4 из 4 · тон, структура, вопрос в конце</div></div></div></div>
+          <div class="list-group-item py-2 bg-yellow-lt"><div class="row align-items-start g-2">
+            <div class="col-auto"><i class="ti ti-alert-triangle text-yellow fs-3"></i></div>
+            <div class="col"><div class="fw-bold" style="font-size:.8125rem">Конкретика сверх плана</div><div class="text-secondary" style="font-size:.75rem">«−30% потерь» отсутствует в теме слота</div></div></div></div>
+          <div class="list-group-item py-2"><div class="row align-items-start g-2">
+            <div class="col-auto"><i class="ti ti-circle-check text-green fs-3"></i></div>
+            <div class="col"><div class="fw-bold" style="font-size:.8125rem">Картинка соответствует тексту</div><div class="text-secondary" style="font-size:.75rem">Зернохранилище, силосы · не использовалась 90 дней</div></div></div></div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary flex-fill"><i class="ti ti-check me-1"></i>Одобрить</button>
+          <button class="btn"><i class="ti ti-refresh me-1"></i>Переписать</button>
+          <button class="btn btn-icon btn-outline-danger"><i class="ti ti-trash"></i></button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script>
+const dows=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const slots={2:['18:00','Подборка','Сроки сева озимых','pub'],5:['10:00','Кейс','Экономия топлива на 18%','pub'],
+7:['10:00','Новость','Субсидии на технику','pub'],9:['18:00','Подборка','5 ошибок при хранении зерна','rev'],
+12:['10:00','Кейс','Переход на точное земледелие','gen'],14:['10:00','Новость','Отчёт по урожаю','plan'],
+16:['18:00','Подборка','Подготовка техники к зиме','plan'],19:['10:00','Кейс','Обновление парка','plan'],
+21:['10:00','Новость','Цены на удобрения','plan'],23:['18:00','Подборка','Зимнее хранение','plan'],
+26:['10:00','Кейс','','empty'],28:['10:00','Новость','','empty'],30:['18:00','Подборка','','empty']};
+const tag={pub:['Опубликован','bg-secondary-lt'],rev:['На ревью','bg-yellow-lt'],gen:['Готов','bg-green-lt'],
+plan:['В плане','bg-blue-lt'],empty:['Тема не задана','bg-red-lt']};
+let h=dows.map(d=>`<div class="cdow">${d}</div>`).join('');
+for(let i=0;i<35;i++){const day=i-2,inM=day>=1&&day<=31,lab=inM?day:(day<1?30+day:day-31),s=inM?slots[day]:null;
+h+=`<div class="ccell ${inM?'':'out'}"><span class="cnum ${day===9?'today':''}">${lab}</span>`;
+if(s){const[t,r,n,st]=s,[tx,cl]=tag[st];
+h+=`<div class="cslot ${st==='rev'?'sel':''}"><div class="cmeta"><span class="t">${t}</span><span>${r}</span></div>
+<p class="${n?'':'none'}">${n||'нет темы'}</p>
+<span class="badge ${cl} mt-2" style="font-size:.625rem">${tx}</span></div>`;}
+h+='</div>';}
+document.getElementById('grid').innerHTML=h;
+</script>
+</body></html>
