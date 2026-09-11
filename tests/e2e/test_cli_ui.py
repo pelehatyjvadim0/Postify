@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -155,17 +156,22 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
             names = set(archive.namelist())
         assert {
             "postify/web/static/index.html",
-            "postify/web/static/styles.css",
-            "postify/web/static/app.js",
-            "postify/web/static/api.js",
-            "postify/web/static/screens.js",
-            "postify/web/static/settings.js",
             "postify/infrastructure/database/migrations/env.py",
             (
                 "postify/infrastructure/database/migrations/versions/"
                 "20260812_07_add_schedule_slot_claims.py"
             ),
         } <= names
+        # Имена файлов сборки фронтенда содержат хеш и меняются при каждой
+        # пересборке, поэтому проверяется наличие, а не конкретное имя.
+        assert any(
+            name.startswith("postify/web/static/assets/") and name.endswith(".js")
+            for name in names
+        )
+        assert any(
+            name.startswith("postify/web/static/assets/") and name.endswith(".css")
+            for name in names
+        )
 
         installed = tmp_path / "installed-wheel"
         subprocess.run(
@@ -215,8 +221,13 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
             )
             try:
                 root = _wait_for_response(f"http://127.0.0.1:{port}/", process)
+                stylesheet = re.search(
+                    r'href="\./(assets/[^"]+\.css)"', root.text
+                )
+                assert stylesheet is not None
                 styles = httpx.get(
-                    f"http://127.0.0.1:{port}/static/styles.css", timeout=2
+                    f"http://127.0.0.1:{port}/static/{stylesheet.group(1)}",
+                    timeout=2,
                 )
                 bootstrap = httpx.get(
                     f"http://127.0.0.1:{port}/api/v1/bootstrap", timeout=2
@@ -229,7 +240,7 @@ def test_installed_wheel_migrates_and_serves_complete_ui_outside_checkout(
                 assert root.status_code == 200
                 assert "AutoPostTG" in root.text
                 assert styles.status_code == 200
-                assert "--forest" in styles.text
+                assert "--background" in styles.text
                 assert bootstrap.status_code == 200
                 active_project = bootstrap.json()["activeProject"]
                 assert active_project["id"] == 1
