@@ -99,7 +99,7 @@ class WebApi(Protocol):
         post_id: int,
         *,
         post_text: str | None = None,
-        scheduled_at: datetime | None = None,
+        media_asset_id: int | None = None,
     ) -> dict[str, Any]: ...
 
     def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]: ...

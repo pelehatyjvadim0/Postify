@@ -60,14 +60,13 @@ def _project(project_id: int = 1) -> dict[str, object]:
 def _post(post_id: int = 77, status: str = "needs_review") -> dict[str, object]:
     return {
         "id": post_id,
-        "slot_id": None,
+        "slot_id": 41,
         "status": status,
         "post_text": "Текст поста",
         "char_count": 11,
-        "scheduled_at": NOW,
-        "media": {"url": f"/api/projects/1/posts/{post_id}/media", "mime": "image/jpeg"},
+        "media": {"asset_id": 5, "caption": "Поле", "url": "/api/projects/1/media/5/file", "rationale": "По теме", "last_used_at": NOW},
         "generation": {"provider": "codex", "model": "gpt-5.6-terra"},
-        "validation": None,
+        "validation": {"passed": True, "iterations": 0, "layers": []},
         "delivery": None,
         "published": None,
         "history": [{"status": "needs_review", "reason": "generated", "created_at": NOW}],
@@ -170,14 +169,13 @@ class ApiStub:
         return [
             {
                 "id": 77,
+                "slot_id": 41,
                 "status": "needs_review",
+                "title": "Хранение зерна",
                 "excerpt": "Текст поста",
-                "char_count": 11,
-                "media_available": True,
-                "scheduled_at": NOW,
-                "delivery_status": None,
-                "created_at": NOW,
-                "updated_at": NOW,
+                "publish_at": NOW,
+                "rubric": {"id": 2, "name": "Советы"},
+                "checks_summary": {"passed": True, "blocking": 0, "warnings": 0},
             }
         ]
 
@@ -185,8 +183,8 @@ class ApiStub:
         self._record("post", project_id, post_id)
         return _post(post_id)
 
-    def update_post(self, project_id, post_id, *, post_text=None, scheduled_at=None):
-        self._record("update_post", project_id, post_id, post_text, scheduled_at)
+    def update_post(self, project_id, post_id, *, post_text=None, media_asset_id=None):
+        self._record("update_post", project_id, post_id, post_text, media_asset_id)
         return _post(post_id)
 
     def approve_post(self, project_id, post_id):
@@ -414,7 +412,7 @@ def test_posts_reading_and_editorial_actions() -> None:
     read = client.get("/api/projects/1/posts/77")
     edited = client.patch(
         "/api/projects/1/posts/77",
-        json={"post_text": "Новый текст", "scheduled_at": "2026-10-09T18:00:00+03:00"},
+        json={"post_text": "Новый текст", "media_asset_id": 5},
     )
     approved = client.post("/api/projects/1/posts/77/approve")
     rejected = client.post("/api/projects/1/posts/77/reject")
@@ -423,11 +421,11 @@ def test_posts_reading_and_editorial_actions() -> None:
     assert listed.json()[0]["id"] == 77
     assert ("posts", (1, "needs_review", 10, 0)) in stub.calls
     assert read.json()["post_text"] == "Текст поста"
-    assert read.json()["media"]["url"] == "/api/projects/1/posts/77/media"
+    assert read.json()["media"]["url"] == "/api/projects/1/media/5/file"
     assert edited.status_code == 200
     edit_call = next(call for name, call in stub.calls if name == "update_post")
     assert edit_call[:3] == (1, 77, "Новый текст")
-    assert edit_call[3] == datetime.fromisoformat("2026-10-09T18:00:00+03:00")
+    assert edit_call[3] == 5
     assert approved.json()["status"] == "approved"
     assert rejected.json()["status"] == "rejected"
 
@@ -439,7 +437,7 @@ def test_patch_post_requires_at_least_one_field() -> None:
     assert response.json()["error"]["code"] == "validation_error"
 
 
-def test_patch_post_requires_timezone_in_schedule() -> None:
+def test_patch_post_rejects_unknown_schedule_field() -> None:
     response = client_for(ApiStub()).patch(
         "/api/projects/1/posts/77", json={"scheduled_at": "2026-10-09T18:00:00"}
     )

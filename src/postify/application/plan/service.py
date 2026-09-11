@@ -100,22 +100,18 @@ def _slot(row, zone: ZoneInfo, *, project_id: int) -> dict[str, Any]:
 
 
 def _post(row, *, project_id: int) -> dict[str, Any] | None:
-    """Карточка предпросмотра из мокапа: её данных хватает без запроса поста.
-
-    ``title`` и ``checks_summary`` пустые: заголовка пост не хранит, а отчёт
-    слоёв проверок приносит свой трек.
-    """
+    """Карточка предпросмотра; веб-фасад дополняет её отчётом проверок."""
     slot = row.slot
     if slot.post_id is None:
         return None
     return {
         "id": slot.post_id,
-        "title": None,
+        "title": slot.topic or row.post_excerpt or "",
         "excerpt": row.post_excerpt or "",
         "media_thumb_url": (
             f"/api/projects/{project_id}/posts/{slot.post_id}/media"
             if row.post_media
             else None
         ),
-        "checks_summary": None,
+        "checks_summary": {"passed": False, "blocking": 0, "warnings": 0},
     }

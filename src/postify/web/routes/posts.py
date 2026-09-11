@@ -55,7 +55,7 @@ def update_post(
         project_id,
         post_id,
         post_text=body.post_text,
-        scheduled_at=body.scheduled_at,
+        media_asset_id=body.media_asset_id,
     )
 
 

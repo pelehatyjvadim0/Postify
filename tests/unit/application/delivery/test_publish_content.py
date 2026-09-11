@@ -57,6 +57,9 @@ class RepositoryFake:
     def mark_media_deleted(self, delivery_id: int, *, now: datetime) -> None:
         self.events.append(f"deleted:{delivery_id}")
 
+    def mark_media_retained(self, delivery_id: int, *, now: datetime) -> None:
+        self.events.append(f"retained:{delivery_id}")
+
 
 @dataclass
 class PublisherFake:
@@ -127,6 +130,20 @@ def test_confirmation_is_committed_before_media_delete() -> None:
         "delete:/media/41.png",
         "deleted:11",
     ]
+
+
+def test_pool_media_is_retained_and_cleanup_is_closed() -> None:
+    _, DeliveryClaim, Result, *_ = _api()
+    events: list[str] = []
+    claim = DeliveryClaim(11, 41, 1, "Текст", "/pool/41.png", "image/png", True)
+
+    result = _action(
+        RepositoryFake(events, claim=claim), PublisherFake(events), MediaFake(events)
+    ).execute()
+
+    assert result == Result("published", post_id=41, message_id=731)
+    assert "delete:/pool/41.png" not in events
+    assert events[-1] == "retained:11"
 
 
 def test_failed_confirmation_never_deletes_media_or_reports_published() -> None:

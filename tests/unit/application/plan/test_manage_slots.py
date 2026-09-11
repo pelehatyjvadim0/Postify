@@ -184,6 +184,15 @@ def test_unknown_field_is_rejected_before_the_repository() -> None:
     assert repository.calls == []
 
 
+def test_generated_slot_cannot_be_deleted() -> None:
+    repository = MemoryPlan(post_id=77)
+
+    with pytest.raises(PostAlreadyGenerated):
+        plan(repository).delete(41)
+
+    assert repository.calls == []
+
+
 def test_slot_of_another_project_is_not_reachable() -> None:
     repository = MemoryPlan()
 
@@ -209,9 +218,8 @@ def test_view_shows_the_post_card_and_project_timezone() -> None:
     assert slot["rubric"] == {"id": 7, "name": "Подборка"}
     assert slot["post"]["id"] == 77
     assert slot["post"]["media_thumb_url"] == "/api/projects/3/posts/77/media"
-    # Заголовок и отчёт проверок приносят свои треки.
-    assert slot["post"]["title"] is None
-    assert slot["post"]["checks_summary"] is None
+    assert slot["post"]["title"] == "Хранение зерна"
+    assert slot["post"]["checks_summary"] == {"passed": False, "blocking": 0, "warnings": 0}
 
 
 def test_view_without_a_post_keeps_the_card_empty() -> None:

@@ -160,6 +160,35 @@ class SqlAlchemyPostRepository:
                 )
         return self.get_post(post_id)
 
+    def select_media_asset(self, post_id: int, *, asset_id: int, now: datetime) -> Post:
+        """Меняет изображение поста на актив из пула того же проекта."""
+        with self.sf() as session:
+            with session.begin():
+                post = self._locked(session, post_id)
+                if post.status not in {"needs_review", "approved"}:
+                    raise InvalidPostTransition("Изображение этого поста нельзя изменить")
+                asset = session.execute(
+                    text(
+                        "SELECT file_path,mime,caption FROM media_assets"
+                        " WHERE project_id=:project AND id=:asset AND enabled"
+                    ),
+                    {"project": self.project_id, "asset": asset_id},
+                ).mappings().one_or_none()
+                if asset is None:
+                    raise LookupError(asset_id)
+                session.execute(
+                    text(
+                        "UPDATE posts SET media_path=:path,media_mime=:mime,"
+                        "status='needs_review',generation=jsonb_set(generation,"
+                        "'{media_asset_id}',to_jsonb(CAST(:asset AS bigint))),updated_at=:now"
+                        " WHERE project_id=:project AND id=:post"
+                    ),
+                    {"project": self.project_id, "post": post_id, "asset": asset_id,
+                     "path": asset.file_path, "mime": asset.mime, "now": now},
+                )
+                self._history(session, post_id, "needs_review", "media_changed", now)
+        return self.get_post(post_id)
+
     def active_media_paths(self) -> set[str]:
         with self.sf() as session:
             return set(
@@ -186,11 +215,18 @@ class SqlAlchemyPostRepository:
                     validate_text(
                         post.post_text, with_media=post.media_path is not None
                     )
-                    if post.scheduled_at is None:
+                    publish_at = session.execute(
+                        text(
+                            "SELECT publish_at FROM content_plan_slots"
+                            " WHERE project_id=:project AND post_id=:post"
+                        ),
+                        {"project": self.project_id, "post": post_id},
+                    ).scalar_one_or_none()
+                    if publish_at is None:
                         raise InvalidPostTransition(
                             "Сначала сохраните время публикации"
                         )
-                    if post.scheduled_at <= now:
+                    if publish_at <= now:
                         raise PublicationPlanExpired(
                             "Время прошло: измените время публикации,"
                             " прежде чем одобрить пост"

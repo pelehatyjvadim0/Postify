@@ -61,7 +61,7 @@ from postify.infrastructure.security.secrets import SecretCipher
 from postify.web.errors import ConflictError, message_for
 from postify.web.media_api import MediaApi
 from postify.web.posts_api import PostsApi
-from postify.web.views import at, plain
+from postify.web.views import at, checks_summary, plain
 
 
 # Политика повторов изображений ещё без хранения: её принесёт трек пула.
@@ -242,7 +242,16 @@ class WebApplication:
     def plan(
         self, project_id: int, *, date_from: date, date_to: date
     ) -> list[dict[str, Any]]:
-        return self._plan.list(project_id, date_from=date_from, date_to=date_to)
+        slots = self._plan.list(project_id, date_from=date_from, date_to=date_to)
+        post_ids = [slot["post"]["id"] for slot in slots if slot["post"] is not None]
+        reports = SqlAlchemyValidationJournal(self._sessions).reports(post_ids)
+        for slot in slots:
+            post = slot["post"]
+            if post is None:
+                continue
+            post["title"] = slot["topic"] or post["excerpt"]
+            post["checks_summary"] = checks_summary(reports.get(post["id"]))
+        return slots
 
     def create_slot(self, project_id: int, payload: dict[str, object]) -> dict[str, Any]:
         return self._plan.create(project_id, payload)
@@ -327,10 +336,10 @@ class WebApplication:
         post_id: int,
         *,
         post_text: str | None = None,
-        scheduled_at: datetime | None = None,
+        media_asset_id: int | None = None,
     ) -> dict[str, Any]:
         return self._posts.update_post(
-            project_id, post_id, post_text=post_text, scheduled_at=scheduled_at
+            project_id, post_id, post_text=post_text, media_asset_id=media_asset_id
         )
 
     def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]:

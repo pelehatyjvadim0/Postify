@@ -50,6 +50,7 @@ def test_validation_builds_all_layers_and_preserves_grounding_span():
     fact = next(item for item in report.layers[2]["items"] if item["claim"] == "14%")
     assert fact["verdict"] == "supported"
     assert draft().post_text[slice(*fact["span"])] == "14%"
+    assert report.layers[1]["items"][0]["severity"] == "block"
 
 
 def test_grounding_blocks_fact_not_present_in_current_slot():

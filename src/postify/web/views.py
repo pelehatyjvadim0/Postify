@@ -31,3 +31,26 @@ def plain_value(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [plain_value(item) for item in value]
     return value
+
+
+def checks_summary(report: dict[str, Any] | None) -> dict[str, Any]:
+    """Сводит последний отчёт к счётчикам карточки плана или поста."""
+    if not report:
+        return {"passed": False, "blocking": 0, "warnings": 0}
+    blocking = 0
+    warnings = 0
+    failed_verdicts = {"unsupported", "contradicted", "weak", "mismatch"}
+    for layer in report.get("layers", ()):
+        for item in layer.get("items", ()):
+            failed = item.get("passed") is False or item.get("verdict") in failed_verdicts
+            if not failed:
+                continue
+            if item.get("severity") == "warn":
+                warnings += 1
+            else:
+                blocking += 1
+    return {
+        "passed": bool(report.get("passed")),
+        "blocking": blocking,
+        "warnings": warnings,
+    }

@@ -23,11 +23,14 @@ class PublishContent:
             cleanup = self.repository.pending_cleanup()
             if cleanup is not None:
                 try:
-                    if cleanup.media_path:
+                    if cleanup.media_path and not cleanup.retain_media:
                         self.media.delete(cleanup.media_path)
                 except (OSError, MediaCleanupError):
                     return PublishContentResult("cleanup_pending", post_id=cleanup.post_id)
-                self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
+                if cleanup.retain_media:
+                    self.repository.mark_media_retained(cleanup.delivery_id, now=now)
+                else:
+                    self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
                 return PublishContentResult("cleanup_completed", post_id=cleanup.post_id)
         claim = (
             self.repository.reserve_next(now=now)
@@ -45,9 +48,12 @@ class PublishContent:
             return PublishContentResult(error.kind.value, post_id=claim.post_id)
         self.repository.confirm_published(claim, message_id=message.message_id, now=now)
         try:
-            if claim.media_path:
+            if claim.media_path and not claim.retain_media:
                 self.media.delete(claim.media_path)
         except (OSError, MediaCleanupError):
             return PublishContentResult("cleanup_pending", post_id=claim.post_id)
-        self.repository.mark_media_deleted(claim.delivery_id, now=now)
+        if claim.retain_media:
+            self.repository.mark_media_retained(claim.delivery_id, now=now)
+        else:
+            self.repository.mark_media_deleted(claim.delivery_id, now=now)
         return PublishContentResult("published", post_id=claim.post_id, message_id=message.message_id)

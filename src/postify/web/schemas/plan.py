@@ -52,16 +52,13 @@ class SlotRubricResponse(ResponseSchema):
 
 
 class SlotPostResponse(ResponseSchema):
-    """Данные карточки предпросмотра: отдельный запрос за постом не нужен.
-
-    ``title`` и ``checks_summary`` пустые до треков генерации и проверок.
-    """
+    """Данные карточки предпросмотра: отдельный запрос за постом не нужен."""
 
     id: int
-    title: str | None = None
+    title: str
     excerpt: str = ""
     media_thumb_url: str | None = None
-    checks_summary: dict[str, Any] | None = None
+    checks_summary: dict[str, Any]
 
 
 class SlotResponse(ResponseSchema):

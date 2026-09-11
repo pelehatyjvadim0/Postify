@@ -112,6 +112,22 @@ def _seed_post(engine, *, post_id: int, scheduled_at: datetime) -> None:
                 "now": NOW,
             },
         )
+        connection.execute(
+            text(
+                "INSERT INTO content_plan_slots(id,project_id,publish_at,generate_at,"
+                "topic,status,post_id,created_at,updated_at)"
+                " VALUES (:id,:project,:publish_at,:generate_at,'Тестовая тема',"
+                "'needs_review',:post,:now,:now)"
+            ),
+            {
+                "id": post_id,
+                "project": OWN_PROJECT,
+                "publish_at": scheduled_at,
+                "generate_at": scheduled_at - timedelta(days=1),
+                "post": post_id,
+                "now": NOW,
+            },
+        )
 
 
 @pytest.fixture
@@ -216,7 +232,7 @@ def test_post_is_planned_and_approved_through_http(component) -> None:
 
     assert [item["id"] for item in listed.json()] == [77]
     # Время отдаётся в таймзоне проекта, а не в UTC.
-    assert listed.json()[0]["scheduled_at"].endswith("+03:00")
+    assert listed.json()[0]["publish_at"].endswith("+03:00")
     assert edited.json()["post_text"] == "Правка редактора"
     assert approved.json()["status"] == "approved"
     assert [entry["status"] for entry in approved.json()["history"]] == [

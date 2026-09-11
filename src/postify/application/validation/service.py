@@ -167,7 +167,15 @@ class ValidationService(PostValidator):
         violations = []
         for rule, ok in zip(rules, passed):
             ev = evidence.get(rule.id, "") if isinstance(evidence, dict) else evidence
-            items.append({"rule_id": rule.id, "text": rule.text, "passed": ok, "evidence": ev})
+            items.append(
+                {
+                    "rule_id": rule.id,
+                    "text": rule.text,
+                    "severity": rule.severity,
+                    "passed": ok,
+                    "evidence": ev,
+                }
+            )
             if not ok:
                 violations.append(Violation("rules", rule.severity, f"Нарушено правило: {rule.text}"))
         return {"layer": "rules", "passed": not any(v.severity == "block" for v in violations), "score": f"{sum(passed)}/{len(rules)}", "items": items}, violations

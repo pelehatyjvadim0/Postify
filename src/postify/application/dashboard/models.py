@@ -27,6 +27,11 @@ class PostSummary:
     updated_at: datetime
     scheduled_at: datetime | None = None
     delivery_status: str | None = None
+    slot_id: int | None = None
+    topic: str = ""
+    publish_at: datetime | None = None
+    rubric_id: int | None = None
+    rubric_name: str | None = None
 
     @property
     def id(self) -> int:
@@ -56,6 +61,11 @@ class PostDetail:
     failure_code: str | None = None
     failure_reason: str | None = None
     published_at: datetime | None = None
+    slot_id: int | None = None
+    media_asset_id: int | None = None
+    media_caption: str | None = None
+    media_last_used_at: datetime | None = None
+    channel_chat_id: str | None = None
 
     @property
     def id(self) -> int:

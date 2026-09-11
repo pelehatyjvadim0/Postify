@@ -48,6 +48,7 @@ CONFLICT_RUNTIME = frozenset(
         "channel_delivery_in_flight",
         "publication_channel_unavailable",
         "publication_secret_unavailable",
+        "media_in_use",
     }
 )
 

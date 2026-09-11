@@ -18,15 +18,23 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from postify.application.ports.validation import DraftMedia, PostDraft
+from postify.application.validation.service import ValidationService
 from postify.infrastructure.repositories.sqlalchemy_dashboard import (
     SqlAlchemyDashboardRepository,
 )
+from postify.infrastructure.repositories.sqlalchemy_generation import (
+    SqlAlchemyGenerationRepository,
+)
+from postify.infrastructure.repositories.sqlalchemy_media import SqlAlchemyMediaRepository
 from postify.infrastructure.repositories.sqlalchemy_posts import SqlAlchemyPostRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
 )
-from postify.infrastructure.repositories.sqlalchemy_validation import SqlAlchemyValidationJournal
-from postify.web.views import at, plain
+from postify.infrastructure.repositories.sqlalchemy_validation import (
+    SqlAlchemyValidationJournal,
+)
+from postify.web.views import at, checks_summary, plain
 
 
 class PostsApi:
@@ -62,7 +70,8 @@ class PostsApi:
         items = self._dashboard.posts(
             project_id, status=status, limit=limit, offset=offset
         )
-        return [_post_summary(item, zone) for item in items]
+        reports = self._validation.reports([item.id for item in items])
+        return [_post_summary(item, zone, reports.get(item.id)) for item in items]
 
     def post(self, project_id: int, post_id: int) -> dict[str, Any]:
         detail = self._dashboard.post(project_id, post_id)
@@ -84,18 +93,16 @@ class PostsApi:
         post_id: int,
         *,
         post_text: str | None = None,
-        scheduled_at: datetime | None = None,
+        media_asset_id: int | None = None,
     ) -> dict[str, Any]:
-        """Правка редактора: время публикации и текст поста.
-
-        ``scheduled_at`` здесь временно — до появления слотов контент-плана,
-        которые станут единственным местом планирования.
-        """
+        """Правка текста или изображения возвращает пост на ревью."""
         posts = self._posts_for(project_id)
-        if scheduled_at is not None:
-            posts.save_plan(post_id, scheduled_at=scheduled_at, now=self._now())
         if post_text is not None:
             posts.save_text(post_id, post_text=post_text, now=self._now())
+        if media_asset_id is not None:
+            posts.select_media_asset(post_id, asset_id=media_asset_id, now=self._now())
+        if post_text is not None or media_asset_id is not None:
+            self._validate_edit(project_id, post_id)
         return self.post(project_id, post_id)
 
     def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]:
@@ -114,18 +121,29 @@ class PostsApi:
     def _zone(self, project_id: int) -> ZoneInfo:
         return ZoneInfo(self._projects.get(project_id).timezone)
 
+    def _validate_edit(self, project_id: int, post_id: int) -> None:
+        brief = SqlAlchemyGenerationRepository(self._sessions, project_id).brief_for_post(post_id)
+        detail = self._dashboard.post(project_id, post_id)
+        media = None
+        if detail.media_asset_id is not None:
+            asset = SqlAlchemyMediaRepository(self._sessions, project_id).get(detail.media_asset_id, now=self._now())
+            media = DraftMedia(asset.id, asset.file_path, asset.mime, asset.caption)
+        report = ValidationService().validate_edit(
+            PostDraft(project_id, detail.post_text, brief.slot, media, brief.user_id)
+        )
+        self._validation.save(post_id, iteration=0, report=report, now=self._now())
 
-def _post_summary(item, zone: ZoneInfo) -> dict[str, Any]:
+
+def _post_summary(item, zone: ZoneInfo, validation=None) -> dict[str, Any]:
     return {
         "id": item.id,
-        "status": item.status,
+        "slot_id": item.slot_id,
+        "status": "planned" if item.status == "rejected" else item.status,
+        "title": item.topic or item.excerpt,
         "excerpt": item.excerpt,
-        "char_count": item.char_count,
-        "media_available": item.media_available,
-        "scheduled_at": at(item.scheduled_at, zone),
-        "delivery_status": item.delivery_status,
-        "created_at": at(item.created_at, zone),
-        "updated_at": at(item.updated_at, zone),
+        "publish_at": at(item.publish_at, zone),
+        "rubric": None if item.rubric_id is None else {"id": item.rubric_id, "name": item.rubric_name},
+        "checks_summary": checks_summary(validation),
     }
 
 
@@ -143,25 +161,25 @@ def _post(item, zone: ZoneInfo, *, project_id: int, validation: dict[str, Any] |
     )
     return {
         "id": item.id,
-        # Слот контент-плана появится вместе с треком генерации.
-        "slot_id": None,
-        "status": item.status,
+        "slot_id": item.slot_id,
+        "status": "planned" if item.status == "rejected" else item.status,
         "post_text": item.post_text,
         "char_count": item.char_count,
-        "scheduled_at": at(item.scheduled_at, zone),
         "media": (
             {
-                "url": f"/api/projects/{project_id}/posts/{item.id}/media",
-                "mime": item.media_mime,
+                "asset_id": item.media_asset_id,
+                "caption": item.media_caption or "",
+                "url": f"/api/projects/{project_id}/media/{item.media_asset_id}/file",
+                "rationale": str(item.generation.get("media_rationale", "")),
+                "last_used_at": at(item.media_last_used_at, zone),
             }
-            if item.media_available
+            if item.media_available and item.media_asset_id is not None
             else None
         ),
-        "generation": plain(item.generation),
-        # Отчёт слоёв проверок принесёт свой трек.
-        "validation": validation,
+        "generation": plain(item.generation) or None,
+        "validation": validation or {"passed": False, "iterations": 0, "layers": []},
         "delivery": delivery,
-        "published": at(item.published_at, zone),
+        "published": _published(item, zone),
         "history": [
             {
                 "status": entry.status,
@@ -172,4 +190,20 @@ def _post(item, zone: ZoneInfo, *, project_id: int, validation: dict[str, Any] |
         ],
         "created_at": at(item.created_at, zone),
         "updated_at": at(item.updated_at, zone),
+    }
+
+
+def _published(item, zone: ZoneInfo):
+    if item.published_at is None:
+        return None
+    chat_id = item.channel_chat_id or ""
+    if chat_id.startswith("@"):
+        target = chat_id[1:]
+    elif chat_id.startswith("-100"):
+        target = f"c/{chat_id[4:]}"
+    else:
+        target = chat_id
+    return {
+        "published_at": at(item.published_at, zone),
+        "message_url": f"https://t.me/{target}/{item.delivery_message_id}" if target and item.delivery_message_id else "",
     }

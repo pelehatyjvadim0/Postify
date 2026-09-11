@@ -77,8 +77,13 @@ class SqlAlchemyDashboardRepository:
                         f"""SELECT p.id,p.status,left(p.post_text,:excerpt) AS excerpt,
                         char_length(p.post_text) AS char_count,
                         (p.media_path IS NOT NULL AND p.media_deleted_at IS NULL) AS media_available,
-                        p.created_at,p.updated_at,p.scheduled_at,d.status AS delivery_status
+                        p.created_at,p.updated_at,p.scheduled_at,d.status AS delivery_status,
+                        s.id AS slot_id,s.topic,s.publish_at,s.rubric_id,r.name AS rubric_name
                         FROM posts p
+                        LEFT JOIN content_plan_slots s
+                            ON s.project_id=p.project_id AND s.post_id=p.id
+                        LEFT JOIN project_rubrics r
+                            ON r.project_id=s.project_id AND r.id=s.rubric_id
                         LEFT JOIN deliveries d
                             ON d.project_id=p.project_id AND d.post_id=p.id
                         WHERE {" AND ".join(clauses)}
@@ -100,6 +105,11 @@ class SqlAlchemyDashboardRepository:
                 row.updated_at,
                 scheduled_at=row.scheduled_at,
                 delivery_status=row.delivery_status,
+                slot_id=row.slot_id,
+                topic=row.topic or "",
+                publish_at=row.publish_at,
+                rubric_id=row.rubric_id,
+                rubric_name=row.rubric_name,
             )
             for row in rows
         )
@@ -113,10 +123,21 @@ class SqlAlchemyDashboardRepository:
                         (p.media_path IS NOT NULL AND p.media_deleted_at IS NULL) AS media_available,
                         p.media_mime,p.generation,p.created_at,p.updated_at,p.scheduled_at,
                         d.status AS delivery_status,d.message_id AS delivery_message_id,
-                        d.failure_code,d.failure_reason,d.confirmed_at
+                        d.failure_code,d.failure_reason,d.confirmed_at,
+                        s.id AS slot_id,a.id AS media_asset_id,a.caption AS media_caption,
+                        a.last_used_at AS media_last_used_at,
+                        c.configuration->>'chat_id' AS channel_chat_id
                         FROM posts p
+                        LEFT JOIN content_plan_slots s
+                            ON s.project_id=p.project_id AND s.post_id=p.id
+                        LEFT JOIN media_assets a
+                            ON a.project_id=p.project_id
+                           AND a.id=CASE WHEN (p.generation->>'media_asset_id') ~ '^[0-9]+$'
+                                THEN (p.generation->>'media_asset_id')::bigint END
                         LEFT JOIN deliveries d
                             ON d.project_id=p.project_id AND d.post_id=p.id
+                        LEFT JOIN channel_connections c
+                            ON c.project_id=p.project_id AND c.id=d.channel_id
                         WHERE p.project_id=:project AND p.id=:post"""
                     ),
                     {"project": project_id, "post": post_id},
@@ -158,6 +179,11 @@ class SqlAlchemyDashboardRepository:
             failure_code=row.failure_code,
             failure_reason=row.failure_reason,
             published_at=row.confirmed_at,
+            slot_id=row.slot_id,
+            media_asset_id=row.media_asset_id,
+            media_caption=row.media_caption,
+            media_last_used_at=row.media_last_used_at,
+            channel_chat_id=row.channel_chat_id,
         )
 
     def post_media_path(self, project_id: int, post_id: int) -> tuple[str, str]:

@@ -5,41 +5,30 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from postify.web.schemas.common import RequestSchema, ResponseSchema
 
 
 class PostPatchRequest(RequestSchema):
-    """Правка поста редактором.
-
-    ``scheduled_at`` живёт здесь временно: пока нет слотов контент-плана,
-    время публикации задаётся прямо у поста. С появлением слотов оно уедет в
-    ``PATCH /plan/{slot_id}``.
-    """
+    """Правка текста или изображения поста редактором."""
 
     post_text: str | None = Field(default=None, min_length=1, max_length=4096)
-    scheduled_at: datetime | None = None
-
-    @field_validator("scheduled_at")
-    @classmethod
-    def aware_schedule(cls, value: datetime | None) -> datetime | None:
-        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ValueError("Укажите часовой пояс времени публикации")
-        return value
+    media_asset_id: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def at_least_one_change(self) -> "PostPatchRequest":
         if not self.model_fields_set:
-            raise ValueError("Нечего менять: укажите текст или время публикации")
+            raise ValueError("Нечего менять: укажите текст или изображение")
         return self
 
 
 class PostMediaResponse(ResponseSchema):
-    """Картинка поста. Пул изображений принесёт свой ``asset_id`` отдельно."""
-
+    asset_id: int
+    caption: str
     url: str
-    mime: str | None = None
+    rationale: str
+    last_used_at: datetime | None
 
 
 class PostHistoryResponse(ResponseSchema):
@@ -58,34 +47,33 @@ class PostDeliveryResponse(ResponseSchema):
 
 class PostSummaryResponse(ResponseSchema):
     id: int
+    slot_id: int
     status: str
+    title: str
     excerpt: str
-    char_count: int
-    media_available: bool
-    scheduled_at: datetime | None
-    delivery_status: str | None
-    created_at: datetime
-    updated_at: datetime
+    publish_at: datetime
+    rubric: dict[str, Any] | None
+    checks_summary: dict[str, Any]
+
+
+class PublishedResponse(ResponseSchema):
+    published_at: datetime
+    message_url: str
 
 
 class PostResponse(ResponseSchema):
-    """Карточка поста.
-
-    ``slot_id`` и ``validation`` остаются пустыми до треков контент-плана и
-    слоёв проверок: контракт их объявляет, данных за ними пока нет.
-    """
+    """Карточка поста с результатами генерации и проверок."""
 
     id: int
     slot_id: int | None
     status: str
     post_text: str
     char_count: int
-    scheduled_at: datetime | None
     media: PostMediaResponse | None
-    generation: dict[str, Any]
-    validation: dict[str, Any] | None
+    generation: dict[str, Any] | None
+    validation: dict[str, Any]
     delivery: PostDeliveryResponse | None
-    published: datetime | None
+    published: PublishedResponse | None
     history: tuple[PostHistoryResponse, ...]
     created_at: datetime
     updated_at: datetime

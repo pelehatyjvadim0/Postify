@@ -182,6 +182,16 @@ class SqlAlchemyMediaRepository:
         """Удаляет запись и отдаёт пути файлов, которые надо стереть с диска."""
         with self.sf() as session:
             try:
+                in_use = session.execute(
+                    text(
+                        "SELECT 1 FROM media_assets a JOIN posts p"
+                        " ON p.project_id=a.project_id AND p.media_path=a.file_path"
+                        " WHERE a.project_id=:project AND a.id=:id LIMIT 1"
+                    ),
+                    {"project": self.project_id, "id": asset_id},
+                ).scalar_one_or_none()
+                if in_use is not None:
+                    raise RuntimeError("media_in_use")
                 row = (
                     session.execute(
                         text(

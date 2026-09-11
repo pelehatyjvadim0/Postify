@@ -13,6 +13,7 @@ from datetime import date, datetime
 from postify.domain.plan.models import (
     ContentPlanSlot,
     PlanValidationError,
+    PostAlreadyGenerated,
     SlotStatus,
     generation_start,
     normalise_topic,
@@ -93,7 +94,9 @@ class ManagePlan:
     def delete(self, slot_id: int) -> None:
         # Существование проверяется отдельно: чужой слот обязан дать 404 и не
         # тронуть ничего.
-        self._repository.get(slot_id)
+        row = self._repository.get(slot_id)
+        if row.slot.post_id is not None:
+            raise PostAlreadyGenerated("Слот с созданным постом нельзя удалить")
         self._repository.delete(slot_id)
 
     def skip(self, slot_id: int):

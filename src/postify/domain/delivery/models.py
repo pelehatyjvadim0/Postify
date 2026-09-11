@@ -26,6 +26,7 @@ class DeliveryClaim:
     post_text: str
     media_path: str | None
     media_mime: str | None
+    retain_media: bool = False
 
 
 @dataclass(frozen=True, slots=True)

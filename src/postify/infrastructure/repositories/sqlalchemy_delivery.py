@@ -56,6 +56,9 @@ class SqlAlchemyDeliveryRepository:
             try:
                 row = session.execute(text("""
                     SELECT p.id, p.post_text, p.media_path, p.media_mime,
+                           EXISTS (SELECT 1 FROM media_assets a
+                                   WHERE a.project_id=p.project_id
+                                     AND a.file_path=p.media_path) AS retain_media,
                            d.id AS delivery_id, d.status, d.attempt_no
                     FROM posts p
                     JOIN content_plan_slots s ON s.project_id=p.project_id
@@ -122,6 +125,7 @@ class SqlAlchemyDeliveryRepository:
                     row.post_text,
                     row.media_path,
                     row.media_mime,
+                    row.retain_media,
                 )
             except:
                 session.rollback()
@@ -183,13 +187,14 @@ class SqlAlchemyDeliveryRepository:
 
     def pending_cleanup(self):
         with self.sf() as session:
-            row = session.execute(text("""SELECT d.id AS delivery_id,p.id AS post_id,d.attempt_no,p.post_text,p.media_path,p.media_mime
+            row = session.execute(text("""SELECT d.id AS delivery_id,p.id AS post_id,d.attempt_no,p.post_text,p.media_path,p.media_mime,
+                EXISTS (SELECT 1 FROM media_assets a WHERE a.project_id=p.project_id AND a.file_path=p.media_path) AS retain_media
                 FROM deliveries d JOIN posts p ON p.id=d.post_id AND p.project_id=d.project_id
                 WHERE d.project_id=:project AND d.status='published' AND d.media_deleted_at IS NULL
                 ORDER BY d.confirmed_at, d.id
                 FOR UPDATE OF d SKIP LOCKED LIMIT 1"""), {"project": self.project_id}).mappings().first()
             session.commit()
-            return None if row is None else DeliveryClaim(row.delivery_id, row.post_id, row.attempt_no, row.post_text, row.media_path, row.media_mime)
+            return None if row is None else DeliveryClaim(row.delivery_id, row.post_id, row.attempt_no, row.post_text, row.media_path, row.media_mime, row.retain_media)
 
     def mark_media_deleted(self, delivery_id: int, *, now) -> None:
         with self.sf() as session:
@@ -201,6 +206,21 @@ class SqlAlchemyDeliveryRepository:
             except:
                 session.rollback()
                 raise
+
+    def mark_media_retained(self, delivery_id: int, *, now) -> None:
+        """Закрывает cleanup доставки, не помечая канонический файл пула удалённым."""
+        with self.sf() as session:
+            updated = session.execute(
+                text(
+                    "UPDATE deliveries SET media_deleted_at=:now,updated_at=:now"
+                    " WHERE project_id=:project AND id=:id AND status='published'"
+                ),
+                {"project": self.project_id, "id": delivery_id, "now": now},
+            )
+            if updated.rowcount != 1:
+                session.rollback()
+                raise LookupError(delivery_id)
+            session.commit()
 
     def _locked_delivery(self, session, claim):
         """Блокирует доставку и отвергает claim, устаревший после чужой записи."""
