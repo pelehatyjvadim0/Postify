@@ -14,14 +14,21 @@ class Settings(BaseSettings):
     content_media_dir: Path = Field(default_factory=lambda: Path.cwd() / "var" / "media")
     content_media_max_bytes: int = Field(default=10_000_000, gt=0)
     content_analysis_timeout_seconds: int = Field(default=60, gt=0)
-    content_analyzer: Literal["codex", "gemini"] = "codex"
+    content_analyzer: Literal["codex", "openrouter"] = "codex"
     content_model: str = Field(default="gpt-5.6-terra", min_length=1)
     content_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
-    gemini_api_key: SecretStr | None = None
-    # Провайдер vision и эмбеддингов. ``auto`` — Gemini при заданном
-    # GEMINI_API_KEY, иначе заглушка; так мок отключается появлением ключа,
-    # а не правкой кода. ``mock`` и ``gemini`` — принудительный выбор.
-    ai_media_provider: Literal["auto", "mock", "gemini"] = "auto"
+    openrouter_api_key: SecretStr | None = None
+    # Одна модель на текст и vision: OpenRouter отдаёт и то и другое одним
+    # эндпоинтом, так что разделять настройку незачем.
+    openrouter_model: str = Field(default="google/gemini-3.1-flash-lite", min_length=1)
+    # Отдельная настройка: эмбеддинги у OpenRouter — свой эндпоинт и свои модели.
+    openrouter_embedding_model: str = Field(
+        default="openai/text-embedding-3-small", min_length=1
+    )
+    # Провайдер vision и эмбеддингов. ``auto`` — OpenRouter при заданном
+    # OPENROUTER_API_KEY, иначе заглушка; так мок отключается появлением ключа,
+    # а не правкой кода. ``mock`` и ``openrouter`` — принудительный выбор.
+    ai_media_provider: Literal["auto", "mock", "openrouter"] = "auto"
     postify_secret_key: SecretStr | None = None
     # Вход в приложение идёт через отдельного Telegram-бота: у него собственный
     # токен и собственный цикл getUpdates, не пересекающийся с доставкой в каналы.

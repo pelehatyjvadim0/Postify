@@ -100,7 +100,7 @@ class FakeGateway:
     def caption_image(self, image_path: Path, *, context) -> CallResult:
         self.calls.append(("caption", context.purpose))
         if "caption" in self.fails:
-            raise ModelCallError("provider_not_configured", "GEMINI_API_KEY не задан")
+            raise ModelCallError("provider_not_configured", "OPENROUTER_API_KEY не задан")
         return self._result(text=self.caption, purpose=context.purpose)
 
     def embed(self, text: str, *, context) -> CallResult:

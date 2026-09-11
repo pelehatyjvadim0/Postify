@@ -36,14 +36,14 @@ def test_everything_captioned_by_the_mock_is_found_and_reissued(tmp_path) -> Non
     # Одну подпись поправил человек: перевыпуск не должен её затирать.
     repository.assets[1]["caption_model"] = "manual"
 
-    real = FakeGateway(caption="Силосы с высоты", model="gemini-3.8-flash")
+    real = FakeGateway(caption="Силосы с высоты", model="google/gemini-3.1-flash-lite")
     recaption = _recaption(repository, real)
     stale = recaption.captioned_by("mock")
     report = recaption.execute(stale)
 
     assert stale == (2,)
     assert report.captioned == 1 and report.failed == 0
-    assert repository.assets[2]["caption_model"] == "gemini-3.8-flash"
+    assert repository.assets[2]["caption_model"] == "google/gemini-3.1-flash-lite"
     assert repository.assets[2]["caption"] == "Силосы с высоты"
     assert repository.assets[1]["caption_model"] == "manual"
 

@@ -36,6 +36,42 @@ def test_settings_defaults_to_codex_profile() -> None:
     assert settings.content_reasoning_effort == "medium"
 
 
+def test_settings_defaults_to_openrouter_models_without_key() -> None:
+    settings = Settings(
+        database_url=DATABASE_URL,
+        content_media_dir=Path("/var/lib/postify/media"),
+    )
+
+    assert settings.openrouter_api_key is None
+    assert settings.ai_media_provider == "auto"
+    assert settings.openrouter_model == "google/gemini-3.1-flash-lite"
+    assert settings.openrouter_embedding_model == "openai/text-embedding-3-small"
+
+
+def test_settings_accept_openrouter_as_text_analyzer() -> None:
+    settings = Settings(
+        database_url=DATABASE_URL,
+        content_media_dir=Path("/var/lib/postify/media"),
+        content_analyzer="openrouter",
+        ai_media_provider="openrouter",
+    )
+
+    assert settings.content_analyzer == "openrouter"
+    assert settings.ai_media_provider == "openrouter"
+
+
+@pytest.mark.parametrize("field", ["content_analyzer", "ai_media_provider"])
+def test_settings_reject_provider_that_is_gone(field: str) -> None:
+    # Гемини больше нет: настройка со старым значением должна падать, а не
+    # молча уезжать в значение по умолчанию.
+    with pytest.raises(ValidationError):
+        Settings(
+            database_url=DATABASE_URL,
+            content_media_dir=Path("/var/lib/postify/media"),
+            **{field: "gemini"},
+        )
+
+
 def test_settings_leaves_login_open_without_allowlist() -> None:
     settings = Settings(
         database_url=DATABASE_URL,

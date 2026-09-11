@@ -277,12 +277,12 @@ def test_reissued_caption_replaces_the_mock_one(repository) -> None:
         asset_id,
         text_value="Силосы на закате",
         axis=1,
-        model="gemini-embedding-001",
+        model="openai/text-embedding-3-small",
     )
     asset = repository.get(asset_id, now=NOW)
 
     assert repository.ids_captioned_by("mock") == ()
-    assert asset.caption_model == "gemini-embedding-001"
+    assert asset.caption_model == "openai/text-embedding-3-small"
     assert asset.available is True
 
 

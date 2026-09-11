@@ -120,12 +120,13 @@ AUTH_ALLOWED_TELEGRAM_IDS=
 docker compose exec app codex login --device-auth
 ```
 
-Для Gemini укажите в `.env`:
+Для OpenRouter укажите в `.env`:
 
 ```dotenv
-CONTENT_ANALYZER=gemini
-CONTENT_MODEL=имя-модели
-GEMINI_API_KEY=ключ
+CONTENT_ANALYZER=openrouter
+OPENROUTER_API_KEY=ключ
+OPENROUTER_MODEL=google/gemini-3.1-flash-lite
+OPENROUTER_EMBEDDING_MODEL=openai/text-embedding-3-small
 ```
 
 После изменения `.env` пересоздайте приложение:
@@ -147,7 +148,7 @@ docker compose up -d app
 | Backend | Python 3.12, FastAPI, Uvicorn | API, UI и планировщик |
 | Хранилище | PostgreSQL 17 с pgvector, SQLAlchemy, Alembic | Данные, поиск изображений, миграции |
 | Telegram | Telegram Bot API | Вход пользователей и публикация |
-| AI | Codex CLI, Gemini API | Генерация текста, подписи и эмбеддинги изображений |
+| AI | Codex CLI, OpenRouter API | Генерация текста, подписи и эмбеддинги изображений |
 | Frontend | React, Vite, shadcn/ui, TypeScript | Интерфейс контент-плана |
 | Инфраструктура | Docker, Docker Compose, uv | Сборка и запуск |
 

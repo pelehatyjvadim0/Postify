@@ -16,7 +16,9 @@ def test_documented_environment_loading_preserves_spaced_values(tmp_path: Path) 
         [
             "sh",
             "-c",
-            'set -a; . "$1"; set +a; printf "%s\\n%s\\n" "$CONTENT_ANALYZER" "$CONTENT_MODEL"',
+            'set -a; . "$1"; set +a; printf "%s\\n%s\\n%s\\n%s\\n" '
+            '"$CONTENT_ANALYZER" "$CONTENT_MODEL" "$OPENROUTER_MODEL" '
+            '"$OPENROUTER_EMBEDDING_MODEL"',
             "sh",
             str(environment_file),
         ],
@@ -29,4 +31,6 @@ def test_documented_environment_loading_preserves_spaced_values(tmp_path: Path) 
     assert result.stdout.splitlines() == [
         "codex",
         "gpt-5.6-terra",
+        "google/gemini-3.1-flash-lite",
+        "openai/text-embedding-3-small",
     ]
