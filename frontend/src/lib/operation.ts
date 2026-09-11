@@ -1,0 +1,69 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, pollOperation } from './api'
+import { ApiError } from './errors'
+import type { Operation } from './types'
+import { useToast } from './toast'
+
+/**
+ * Сценарий «202 + поллинг»: запрос возвращает operation_id, дальше
+ * GET /operations/{id} раз в 2 секунды до succeeded или failed.
+ */
+export function useOperation(projectId: number | null) {
+  const [running, setRunning] = useState(false)
+  const [lastError, setLastError] = useState<string | null>(null)
+  const aborted = useRef(false)
+  const toast = useToast()
+
+  useEffect(() => () => {
+    aborted.current = true
+  }, [])
+
+  const run = useCallback(
+    async (
+      start: () => Promise<{ operation_id: number }>,
+      options: {
+        /** Вызывается сразу после ответа 202, до начала поллинга. */
+        onStarted?: () => void | Promise<void>
+        onDone?: (operation: Operation) => void
+        successText?: string
+      } = {},
+    ) => {
+      if (projectId === null) return null
+      setRunning(true)
+      setLastError(null)
+      try {
+        const { operation_id } = await start()
+        await options.onStarted?.()
+        const operation = await pollOperation(projectId, operation_id)
+        if (aborted.current) return operation
+        if (operation.status === 'failed') {
+          const message = operation.error?.message ?? 'Операция не выполнена'
+          setLastError(message)
+          toast.error(message)
+        } else {
+          if (options.successText) toast.ok(options.successText)
+          options.onDone?.(operation)
+        }
+        return operation
+      } catch (error) {
+        const message =
+          error instanceof ApiError ? error.message : 'Не удалось выполнить операцию'
+        if (!aborted.current) {
+          setLastError(message)
+          toast.error(message)
+        }
+        return null
+      } finally {
+        if (!aborted.current) setRunning(false)
+      }
+    },
+    [projectId, toast],
+  )
+
+  return { run, running, lastError }
+}
+
+/** Список последних операций проекта — для экрана истории. */
+export async function recentOperations(projectId: number) {
+  return api.operations(projectId, 20)
+}

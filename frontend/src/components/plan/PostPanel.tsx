@@ -1,0 +1,293 @@
+import * as React from 'react'
+import { ExternalLink, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { Alert } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
+import { api } from '@/lib/api'
+import { ApiError } from '@/lib/errors'
+import { dateTimeLabel } from '@/lib/dates'
+import { SLOT_STATUS, TOPIC_SPECIFICS_HINT } from '@/lib/status'
+import type { Post, Slot } from '@/lib/types'
+import { useToast } from '@/lib/toast'
+import { ChecksReport } from './ChecksReport'
+
+interface Props {
+  projectId: number
+  slot: Slot | null
+  onEditTopic: (slot: Slot) => void
+  onGenerate: (slot: Slot) => void
+  onRegenerate: (slot: Slot) => void
+  onChanged: () => void
+  operationRunning: boolean
+}
+
+export function PostPanel({
+  projectId,
+  slot,
+  onEditTopic,
+  onGenerate,
+  onRegenerate,
+  onChanged,
+  operationRunning,
+}: Props) {
+  const [post, setPost] = React.useState<Post | null>(null)
+  const [loading, setLoading] = React.useState(false)
+  const [missing, setMissing] = React.useState(false)
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const toast = useToast()
+
+  const postId = slot?.post?.id ?? null
+
+  React.useEffect(() => {
+    setEditing(false)
+    setMissing(false)
+    if (postId === null) {
+      setPost(null)
+      return
+    }
+    setLoading(true)
+    api
+      .post(projectId, postId)
+      .then((loaded) => {
+        setPost(loaded)
+        setDraft(loaded.post_text)
+      })
+      .catch((error) => {
+        // 404 — объекта нет: он удалён либо принадлежит другому пользователю.
+        if (error instanceof ApiError && error.isNotFound) setMissing(true)
+        else toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пост')
+        setPost(null)
+      })
+      .finally(() => setLoading(false))
+  }, [projectId, postId, toast, operationRunning])
+
+  if (!slot)
+    return (
+      <PanelShell>
+        <p className="text-[13px] leading-relaxed text-muted-foreground">
+          Выберите слот в плане, чтобы увидеть тему, пост и отчёт проверок.
+        </p>
+      </PanelShell>
+    )
+
+  const status = SLOT_STATUS[slot.status]
+
+  async function act(action: 'approve' | 'reject' | 'save') {
+    if (!post) return
+    setBusy(true)
+    try {
+      const updated =
+        action === 'approve'
+          ? await api.approvePost(projectId, post.id)
+          : action === 'reject'
+            ? await api.rejectPost(projectId, post.id)
+            : await api.updatePost(projectId, post.id, { post_text: draft })
+      setPost(updated)
+      setDraft(updated.post_text)
+      setEditing(false)
+      toast.ok(
+        action === 'approve'
+          ? 'Пост одобрен'
+          : action === 'reject'
+            ? 'Пост отправлен на доработку'
+            : 'Текст сохранён, проверки пересчитаны',
+      )
+      onChanged()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Действие не выполнено')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <PanelShell>
+      <div>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {dateTimeLabel(slot.publish_at)}
+            {slot.rubric ? ` · ${slot.rubric.name}` : ''}
+          </span>
+          <Badge tone={status.tone}>{status.label}</Badge>
+        </div>
+        <h2 className="text-base font-semibold tracking-tight">
+          {slot.post?.title || slot.topic || 'Тема не задана'}
+        </h2>
+      </div>
+
+      <div className="rounded-lg border border-border">
+        <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Тема от редактора
+        </div>
+        <p className="px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
+          {slot.topic || 'Тема не заполнена — агент не возьмёт слот в работу.'}
+        </p>
+        <div className="flex gap-2 border-t border-border px-3 py-2">
+          <Button size="xs" variant="outline" onClick={() => onEditTopic(slot)}>
+            <Pencil className="h-3 w-3" />
+            {slot.topic ? 'Изменить тему' : 'Заполнить тему'}
+          </Button>
+          {(slot.status === 'planned' || slot.status === 'no_topic' || slot.status === 'failed') && (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!slot.topic || operationRunning}
+              onClick={() => onGenerate(slot)}
+            >
+              {operationRunning ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              Сгенерировать сейчас
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {slot.status === 'generating' && (
+        <Alert tone="info" title="Агент пишет пост">
+          Идёт генерация и слои проверок. Статус обновится сам.
+        </Alert>
+      )}
+
+      {missing && (
+        <Alert tone="error" title="Пост не найден">
+          Объект удалён или недоступен.
+        </Alert>
+      )}
+
+      {loading && <Skeleton className="h-48 w-full" />}
+
+      {post && !loading && (
+        <>
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {post.media ? (
+              <img src={post.media.url} alt={post.media.caption} className="block aspect-[16/9] w-full object-cover" />
+            ) : (
+              <div className="grid aspect-[16/9] place-items-center bg-muted/40 px-6 text-center">
+                <p className="text-[12px] text-muted-foreground">
+                  Изображение не подобрано: в пуле нет доступных активов с подписью.
+                </p>
+              </div>
+            )}
+            <div className="space-y-2 p-3">
+              {editing ? (
+                <>
+                  <Textarea
+                    rows={10}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    className="text-[13px]"
+                  />
+                  <Alert tone="warning">{TOPIC_SPECIFICS_HINT}</Alert>
+                  <div className="flex gap-2">
+                    <Button size="sm" disabled={busy} onClick={() => act('save')}>
+                      Сохранить и перепроверить
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setDraft(post.post_text)
+                        setEditing(false)
+                      }}
+                    >
+                      Отмена
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <p className="whitespace-pre-wrap text-[13px] leading-relaxed">{post.post_text}</p>
+              )}
+              {!editing && (
+                <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] tabular-nums text-muted-foreground">
+                  <span>{post.char_count} знаков</span>
+                  {post.generation && (
+                    <>
+                      <span>·</span>
+                      <span>{post.generation.iterations} итерации</span>
+                      <span>·</span>
+                      <span>{post.generation.model}</span>
+                    </>
+                  )}
+                  <button
+                    className="ml-auto inline-flex items-center gap-1 transition-colors hover:text-foreground"
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Править текст
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {post.media && (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Изображение: {post.media.caption}. {post.media.rationale}.
+            </p>
+          )}
+
+          <ChecksReport report={post.validation} />
+
+          {post.published && (
+            <Alert tone="info" title="Опубликован">
+              {dateTimeLabel(post.published.published_at)} ·{' '}
+              <a
+                href={post.published.message_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 underline underline-offset-2"
+              >
+                открыть в Telegram
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </Alert>
+          )}
+
+          {!post.published && (
+            <div className="flex items-center gap-2 pt-1">
+              {post.status === 'approved' ? (
+                <Button className="flex-1" variant="outline" disabled={busy} onClick={() => act('reject')}>
+                  Вернуть на доработку
+                </Button>
+              ) : (
+                <Button className="flex-1" disabled={busy} onClick={() => act('approve')}>
+                  Одобрить
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                disabled={operationRunning}
+                onClick={() => onRegenerate(slot)}
+              >
+                {operationRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Переписать
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                title="Удалить слот"
+                onClick={async () => {
+                  await api.deleteSlot(projectId, slot.id)
+                  onChanged()
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </PanelShell>
+  )
+}
+
+function PanelShell({ children }: { children: React.ReactNode }) {
+  return (
+    <aside className="w-[400px] shrink-0 overflow-auto border-l border-border">
+      <div className="space-y-5 p-5">{children}</div>
+    </aside>
+  )
+}
