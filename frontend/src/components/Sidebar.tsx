@@ -116,8 +116,8 @@ export function Sidebar({
               <div className="h-full rounded-full bg-primary" style={{ width: `${share}%` }} />
             </div>
             <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-              {media.available} доступны, {media.total - media.available} использованы или без
-              подписи
+              {media.available} доступны, {media.total - media.available} недавно выходили или
+              без описания
             </p>
           </div>
         </div>

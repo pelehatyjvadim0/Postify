@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Loader2, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
+import { FieldHelp } from '@/components/FieldHelp'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,14 +11,15 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { useOperation } from '@/lib/operation'
+import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import type { MediaAsset, Project } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const CAPTION_LABEL: Record<MediaAsset['caption_status'], { text: string; tone: 'neutral' | 'amber' | 'red' | 'emerald' }> = {
-  pending: { text: 'подпись считается', tone: 'amber' },
-  ready: { text: 'готово', tone: 'emerald' },
-  failed: { text: 'подпись не построена', tone: 'red' },
+  pending: { text: 'описание готовится', tone: 'amber' },
+  ready: { text: 'описано', tone: 'emerald' },
+  failed: { text: 'описать не удалось', tone: 'red' },
 }
 
 export function MediaScreen({ project, onChanged }: { project: Project; onChanged: () => void }) {
@@ -56,10 +58,13 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
     for (const file of Array.from(files).slice(0, 20)) form.append('files', file)
     setUploadError(null)
     const result = await operation.run(() => api.uploadMedia(project.id, form), {
-      successText: 'Изображения загружены, подписи построены',
+      successText: 'Изображения загружены и описаны',
     })
-    if (result?.status === 'failed')
-      setUploadError(result.error?.message ?? 'Подписи не построены')
+    if (result?.status === 'failed') {
+      // Техническую причину видит только поддержка, пользователю — что делать.
+      supportLog('media_upload_failed', { code: result.error?.code ?? null, message: result.error?.message ?? null })
+      setUploadError('Описания к загруженным изображениям составить не удалось.')
+    }
     await load()
     onChanged()
   }
@@ -82,12 +87,19 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
           </Button>
         }
       >
+        <FieldHelp title="Пул изображений">
+          Агент не ищет картинки в интернете: он берёт их отсюда. К каждой загруженной картинке
+          система составляет описание того, что на ней, и по нему подбирает подходящую к теме
+          поста. Без описания картинка в подбор не попадает. Переключателем на карточке её можно
+          временно вывести из подбора, а «Описать заново» просит систему пересмотреть картинку и
+          написать описание заново.
+        </FieldHelp>
         <div className="relative ml-2 w-64">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Поиск по подписи"
+            placeholder="Поиск по описанию"
             className="h-8 pl-8 text-[13px]"
           />
         </div>
@@ -113,29 +125,29 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
         <div className="space-y-4 p-6">
           {operation.running && (
             <Alert tone="info" title="Идёт обработка">
-              Файлы загружены. Подпись и эмбеддинг считаются асинхронно — до их появления
-              изображение не участвует в подборе.
+              Файлы загружены. Система рассматривает их и составляет описание — обычно это
+              занимает несколько секунд. Пока описания нет, картинка в подбор не попадает.
             </Alert>
           )}
 
           {uploadError && (
             <Alert tone="error" title="Подбор изображения недоступен">
-              {uploadError} Загруженные файлы остались в пуле, но агент не сможет их выбрать, пока
-              подписи не построены.
+              {uploadError} Файлы остались в пуле, но выбрать их агент не сможет: попробуйте
+              «Описать заново» на карточке позже.
             </Alert>
           )}
 
           {!operation.running && !uploadError && noCaption > 0 && (
             <Alert tone="error" title="Подбор изображения недоступен">
-              У {noCaption} изображений подпись не построена: провайдер vision не отвечает или ключ
-              не задан. Такие активы в подбор не попадают.
+              У {noCaption} изображений не получилось составить описание. Такие картинки агент
+              выбрать не может — попробуйте «Описать заново» на карточке.
             </Alert>
           )}
 
           {!loading && available === 0 && items.length > 0 && (
             <Alert tone="warning" title="Нет доступных изображений">
-              Все активы либо выключены, либо использованы за последние {project.media_reuse_days}{' '}
-              дней. Агент не сможет подобрать картинку.
+              Все картинки либо выключены, либо уже выходили за последние{' '}
+              {project.media_reuse_days} дней. Агенту нечего выбрать — загрузите новые.
             </Alert>
           )}
 
@@ -147,7 +159,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
             </div>
           ) : items.length === 0 ? (
             <Alert tone="info" title="Пул пуст">
-              Загрузите изображения — агент выбирает картинку только из пула проекта.
+              Загрузите изображения: агент берёт картинку к посту только отсюда.
             </Alert>
           ) : (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
@@ -192,7 +204,7 @@ function AssetCard({
       <img src={asset.url} alt={asset.caption ?? ''} className="block aspect-[16/10] w-full object-cover" />
       <div className="space-y-2 p-2.5">
         <p className="line-clamp-2 min-h-[2.4em] text-[12px] leading-snug">
-          {asset.caption ?? <span className="italic text-muted-foreground">подписи нет</span>}
+          {asset.caption ?? <span className="italic text-muted-foreground">описания нет</span>}
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone={caption.tone}>{caption.text}</Badge>
@@ -200,11 +212,15 @@ function AssetCard({
             <Badge tone="neutral">доступно</Badge>
           ) : (
             <Badge tone="muted">
-              {asset.use_count > 0 ? 'в политике повторов' : !asset.enabled ? 'выключено' : 'не в подборе'}
+              {asset.use_count > 0
+                ? 'недавно выходила'
+                : !asset.enabled
+                  ? 'выключено'
+                  : 'нет описания'}
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-1.5 pt-0.5">
+        <div className="flex items-center gap-2 pt-0.5">
           <Switch
             checked={asset.enabled}
             onCheckedChange={async (enabled) => {
@@ -212,27 +228,31 @@ function AssetCard({
               await onChanged()
             }}
           />
-          <span className="text-[11px] text-muted-foreground">
-            {asset.enabled ? 'включено' : 'выключено'}
+          <span className="text-[11px] leading-tight text-muted-foreground">
+            {asset.enabled ? 'участвует в подборе' : 'не участвует'}
           </span>
+        </div>
+        <div className="flex items-center gap-1">
           <Button
-            size="icon-sm"
+            size="xs"
             variant="ghost"
-            title="Пересчитать подпись"
+            className="px-1.5 text-muted-foreground"
             disabled={operation.running}
             onClick={async () => {
               await operation.run(() => api.recaptionAsset(projectId, asset.id), {
-                successText: 'Подпись пересчитана',
+                successText: 'Описание обновлено',
               })
               await onChanged()
             }}
           >
             <RefreshCw className="h-3.5 w-3.5" />
+            Описать заново
           </Button>
           <Button
             size="icon-sm"
             variant="ghost"
-            title="Удалить"
+            className="ml-auto"
+            title="Удалить из пула"
             onClick={async () => {
               try {
                 await api.deleteAsset(projectId, asset.id)
