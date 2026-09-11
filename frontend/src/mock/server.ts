@@ -510,7 +510,7 @@ function handle(
   const generateIds = match(rest, /^\/plan\/(\d+)\/generate$/)
   if (generateIds && method === 'POST') {
     const slot = slotOf(projectId, generateIds[0])
-    if (!slot.topic) throw new MockError(400, 'slot_topic_required', 'Тема слота не заполнена', 'topic')
+    if (!slot.topic) throw new MockError(400, 'slot_topic_required', 'Промпт поста не заполнен', 'topic')
     slot.status = 'generating'
     return startOperation('generate', (operation) => {
       const post = generatedPost(projectId, slot)

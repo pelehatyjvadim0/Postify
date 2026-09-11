@@ -5,7 +5,7 @@ export const SLOT_STATUS: Record<
   SlotStatus,
   { label: string; dot: string; tone: 'neutral' | 'amber' | 'emerald' | 'red' | 'muted' }
 > = {
-  no_topic: { label: 'Тема не задана', dot: 'bg-red-500', tone: 'red' },
+  no_topic: { label: 'Промпт не задан', dot: 'bg-red-500', tone: 'red' },
   planned: { label: 'В плане', dot: 'bg-muted-foreground/25', tone: 'muted' },
   generating: { label: 'Генерируется', dot: 'bg-sky-500 animate-pulse', tone: 'neutral' },
   needs_review: { label: 'На ревью', dot: 'bg-amber-500', tone: 'amber' },
@@ -34,14 +34,14 @@ export const LAYER_TITLE: Record<CheckLayer, string> = {
 }
 
 export const VERDICT_LABEL: Record<string, string> = {
-  supported: 'есть в теме слота',
-  unsupported: 'нет в теме слота',
-  contradicted: 'противоречит теме слота',
+  supported: 'есть в промпте поста',
+  unsupported: 'нет в промпте поста',
+  contradicted: 'противоречит промпту поста',
   match: 'соответствует',
   weak: 'слабое соответствие',
   mismatch: 'не соответствует',
 }
 
-/** Предупреждение из раздела 8 трейса: конкретика обязана быть в теме слота. */
+/** Предупреждение из раздела 8 трейса: конкретика обязана быть в промпте поста. */
 export const TOPIC_SPECIFICS_HINT =
-  'Вся проверяемая конкретика — цифры, даты, имена, ссылки — должна быть в теме слота. Слой проверок вырежет из поста всё, чего в теме нет.'
+  'Вся проверяемая конкретика — цифры, даты, имена, ссылки — должна быть в промпте поста. Слой проверок вырежет из поста всё, чего в промпте нет.'

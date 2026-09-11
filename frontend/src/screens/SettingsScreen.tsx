@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { Loader2, Plus, Trash2, Wand2 } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
 import { FieldHelp } from '@/components/FieldHelp'
 import { Alert } from '@/components/ui/alert'
@@ -8,23 +7,19 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { useAction } from '@/lib/action'
-import { useOperation } from '@/lib/operation'
 import { useSession } from '@/lib/session'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
-import type { Project, Rubric, Rule } from '@/lib/types'
+import type { Project } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-type Tab = 'project' | 'rubrics' | 'rules' | 'account'
+type Tab = 'project' | 'account'
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'project', label: 'Проект' },
-  { value: 'rubrics', label: 'Рубрики' },
-  { value: 'rules', label: 'Правила' },
   { value: 'account', label: 'Аккаунт' },
 ]
 
@@ -51,8 +46,6 @@ export function SettingsScreen({ project, onChanged }: { project: Project; onCha
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-2xl space-y-6 p-4 md:p-6">
           {tab === 'project' && <ProjectForm project={project} onChanged={onChanged} />}
-          {tab === 'rubrics' && <RubricsForm project={project} />}
-          {tab === 'rules' && <RulesForm project={project} />}
           {tab === 'account' && <AccountForm />}
         </div>
       </div>
@@ -87,7 +80,8 @@ function Section({
 
 function ProjectForm({ project, onChanged }: { project: Project; onChanged: () => void }) {
   const [draft, setDraft] = React.useState(project)
-  const [saving, setSaving] = React.useState(false)
+  const [savingPrompt, setSavingPrompt] = React.useState(false)
+  const [savingSettings, setSavingSettings] = React.useState(false)
   const [chatId, setChatId] = React.useState(project.channel.chat_id ?? '')
   const [botToken, setBotToken] = React.useState('')
   // Числовые поля держим строкой: иначе очистка поля молча сохраняла бы 0.
@@ -106,7 +100,17 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
   const set = <K extends keyof Project>(key: K, value: Project[K]) =>
     setDraft((current) => ({ ...current, [key]: value }))
 
-  async function save() {
+  async function savePrompt() {
+    setSavingPrompt(true)
+    const { ok } = await act(
+      () => api.updateProject(project.id, { project_prompt: draft.project_prompt }),
+      { ok: 'Промпт агента сохранён' },
+    )
+    setSavingPrompt(false)
+    if (ok) onChanged()
+  }
+
+  async function saveSettings() {
     const leadMinutes = Number(lead)
     const reuseDays = Number(reuse)
     if (!Number.isInteger(leadMinutes) || leadMinutes < 1) {
@@ -117,37 +121,46 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
       toast.error('Повтор изображений должен быть целым числом дней')
       return
     }
-    setSaving(true)
+    setSavingSettings(true)
     const { ok } = await act(
       () =>
         api.updateProject(project.id, {
           name: draft.name,
           timezone: draft.timezone,
-          language: draft.language,
-          audience: draft.audience,
-          tone: draft.tone,
-          project_prompt: draft.project_prompt,
           publication_mode: draft.publication_mode,
           generation_lead_minutes: leadMinutes,
           media_reuse_days: reuseDays,
         }),
       { ok: 'Настройки проекта сохранены' },
     )
-    setSaving(false)
+    setSavingSettings(false)
     if (ok) onChanged()
   }
 
   return (
     <>
       <Section
-        title="Проект"
+        title="Промпт агента"
+        hint="Опишите одним текстом, что и как должен писать агент для этого проекта."
         help={
-          <FieldHelp title="Проект">
-            Проект — это один Telegram-канал: свой контент-план, свои рубрики, правила и пул
-              изображений. Настройки ниже агент учитывает при написании каждого поста.
+          <FieldHelp title="Промпт агента">
+            Укажите аудиторию, стиль, форматы, ограничения и требования к результату.
           </FieldHelp>
         }
       >
+        <Textarea
+          rows={14}
+          value={draft.project_prompt}
+          onChange={(event) => set('project_prompt', event.target.value)}
+          placeholder="Пиши для владельцев агробизнеса. Коротко и по делу, без рекламных обещаний. Используй конкретные цифры из задания, объясняй термины простым языком и заканчивай пост вопросом. Не используй больше двух эмодзи."
+          aria-label="Промпт агента"
+        />
+        <Button onClick={savePrompt} disabled={savingPrompt}>
+          {savingPrompt ? 'Сохраняю…' : 'Сохранить промпт'}
+        </Button>
+      </Section>
+
+      <Section title="Проект">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field
             label="Название"
@@ -169,43 +182,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           >
             <Input value={draft.timezone} onChange={(event) => set('timezone', event.target.value)} />
           </Field>
-          <Field
-            label="Аудитория"
-            help={
-              <FieldHelp title="Аудитория">
-                Для кого канал. Агент подбирает под это глубину объяснений и примеры.
-              </FieldHelp>
-            }
-          >
-            <Input value={draft.audience} onChange={(event) => set('audience', event.target.value)} />
-          </Field>
-          <Field
-            label="Тон"
-            help={
-              <FieldHelp title="Тон">
-                Манера речи: сухо и по делу, дружелюбно, с примерами. Проверяется слоем правил.
-              </FieldHelp>
-            }
-          >
-            <Input value={draft.tone} onChange={(event) => set('tone', event.target.value)} />
-          </Field>
         </div>
-        <Field
-          label="Промпт проекта"
-          hint="Специфика этого канала. Общий промпт задаётся в аккаунте."
-          help={
-            <FieldHelp title="Промпт проекта">
-              Указания именно для этого канала: что писать, чего избегать, как оформлять. Идут в
-            каждую генерацию вместе с общим промптом и темой слота.
-            </FieldHelp>
-          }
-        >
-          <Textarea
-            rows={5}
-            value={draft.project_prompt}
-            onChange={(event) => set('project_prompt', event.target.value)}
-          />
-        </Field>
       </Section>
 
       <Section title="Публикация">
@@ -360,312 +337,15 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
         </div>
       </Section>
 
-      <Button onClick={save} disabled={saving}>
-        {saving ? 'Сохраняю…' : 'Сохранить настройки'}
+      <Button onClick={saveSettings} disabled={savingSettings}>
+        {savingSettings ? 'Сохраняю…' : 'Сохранить настройки'}
       </Button>
     </>
   )
 }
 
-function RubricsForm({ project }: { project: Project }) {
-  const [rubrics, setRubrics] = React.useState<Rubric[]>([])
-  const [name, setName] = React.useState('')
-  const [instructions, setInstructions] = React.useState('')
-  const act = useAction()
-
-  const load = React.useCallback(async () => {
-    const { value } = await act(() => api.rubrics(project.id), { fail: 'Не удалось загрузить рубрики' })
-    if (value) setRubrics(value)
-  }, [project.id, act])
-
-  React.useEffect(() => {
-    void load()
-  }, [load])
-
-  const patch = (id: number, changes: Partial<Rubric>) =>
-    setRubrics((list) => list.map((item) => (item.id === id ? { ...item, ...changes } : item)))
-
-  /** Сохраняем ровно ту рубрику, которую правили, не перезагружая список:
-   *  перезагрузка стирала бы несохранённые правки соседних полей. */
-  async function persist(rubric: Rubric) {
-    const { value } = await act(() =>
-      api.updateRubric(project.id, rubric.id, {
-        name: rubric.name,
-        instructions: rubric.instructions,
-        enabled: rubric.enabled,
-      }),
-    )
-    if (value) patch(rubric.id, value)
-  }
-
-  return (
-    <>
-      <Section
-        title="Рубрики"
-        hint="Инструкции формата, которые агент применяет к слоту."
-        help={
-          <FieldHelp title="Рубрики">
-            Рубрика — формат поста: кейс, новость, подборка. У слота плана выбирается рубрика, и
-            агент пишет по её инструкции. Выключенная рубрика не предлагается в новых слотах,
-            а занятую слотами удалить нельзя.
-          </FieldHelp>
-        }
-      >
-        <div className="space-y-2">
-          {rubrics.map((rubric) => (
-            <div key={rubric.id} className="rounded-lg border border-border p-3">
-              <div className="flex items-center gap-2">
-                <Input
-                  value={rubric.name}
-                  aria-label="Название рубрики"
-                  className="h-8 max-w-[220px] text-[13px]"
-                  onChange={(event) => patch(rubric.id, { name: event.target.value })}
-                  onBlur={() => persist(rubric)}
-                />
-                <Switch
-                  checked={rubric.enabled}
-                  aria-label={rubric.enabled ? 'Выключить рубрику' : 'Включить рубрику'}
-                  onCheckedChange={(enabled) => {
-                    patch(rubric.id, { enabled })
-                    void persist({ ...rubric, enabled })
-                  }}
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  {rubric.enabled ? 'включена' : 'выключена'}
-                </span>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  className="ml-auto"
-                  title="Удалить рубрику"
-                  aria-label="Удалить рубрику"
-                  onClick={async () => {
-                    // 409 rubric_in_use: рубрику держат слоты плана.
-                    const { ok } = await act(() => api.deleteRubric(project.id, rubric.id), {
-                      ok: 'Рубрика удалена',
-                    })
-                    if (ok) await load()
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              <Textarea
-                rows={2}
-                aria-label="Инструкция рубрики"
-                className="mt-2 text-[13px]"
-                value={rubric.instructions}
-                onChange={(event) => patch(rubric.id, { instructions: event.target.value })}
-                onBlur={() => persist(rubric)}
-              />
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      <Section
-        title="Новая рубрика"
-        help={
-          <FieldHelp title="Новая рубрика">
-            Название видно при выборе рубрики в слоте, инструкция целиком уходит агенту.
-            Пишите её как указание: «История хозяйства: задача, что сделали, что получилось».
-          </FieldHelp>
-        }
-      >
-        <div className="space-y-2">
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Название"
-          />
-          <Textarea
-            rows={2}
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            placeholder="Инструкция формата"
-          />
-          <Button
-            size="sm"
-            disabled={!name}
-            onClick={async () => {
-              const { ok } = await act(() => api.createRubric(project.id, { name, instructions }), {
-                ok: 'Рубрика добавлена',
-              })
-              if (!ok) return
-              setName('')
-              setInstructions('')
-              await load()
-            }}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Добавить
-          </Button>
-        </div>
-      </Section>
-    </>
-  )
-}
-
-function RulesForm({ project }: { project: Project }) {
-  const [rules, setRules] = React.useState<Rule[]>([])
-  const [proposal, setProposal] = React.useState<Rule[] | null>(null)
-  const operation = useOperation(project.id)
-  const act = useAction()
-
-  const load = React.useCallback(async () => {
-    const { value } = await act(() => api.rules(project.id), { fail: 'Не удалось загрузить правила' })
-    if (value) setRules(value)
-  }, [project.id, act])
-
-  React.useEffect(() => {
-    void load()
-  }, [load])
-
-  const update = (id: number, patch: Partial<Rule>) =>
-    setRules((list) => list.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)))
-
-  return (
-    <>
-      <Section
-        title="Правила проверки"
-        hint="Пост сверяется с этим чеклистом: «блокирует» отправляет на доработку, «предупреждает» только помечает для редактора."
-        help={
-          <FieldHelp title="Правила проверки">
-            Готовый пост сверяется с этим списком построчно. Нарушение правила «блокирует»
-            отправляет пост на доработку, «предупреждает» — только помечается для вас. Правила
-            можно написать руками или попросить агента разобрать промпт проекта на пункты.
-          </FieldHelp>
-        }
-      >
-        <div className="space-y-2">
-          {rules.map((rule) => (
-            <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-border p-2.5">
-              <Input
-                value={rule.text}
-                aria-label="Текст правила"
-                className="h-8 flex-1 text-[13px]"
-                onChange={(event) => update(rule.id, { text: event.target.value })}
-              />
-              <Select
-                value={rule.severity}
-                onValueChange={(value) => update(rule.id, { severity: value as Rule['severity'] })}
-              >
-                <SelectTrigger aria-label="Строгость правила" className="h-8 w-[150px] text-[13px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="block">блокирует</SelectItem>
-                  <SelectItem value="warn">предупреждает</SelectItem>
-                </SelectContent>
-              </Select>
-              <Badge tone="muted">{rule.origin === 'derived' ? 'из промпта' : 'вручную'}</Badge>
-              <Switch
-                checked={rule.enabled}
-                aria-label={rule.enabled ? 'Выключить правило' : 'Включить правило'}
-                onCheckedChange={(enabled) => update(rule.id, { enabled })}
-              />
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                title="Убрать правило из списка"
-                aria-label="Убрать правило из списка"
-                onClick={() => setRules((list) => list.filter((item) => item.id !== rule.id))}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            onClick={async () => {
-              const { value } = await act(() => api.saveRules(project.id, rules), {
-                ok: 'Правила сохранены',
-              })
-              if (value) setRules(value)
-            }}
-          >
-            Сохранить правила
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              setRules((list) => [
-                ...list,
-                {
-                  id: -Date.now(),
-                  text: '',
-                  severity: 'warn',
-                  enabled: true,
-                  origin: 'manual',
-                  position: list.length + 1,
-                },
-              ])
-            }
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Добавить правило
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={operation.running}
-            className="ml-auto"
-            onClick={async () => {
-              const result = await operation.run(() => api.deriveRules(project.id), {
-                successText: 'Агент разобрал промпт проекта',
-              })
-              const derived = (result?.result as { rules?: Rule[] } | undefined)?.rules
-              if (derived) setProposal(derived)
-            }}
-          >
-            {operation.running ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Wand2 className="h-3.5 w-3.5" />
-            )}
-            Разобрать промпт
-          </Button>
-        </div>
-      </Section>
-
-      {proposal && (
-        <Section title="Предложение агента" hint="Ничего не записано: примите список целиком или закройте.">
-          <div className="space-y-1.5">
-            {proposal.map((rule) => (
-              <div key={rule.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
-                <span className="flex-1 text-[13px]">{rule.text}</span>
-                <Badge tone="muted">
-                  {rule.severity === 'block' ? 'блокирует' : 'предупреждает'}
-                </Badge>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              onClick={() => {
-                setRules(proposal)
-                setProposal(null)
-              }}
-            >
-              Перенести в правила
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setProposal(null)}>
-              Закрыть
-            </Button>
-          </div>
-        </Section>
-      )}
-    </>
-  )
-}
-
 function AccountForm() {
-  const { user, setUser, logout } = useSession()
-  const [prompt, setPrompt] = React.useState(user?.common_prompt ?? '')
+  const { user, logout } = useSession()
   const act = useAction()
 
   if (!user) return null
@@ -688,30 +368,6 @@ function AccountForm() {
             {user.telegram_username ? `@${user.telegram_username}` : 'Telegram-аккаунт привязан'}
           </p>
         </div>
-      </Section>
-
-      <Section
-        title="Общий промпт"
-        hint="Один на все проекты. Системный промпт сервера не редактируется."
-        help={
-          <FieldHelp title="Общий промпт">
-            Указания, общие для всех ваших проектов: язык, запреты, манера. Чтобы не повторять
-            одно и то же в промпте каждого канала.
-          </FieldHelp>
-        }
-      >
-        <Textarea rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-        <Button
-          size="sm"
-          onClick={async () => {
-            const { value } = await act(() => api.saveCommonPrompt(prompt), {
-              ok: 'Общий промпт сохранён',
-            })
-            if (value) setUser({ ...user, common_prompt: value.common_prompt })
-          }}
-        >
-          Сохранить
-        </Button>
       </Section>
 
       <Section

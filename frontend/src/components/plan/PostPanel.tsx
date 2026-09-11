@@ -128,26 +128,25 @@ export function PostPanel({
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             {dateTimeLabel(slot.publish_at)}
-            {slot.rubric ? ` · ${slot.rubric.name}` : ''}
           </span>
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
         <h2 className="text-base font-semibold tracking-tight">
-          {slot.post?.title || slot.topic || 'Тема не задана'}
+          {slot.post?.title || slot.topic || 'Промпт не задан'}
         </h2>
       </div>
 
       <div className="rounded-lg border border-border">
         <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Тема от редактора
+          Промпт поста
         </div>
         <p className="px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
-          {slot.topic || 'Тема не заполнена — агент не возьмёт слот в работу.'}
+          {slot.topic || 'Промпт не заполнен — агент не возьмёт слот в работу.'}
         </p>
         <div className="flex gap-2 border-t border-border px-3 py-2">
           <Button size="xs" variant="outline" onClick={() => onEditTopic(slot)}>
             <Pencil className="h-3 w-3" />
-            {slot.topic ? 'Изменить тему' : 'Заполнить тему'}
+            {slot.topic ? 'Изменить промпт' : 'Заполнить промпт'}
           </Button>
           {(slot.status === 'planned' || slot.status === 'no_topic' || slot.status === 'failed') && (
             <Button

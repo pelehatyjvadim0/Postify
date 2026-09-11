@@ -120,7 +120,6 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                     <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       {post.publish_at ? dateTimeLabel(post.publish_at) : '—'}
-                      {post.rubric ? ` · ${post.rubric.name}` : ''}
                     </span>
                     <Badge tone={status.tone} className="ml-auto">
                       {status.label}

@@ -23,7 +23,7 @@ import {
 import { useAction } from '@/lib/action'
 import { useOperation } from '@/lib/operation'
 import { useToast } from '@/lib/toast'
-import type { Project, Rubric, Slot } from '@/lib/types'
+import type { Project, Slot } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 type View = 'list' | 'week' | 'month'
@@ -43,7 +43,6 @@ export function PlanScreen({
   const [view, setView] = React.useState<View>('list')
   const [anchor, setAnchor] = React.useState(today)
   const [slots, setSlots] = React.useState<Slot[]>([])
-  const [rubrics, setRubrics] = React.useState<Rubric[]>([])
   const [loading, setLoading] = React.useState(true)
   const [notFound, setNotFound] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
@@ -93,13 +92,9 @@ export function PlanScreen({
     setLoading(true)
     setNotFound(false)
     try {
-      const [plan, rubricList] = await Promise.all([
-        api.plan(project.id, range.from, range.to),
-        api.rubrics(project.id),
-      ])
+      const plan = await api.plan(project.id, range.from, range.to)
       if (id !== requestId.current) return
       setSlots(plan)
-      setRubrics(rubricList)
     } catch (error) {
       if (id !== requestId.current) return
       // Контракт: чужой project_id отвечает 404 — для UI это «нет объекта».
@@ -338,7 +333,6 @@ export function PlanScreen({
         projectId={project.id}
         timezone={project.timezone}
         draft={draft}
-        rubrics={rubrics}
         onClose={() => setDraft(null)}
         onSaved={(slot) => {
           setSelectedId(slot.id)

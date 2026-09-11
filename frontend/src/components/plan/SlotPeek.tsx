@@ -124,7 +124,6 @@ function PeekHead({ slot }: { slot: Slot }) {
       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />
       <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {dateTimeLabel(slot.publish_at)}
-        {slot.rubric ? ` · ${slot.rubric.name}` : ''}
       </span>
       <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{status.label}</span>
     </div>
@@ -136,12 +135,12 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
     return (
       <div className="px-3.5 pb-3.5">
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          Слот стоит в плане, но тема не заполнена. Агент не возьмёт его в работу, пока не появится
-          тема.
+          Слот стоит в плане, но промпт не заполнен. Агент не возьмёт его в работу, пока не появится
+          задание.
         </p>
         <div className="mt-3 flex gap-2">
           <Button size="sm" className="flex-1" onClick={() => actions.onEditTopic(slot)}>
-            Заполнить тему
+            Заполнить промпт
           </Button>
           <Button size="sm" variant="outline" onClick={() => actions.onSkip(slot)}>
             Пропустить
@@ -159,7 +158,7 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
         </p>
         <div className="mt-3 flex gap-2">
           <Button size="sm" className="flex-1" onClick={() => actions.onEditTopic(slot)}>
-            Изменить тему
+            Изменить промпт
           </Button>
           <Button size="sm" variant="outline" onClick={() => actions.onGenerate(slot)}>
             Сгенерировать сейчас
@@ -254,7 +253,7 @@ function TopicBox({ topic }: { topic: string }) {
   return (
     <div className="mb-2.5 rounded-md border border-border px-2.5 py-2">
       <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        Тема от редактора
+        Промпт поста
       </div>
       <p className="text-[12.5px] leading-relaxed">{topic || '—'}</p>
     </div>

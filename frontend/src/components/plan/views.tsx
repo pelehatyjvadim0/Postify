@@ -127,7 +127,7 @@ function ListRow({
       {...bindPeek(slot)}
       onClick={() => onSelect(slot)}
       className={cn(
-        // На узком экране строка переносится: тема в первой строке, статус во второй.
+        // На узком экране строка переносится: промпт в первой строке, статус во второй.
         'group flex cursor-pointer items-center gap-3 px-3 transition-colors',
         'h-11 max-md:h-auto max-md:flex-wrap max-md:gap-x-3 max-md:gap-y-0.5 max-md:py-2',
         selected ? 'bg-accent' : 'hover:bg-accent/60',
@@ -137,16 +137,8 @@ function ListRow({
       <span className="w-11 shrink-0 text-[13px] font-medium tabular-nums text-muted-foreground">
         {timeOf(slot.publish_at)}
       </span>
-      <span
-        className={cn(
-          'w-[72px] shrink-0 text-[13px] max-md:hidden',
-          !title && 'text-muted-foreground',
-        )}
-      >
-        {slot.rubric?.name ?? '—'}
-      </span>
       <span className={cn('flex-1 truncate text-[13px]', !title && 'italic text-muted-foreground')}>
-        {title || 'тема не задана'}
+        {title || 'промпт не задан'}
       </span>
       <span className="flex shrink-0 items-center gap-1.5 max-md:w-full max-md:pl-[56px]">
         <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
@@ -219,7 +211,7 @@ export function WeekView({
                           !title && 'italic text-muted-foreground',
                         )}
                       >
-                        {title || 'тема не задана'}
+                        {title || 'промпт не задан'}
                       </p>
                     </div>
                   )
