@@ -13,6 +13,7 @@ import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { useOperation } from '@/lib/operation'
 import { useSession } from '@/lib/session'
+import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import type { Project, Rubric, Rule } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -205,6 +206,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
             variant="outline"
             onClick={async () => {
               const channel = await api.checkChannel(project.id)
+              supportLog('channel_checked', { project_id: project.id, status: channel.status })
               if (channel.status === 'ok') toast.ok('Канал отвечает')
               else toast.error('Канал не отвечает')
               onChanged()
@@ -213,7 +215,13 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
             Проверить
           </Button>
           <Badge tone={project.channel.status === 'ok' ? 'emerald' : 'muted'} className="ml-1">
-            {project.channel.configured ? project.channel.status : 'не настроен'}
+            {!project.channel.configured
+              ? 'не настроен'
+              : project.channel.status === 'ok'
+                ? 'подключён'
+                : project.channel.status === 'error'
+                  ? 'не отвечает'
+                  : 'не проверен'}
           </Badge>
         </div>
       </Section>
@@ -353,7 +361,7 @@ function RulesForm({ project }: { project: Project }) {
     <>
       <Section
         title="Правила проверки"
-        hint="Слой 2 сверяет пост с этим чеклистом. block отправляет на доработку, warn только помечает."
+        hint="Пост сверяется с этим чеклистом: «блокирует» отправляет на доработку, «предупреждает» только помечает для редактора."
       >
         <div className="space-y-2">
           {rules.map((rule) => (
@@ -371,8 +379,8 @@ function RulesForm({ project }: { project: Project }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="block">block</SelectItem>
-                  <SelectItem value="warn">warn</SelectItem>
+                  <SelectItem value="block">блокирует</SelectItem>
+                  <SelectItem value="warn">предупреждает</SelectItem>
                 </SelectContent>
               </Select>
               <Badge tone="muted">{rule.origin === 'derived' ? 'из промпта' : 'вручную'}</Badge>
@@ -450,7 +458,9 @@ function RulesForm({ project }: { project: Project }) {
             {proposal.map((rule) => (
               <div key={rule.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
                 <span className="flex-1 text-[13px]">{rule.text}</span>
-                <Badge tone="muted">{rule.severity}</Badge>
+                <Badge tone="muted">
+                  {rule.severity === 'block' ? 'блокирует' : 'предупреждает'}
+                </Badge>
               </div>
             ))}
           </div>
@@ -487,8 +497,7 @@ function AccountForm() {
         <div className="rounded-lg border border-border p-3 text-[13px]">
           <p className="font-medium">{user.display_name}</p>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
-            {user.telegram_username ? `@${user.telegram_username} · ` : ''}
-            Telegram ID {user.telegram_user_id}
+            {user.telegram_username ? `@${user.telegram_username}` : 'Telegram-аккаунт привязан'}
           </p>
         </div>
       </Section>

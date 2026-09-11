@@ -1,4 +1,5 @@
 import { ApiError } from './errors'
+import { supportLog } from './support'
 import { mockRequest } from '@/mock/server'
 import type {
   LoginRequest,
@@ -67,7 +68,10 @@ async function request<T>(method: Method, path: string, options: RequestOptions 
   const url = withQuery(path, options.query)
 
   if (USE_MOCKS) {
-    return mockRequest<T>(method, url, options.body, options.form)
+    return mockRequest<T>(method, url, options.body, options.form).catch((error: unknown) => {
+      if (error instanceof ApiError) supportLog('api_error', { method, url, status: error.status, code: error.code })
+      throw error
+    })
   }
 
   const headers: Record<string, string> = {}
@@ -87,6 +91,12 @@ async function request<T>(method: Method, path: string, options: RequestOptions 
   if (!response.ok) {
     const error = (payload as { error?: { code: string; message: string; field?: string } } | null)
       ?.error
+    supportLog('api_error', {
+      method,
+      url,
+      status: response.status,
+      code: error?.code ?? 'unknown_error',
+    })
     throw new ApiError(
       response.status,
       error?.code ?? 'unknown_error',

@@ -20,9 +20,7 @@ export function ChecksReport({ report }: { report: ValidationReport }) {
               : 'text-amber-700 dark:text-amber-400',
           )}
         >
-          {report.passed
-            ? `Пройдены · ${report.iterations} итерация`
-            : `${failed} слоя с замечаниями · ${report.iterations} итерации`}
+          {report.passed ? 'Пройдены' : `Замечания в ${failed} из ${report.layers.length}`}
         </span>
       </div>
       <div className="space-y-1.5">
@@ -68,7 +66,7 @@ function LayerRow({ layer }: { layer: ValidationLayer }) {
                   <X className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />
                   <span>
                     {item.claim ? `«${item.claim}» — ` : item.text ? `${item.text} — ` : ''}
-                    {item.verdict ? VERDICT_LABEL[item.verdict] ?? item.verdict : item.detail}
+                    {item.verdict ? (VERDICT_LABEL[item.verdict] ?? 'не подтверждено') : item.detail}
                     {item.verdict && item.detail ? `, ${item.detail.toLowerCase()}` : ''}
                   </span>
                 </li>
@@ -81,8 +79,10 @@ function LayerRow({ layer }: { layer: ValidationLayer }) {
 }
 
 function summarize(layer: ValidationLayer) {
-  if (layer.layer === 'format' || layer.layer === 'rules')
-    return [layer.score, layer.items.map((item) => item.key ?? item.text).filter(Boolean).slice(0, 4).join(', ')]
+  // Служебные ключи проверок (length, markup и подобные) в интерфейс не идут.
+  if (layer.layer === 'format') return layer.score ? `${layer.score} проверок пройдено` : '—'
+  if (layer.layer === 'rules')
+    return [layer.score, layer.items.map((item) => item.text).filter(Boolean).slice(0, 3).join(', ')]
       .filter(Boolean)
       .join(' · ')
   if (layer.layer === 'grounding') {

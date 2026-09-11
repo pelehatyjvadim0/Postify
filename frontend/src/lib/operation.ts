@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, pollOperation } from './api'
 import { ApiError } from './errors'
 import type { Operation } from './types'
+import { supportLog } from './support'
 import { useToast } from './toast'
 
 /**
@@ -33,9 +34,16 @@ export function useOperation(projectId: number | null) {
       setLastError(null)
       try {
         const { operation_id } = await start()
+        supportLog('operation_started', { project_id: projectId, operation_id })
         await options.onStarted?.()
         const operation = await pollOperation(projectId, operation_id)
         if (aborted.current) return operation
+        supportLog('operation_finished', {
+          operation_id,
+          status: operation.status,
+          purpose: operation.purpose,
+          code: operation.error?.code ?? null,
+        })
         if (operation.status === 'failed') {
           const message = operation.error?.message ?? 'Операция не выполнена'
           setLastError(message)

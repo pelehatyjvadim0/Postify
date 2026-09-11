@@ -4,9 +4,9 @@ import { Button } from '@/components/ui/button'
 import { api, USE_MOCKS } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { useSession } from '@/lib/session'
+import { supportLog } from '@/lib/support'
 import { useTheme } from '@/lib/theme'
 import type { LoginRequest, LoginStatus } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 // Вид и тексты взяты со страницы входа FakeTG (loginPage в
 // mockups/telegram-web/storychat-telegram-auth.mjs).
@@ -30,6 +30,7 @@ export function AuthScreen() {
       try {
         const result = await api.loginStatus(request.browser_token)
         if (!active) return
+        supportLog('login_status', { status: result.status })
         setStatus(result.status)
         if (result.status === 'approved' && result.user && result.csrf) {
           active = false
@@ -64,6 +65,12 @@ export function AuthScreen() {
     setStatus(null)
     try {
       const created = await api.startLogin()
+      supportLog('login_started', {
+        expires_at: created.expires_at,
+        // Исход входа на моках переключается ключом mock-login-outcome:
+        // approved (по умолчанию), denied, expired.
+        mock: USE_MOCKS,
+      })
       setRequest(created)
       setStatus('pending')
     } catch (caught) {
@@ -134,54 +141,7 @@ export function AuthScreen() {
           </>
         )}
 
-        {USE_MOCKS && <MockOutcomeSwitch />}
       </main>
-    </div>
-  )
-}
-
-/** Только на моках: переключатель исхода входа, чтобы увидеть все ветки. */
-function MockOutcomeSwitch() {
-  const [outcome, setOutcome] = React.useState(() => {
-    try {
-      return localStorage.getItem('mock-login-outcome') ?? 'approved'
-    } catch {
-      return 'approved'
-    }
-  })
-
-  const options = [
-    { value: 'approved', label: 'вход' },
-    { value: 'denied', label: 'отказ' },
-    { value: 'expired', label: 'истёк' },
-  ]
-
-  return (
-    <div className="mt-6 border-t border-border pt-3">
-      <p className="mb-2 text-[11px] text-muted-foreground">Мок: исход подтверждения</p>
-      <div className="inline-flex h-7 items-center rounded-lg bg-muted p-0.5 text-muted-foreground">
-        {options.map((option) => (
-          <button
-            key={option.value}
-            onClick={() => {
-              try {
-                localStorage.setItem('mock-login-outcome', option.value)
-              } catch {
-                /* приватный режим */
-              }
-              setOutcome(option.value)
-            }}
-            className={cn(
-              'h-6 rounded-md px-2.5 text-[12px] font-medium transition-colors',
-              outcome === option.value
-                ? 'bg-background text-foreground shadow-sm'
-                : 'hover:text-foreground',
-            )}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
     </div>
   )
 }

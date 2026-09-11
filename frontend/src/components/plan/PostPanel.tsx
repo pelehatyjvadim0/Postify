@@ -10,6 +10,7 @@ import { ApiError } from '@/lib/errors'
 import { dateTimeLabel } from '@/lib/dates'
 import { SLOT_STATUS, TOPIC_SPECIFICS_HINT } from '@/lib/status'
 import type { Post, Slot } from '@/lib/types'
+import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import { ChecksReport } from './ChecksReport'
 
@@ -55,6 +56,15 @@ export function PostPanel({
       .then((loaded) => {
         setPost(loaded)
         setDraft(loaded.post_text)
+        supportLog('post_loaded', {
+          post_id: loaded.id,
+          slot_id: loaded.slot_id,
+          provider: loaded.generation?.provider ?? null,
+          model: loaded.generation?.model ?? null,
+          reasoning_effort: loaded.generation?.reasoning_effort ?? null,
+          iterations: loaded.generation?.iterations ?? null,
+          media_asset_id: loaded.media?.asset_id ?? null,
+        })
       })
       .catch((error) => {
         // 404 — объекта нет: он удалён либо принадлежит другому пользователю.
@@ -203,14 +213,6 @@ export function PostPanel({
               {!editing && (
                 <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] tabular-nums text-muted-foreground">
                   <span>{post.char_count} знаков</span>
-                  {post.generation && (
-                    <>
-                      <span>·</span>
-                      <span>{post.generation.iterations} итерации</span>
-                      <span>·</span>
-                      <span>{post.generation.model}</span>
-                    </>
-                  )}
                   <button
                     className="ml-auto inline-flex items-center gap-1 transition-colors hover:text-foreground"
                     onClick={() => setEditing(true)}
