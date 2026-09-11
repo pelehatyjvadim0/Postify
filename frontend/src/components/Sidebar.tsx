@@ -1,5 +1,7 @@
-import { Calendar, ChevronsUpDown, Image, List, Settings } from 'lucide-react'
+import { Calendar, ChevronsUpDown, Image, List, Settings, X } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import * as React from 'react'
+import { useNav } from '@/lib/nav'
 import { navigate, type Screen } from '@/lib/router'
 import type { Project, ProjectSummary } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -22,6 +24,8 @@ export function Sidebar({
   current: Screen
   onSelectProject: (id: number) => void
 }) {
+  const { open, setOpen } = useNav()
+  const wasOpen = React.useRef(false)
   const summary = projects.find((item) => item.id === project?.id)
   const initials = (project?.name ?? '—')
     .split(' ')
@@ -31,13 +35,45 @@ export function Sidebar({
   const media = project?.media
   const share = media && media.total > 0 ? Math.round((media.available / media.total) * 100) : 0
 
+  React.useEffect(() => {
+    if (open) {
+      wasOpen.current = true
+      return
+    }
+    if (wasOpen.current) document.querySelector<HTMLElement>('[aria-label="Открыть меню"]')?.focus()
+    wasOpen.current = false
+  }, [open])
+
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border">
+    <>
+      {/* На узком экране панель выезжает поверх содержимого. */}
+      {open && (
+        <button
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          aria-label="Закрыть меню"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <aside
+        className={cn(
+          'flex w-60 shrink-0 flex-col border-r border-border bg-background',
+          'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-[min(17rem,82vw)] max-md:transition-transform',
+          !open && 'max-md:-translate-x-full',
+        )}
+      >
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
         <div className="grid h-6 w-6 place-items-center rounded bg-primary text-[11px] font-semibold text-primary-foreground">
           A
         </div>
         <span className="text-sm font-semibold tracking-tight">AutoPostTG</span>
+        <button
+          className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+          title="Закрыть меню"
+          aria-label="Закрыть меню"
+          onClick={() => setOpen(false)}
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       <div className="p-3">
@@ -58,7 +94,10 @@ export function Sidebar({
               {projects.map((item) => (
                 <DropdownMenu.Item
                   key={item.id}
-                  onSelect={() => onSelectProject(item.id)}
+                  onSelect={() => {
+                    onSelectProject(item.id)
+                    setOpen(false)
+                  }}
                   className={cn(
                     'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] outline-none focus:bg-accent',
                     item.id === project?.id && 'bg-accent/60',
@@ -81,7 +120,10 @@ export function Sidebar({
         {NAV.map(({ screen, label, Icon }) => (
           <button
             key={screen}
-            onClick={() => navigate(screen)}
+            onClick={() => {
+              navigate(screen)
+              setOpen(false)
+            }}
             className={cn(
               'flex w-full items-center gap-2.5 rounded-md px-3 py-2 transition-colors',
               current === screen
@@ -122,6 +164,7 @@ export function Sidebar({
           </div>
         </div>
       )}
-    </aside>
+      </aside>
+    </>
   )
 }

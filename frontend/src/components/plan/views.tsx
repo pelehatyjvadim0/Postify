@@ -55,13 +55,13 @@ export function ListView({ slots, selectedId, today, onSelect, onAdd, bindPeek }
 
   if (groups.length === 0)
     return (
-      <div className="mx-auto max-w-3xl p-6">
+      <div className="mx-auto max-w-3xl p-4 md:p-6">
         <EmptyPlan onAdd={() => onAdd(today)} />
       </div>
     )
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 p-6">
+    <div className="mx-auto max-w-3xl space-y-5 p-4 md:p-6">
       {groups.map(([date, items]) => {
         const [, month, day] = date.split('-').map(Number)
         return (
@@ -127,7 +127,9 @@ function ListRow({
       {...bindPeek(slot)}
       onClick={() => onSelect(slot)}
       className={cn(
-        'group flex h-11 cursor-pointer items-center gap-3 px-3 transition-colors',
+        // На узком экране строка переносится: тема в первой строке, статус во второй.
+        'group flex cursor-pointer items-center gap-3 px-3 transition-colors',
+        'h-11 max-md:h-auto max-md:flex-wrap max-md:gap-x-3 max-md:gap-y-0.5 max-md:py-2',
         selected ? 'bg-accent' : 'hover:bg-accent/60',
         slot.status === 'skipped' && 'opacity-55',
       )}
@@ -135,17 +137,24 @@ function ListRow({
       <span className="w-11 shrink-0 text-[13px] font-medium tabular-nums text-muted-foreground">
         {timeOf(slot.publish_at)}
       </span>
-      <span className={cn('w-[72px] shrink-0 text-[13px]', !title && 'text-muted-foreground')}>
+      <span
+        className={cn(
+          'w-[72px] shrink-0 text-[13px] max-md:hidden',
+          !title && 'text-muted-foreground',
+        )}
+      >
         {slot.rubric?.name ?? '—'}
       </span>
       <span className={cn('flex-1 truncate text-[13px]', !title && 'italic text-muted-foreground')}>
         {title || 'тема не задана'}
       </span>
-      <span className="flex shrink-0 items-center gap-1.5">
+      <span className="flex shrink-0 items-center gap-1.5 max-md:w-full max-md:pl-[56px]">
         <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
-        <span className="w-[92px] text-[12px] text-muted-foreground">{status.label}</span>
+        <span className="w-[92px] text-[12px] text-muted-foreground max-md:w-auto">
+          {status.label}
+        </span>
       </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-transparent transition-colors group-hover:text-muted-foreground/70" />
+      <ChevronRight className="h-4 w-4 shrink-0 text-transparent transition-colors group-hover:text-muted-foreground/70 max-md:hidden" />
     </div>
   )
 }
@@ -163,8 +172,8 @@ export function WeekView({
   const groups = groupByDay(slots)
 
   return (
-    <div className="p-6">
-      <div className="grid grid-cols-7 gap-3">
+    <div className="overflow-x-auto p-4 md:p-6">
+      <div className="grid grid-cols-7 gap-3 max-md:w-[860px]">
         {days.map((date, index) => {
           const items = groups.get(date) ?? []
           const day = Number(date.slice(8))
@@ -263,15 +272,15 @@ export function MonthView({
   const cells = Math.ceil((lead + total) / 7) * 7
 
   return (
-    <div className="p-6">
-      <div className="mb-3 flex items-center justify-end">
+    <div className="overflow-x-auto p-4 md:p-6">
+      <div className="mb-3 flex items-center justify-end max-md:justify-start">
         <Button variant="outline" size="sm" onClick={onToggleWeekend} className="text-muted-foreground">
           <Columns3 className="h-3.5 w-3.5" />
           Выходные: {wideWeekend ? 'обычные' : 'узкие'}
         </Button>
       </div>
       <div
-        className="grid gap-px overflow-hidden rounded-lg border border-border bg-border"
+        className="grid gap-px overflow-hidden rounded-lg border border-border bg-border max-md:w-[860px]"
         style={{ gridTemplateColumns: columns }}
       >
         {DOW.map((name, index) => (

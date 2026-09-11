@@ -41,13 +41,17 @@ export function useSlotPeek() {
   const cancelHide = React.useCallback(() => window.clearTimeout(hideTimer.current), [])
 
   const show = React.useCallback((element: HTMLElement, slot: Slot) => {
+    // На сенсорном экране наведения нет: там касание должно сразу открывать
+    // слот, а не вешать поверх карточку предпросмотра.
+    if (!matchMedia('(hover: hover) and (pointer: fine)').matches) return
     window.clearTimeout(hideTimer.current)
     window.clearTimeout(showTimer.current)
     showTimer.current = window.setTimeout(() => {
       const rect = element.getBoundingClientRect()
       const gap = 10
       // Справа заканчиваем до панели поста, иначе карточка накрывает её кнопки.
-      const limit = innerWidth - PANEL_WIDTH - 8
+      // Узкий экран панели рядом не показывает — там весь экран наш.
+      const limit = (innerWidth >= 768 ? innerWidth - PANEL_WIDTH : innerWidth) - 8
       let left = rect.right + gap
       if (left + WIDTH > limit) left = rect.left - WIDTH - gap
       if (left < 8) left = Math.max(8, Math.min(rect.right + gap, limit - WIDTH))

@@ -255,13 +255,13 @@ export function PlanScreen({
       <div className="flex min-h-0 flex-1">
         <section className="min-w-0 flex-1 overflow-auto" onScroll={peek.close}>
           {notFound ? (
-            <div className="p-6">
+            <div className="p-4 md:p-6">
               <Alert tone="error" title="Проект не найден">
                 Объекта нет или он недоступен. Выберите другой проект в боковой панели.
               </Alert>
             </div>
           ) : loading ? (
-            <div className="mx-auto max-w-3xl space-y-3 p-6">
+            <div className="mx-auto max-w-3xl space-y-3 p-4 md:p-6">
               <Skeleton className="h-11 w-full" />
               <Skeleton className="h-11 w-full" />
               <Skeleton className="h-11 w-full" />
@@ -299,6 +299,7 @@ export function PlanScreen({
           onRegenerate={regenerate}
           onSkip={skip}
           onDelete={(slot) => setPendingDelete(slot)}
+          onClose={() => setSelectedId(null)}
           onChanged={() => {
             void load()
             onProjectChanged()

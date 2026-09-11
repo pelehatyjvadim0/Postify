@@ -165,7 +165,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
       />
 
       <div className="flex-1 overflow-auto">
-        <div className="space-y-4 p-6">
+        <div className="space-y-4 p-4 md:p-6">
           {operation.running && (
             <Alert tone="info" title="Идёт обработка">
               Файлы загружены. Система рассматривает их и составляет описание — обычно это

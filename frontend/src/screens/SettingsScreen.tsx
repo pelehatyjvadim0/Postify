@@ -49,7 +49,7 @@ export function SettingsScreen({ project, onChanged }: { project: Project; onCha
         </div>
       </AppHeader>
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-2xl space-y-6 p-6">
+        <div className="mx-auto max-w-2xl space-y-6 p-4 md:p-6">
           {tab === 'project' && <ProjectForm project={project} onChanged={onChanged} />}
           {tab === 'rubrics' && <RubricsForm project={project} />}
           {tab === 'rules' && <RulesForm project={project} />}
@@ -148,7 +148,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           </FieldHelp>
         }
       >
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field
             label="Название"
             help={
@@ -209,7 +209,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
       </Section>
 
       <Section title="Публикация">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid gap-3 sm:grid-cols-3">
           <Field
             label="Режим"
             help={
@@ -283,7 +283,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           </FieldHelp>
         }
       >
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field
             label="Идентификатор канала"
             help={

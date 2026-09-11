@@ -94,7 +94,7 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
       </AppHeader>
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl space-y-2 p-6">
+        <div className="mx-auto max-w-3xl space-y-2 p-4 md:p-6">
           {loading ? (
             <>
               <Skeleton className="h-20 w-full" />

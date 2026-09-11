@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ExternalLink, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { ApiError } from '@/lib/errors'
 import { dateTimeLabel } from '@/lib/dates'
 import { SLOT_STATUS, TOPIC_SPECIFICS_HINT } from '@/lib/status'
 import type { Post, Slot } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import { ChecksReport } from './ChecksReport'
@@ -23,6 +24,8 @@ interface Props {
   onSkip: (slot: Slot) => void
   onDelete: (slot: Slot) => void
   onChanged: () => void
+  /** Закрыть панель — нужно на узком экране, где она занимает весь экран. */
+  onClose: () => void
   operationRunning: boolean
 }
 
@@ -35,6 +38,7 @@ export function PostPanel({
   onSkip,
   onDelete,
   onChanged,
+  onClose,
   operationRunning,
 }: Props) {
   const [post, setPost] = React.useState<Post | null>(null)
@@ -81,7 +85,7 @@ export function PostPanel({
 
   if (!slot)
     return (
-      <PanelShell>
+      <PanelShell empty onClose={onClose}>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
           Выберите слот в плане, чтобы увидеть тему, пост и отчёт проверок.
         </p>
@@ -119,7 +123,7 @@ export function PostPanel({
   }
 
   return (
-    <PanelShell>
+    <PanelShell onClose={onClose}>
       <div>
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -301,10 +305,33 @@ export function PostPanel({
   )
 }
 
-function PanelShell({ children }: { children: React.ReactNode }) {
+function PanelShell({
+  children,
+  empty,
+  onClose,
+}: {
+  children: React.ReactNode
+  empty?: boolean
+  onClose: () => void
+}) {
   return (
-    <aside className="w-[400px] shrink-0 overflow-auto border-l border-border">
-      <div className="space-y-5 p-5">{children}</div>
+    <aside
+      className={cn(
+        'shrink-0 overflow-auto border-l border-border bg-background md:w-[400px]',
+        // На узком экране панель занимает весь экран: рядом с планом
+        // 400 пикселей не помещаются.
+        'max-md:fixed max-md:inset-0 max-md:z-40 max-md:border-l-0',
+        // Подсказка «выберите слот» нужна только там, где панель видна всегда.
+        empty && 'max-md:hidden',
+      )}
+    >
+      <div className="space-y-5 p-5">
+        <Button variant="outline" size="sm" className="md:hidden" onClick={onClose}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          К плану
+        </Button>
+        {children}
+      </div>
     </aside>
   )
 }

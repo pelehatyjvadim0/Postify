@@ -9,6 +9,7 @@ import { PostsScreen } from '@/screens/PostsScreen'
 import { SettingsScreen } from '@/screens/SettingsScreen'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
+import { NavProvider } from '@/lib/nav'
 import { useRoute } from '@/lib/router'
 import { useSession } from '@/lib/session'
 import { useToast } from '@/lib/toast'
@@ -74,7 +75,8 @@ function Workspace() {
   if (loading) return <BootSkeleton />
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <NavProvider>
+      <div className="flex h-screen overflow-hidden">
       <Sidebar
         projects={projects}
         project={project}
@@ -82,13 +84,13 @@ function Workspace() {
         onSelectProject={setProjectId}
       />
       {notFound ? (
-        <div className="flex-1 p-6">
+        <div className="min-w-0 flex-1 p-4 md:p-6">
           <Alert tone="error" title="Проект не найден">
             Объекта нет или он недоступен. Выберите другой проект.
           </Alert>
         </div>
       ) : !project ? (
-        <div className="flex-1 space-y-3 p-6">
+        <div className="min-w-0 flex-1 space-y-3 p-4 md:p-6">
           <Skeleton className="h-14 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>
@@ -109,14 +111,15 @@ function Workspace() {
       ) : (
         <SettingsScreen project={project} onChanged={refresh} />
       )}
-    </div>
+      </div>
+    </NavProvider>
   )
 }
 
 function BootSkeleton() {
   return (
     <div className="flex h-screen">
-      <div className="w-60 shrink-0 border-r border-border p-3">
+      <div className="hidden w-60 shrink-0 border-r border-border p-3 md:block">
         <Skeleton className="h-9 w-full" />
       </div>
       <div className="flex-1 space-y-3 p-6">
