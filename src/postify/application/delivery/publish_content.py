@@ -14,26 +14,29 @@ class PublishContent:
         self.timeout_seconds = timeout_seconds
         self.clock = clock
 
-    def execute(self, *, package_id: int | None = None, delivery_id: int | None = None) -> PublishContentResult:
+    def execute(self, *, post_id: int | None = None, delivery_id: int | None = None) -> PublishContentResult:
         now = self.clock()
         self.repository.mark_stale_sending_uncertain(
             stale_before=now - timedelta(seconds=self.timeout_seconds), now=now
         )
-        if package_id is None and delivery_id is None:
+        if post_id is None and delivery_id is None:
             cleanup = self.repository.pending_cleanup()
             if cleanup is not None:
                 try:
-                    if cleanup.media_path:
+                    if cleanup.media_path and not cleanup.retain_media:
                         self.media.delete(cleanup.media_path)
                 except (OSError, MediaCleanupError):
-                    return PublishContentResult("cleanup_pending", package_id=cleanup.package_id)
-                self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
-                return PublishContentResult("cleanup_completed", package_id=cleanup.package_id)
+                    return PublishContentResult("cleanup_pending", post_id=cleanup.post_id)
+                if cleanup.retain_media:
+                    self.repository.mark_media_retained(cleanup.delivery_id, now=now)
+                else:
+                    self.repository.mark_media_deleted(cleanup.delivery_id, now=now)
+                return PublishContentResult("cleanup_completed", post_id=cleanup.post_id)
         claim = (
             self.repository.reserve_next(now=now)
-            if package_id is None and delivery_id is None
+            if post_id is None and delivery_id is None
             else self.repository.reserve_next(
-                now=now, package_id=package_id, delivery_id=delivery_id
+                now=now, post_id=post_id, delivery_id=delivery_id
             )
         )
         if claim is None:
@@ -42,12 +45,15 @@ class PublishContent:
             message = self.publisher.publish(claim)
         except TelegramPublishError as error:
             self.repository.record_failure(claim, kind=error.kind, code=error.code, reason=error.reason, now=now)
-            return PublishContentResult(error.kind.value, package_id=claim.package_id)
+            return PublishContentResult(error.kind.value, post_id=claim.post_id)
         self.repository.confirm_published(claim, message_id=message.message_id, now=now)
         try:
-            if claim.media_path:
+            if claim.media_path and not claim.retain_media:
                 self.media.delete(claim.media_path)
         except (OSError, MediaCleanupError):
-            return PublishContentResult("cleanup_pending", package_id=claim.package_id)
-        self.repository.mark_media_deleted(claim.delivery_id, now=now)
-        return PublishContentResult("published", package_id=claim.package_id, message_id=message.message_id)
+            return PublishContentResult("cleanup_pending", post_id=claim.post_id)
+        if claim.retain_media:
+            self.repository.mark_media_retained(claim.delivery_id, now=now)
+        else:
+            self.repository.mark_media_deleted(claim.delivery_id, now=now)
+        return PublishContentResult("published", post_id=claim.post_id, message_id=message.message_id)

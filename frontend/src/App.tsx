@@ -2,6 +2,11 @@ import * as React from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { Alert } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Plus } from 'lucide-react'
 import { AuthScreen } from '@/screens/AuthScreen'
 import { MediaScreen } from '@/screens/MediaScreen'
 import { PlanScreen } from '@/screens/PlanScreen'
@@ -30,6 +35,12 @@ function Workspace() {
   const [projectId, setProjectId] = React.useState<number | null>(null)
   const [notFound, setNotFound] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
+  const [creating, setCreating] = React.useState(false)
+  const [projectName, setProjectName] = React.useState('')
+  const [projectTimezone, setProjectTimezone] = React.useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const [saving, setSaving] = React.useState(false)
+  const [createError, setCreateError] = React.useState<string | null>(null)
+  const projectRequest = React.useRef(0)
   const toast = useToast()
 
   const loadProjects = React.useCallback(async () => {
@@ -49,10 +60,13 @@ function Workspace() {
 
   const loadProject = React.useCallback(async () => {
     if (projectId === null) return
+    const request = ++projectRequest.current
     setNotFound(false)
     try {
-      setProject(await api.project(projectId))
+      const loaded = await api.project(projectId)
+      if (request === projectRequest.current) setProject(loaded)
     } catch (error) {
+      if (request !== projectRequest.current) return
       // Чужой проект отвечает 404 — показываем «нет объекта», не «нет прав».
       if (error instanceof ApiError && error.isNotFound) {
         setProject(null)
@@ -72,6 +86,23 @@ function Workspace() {
     void loadProjects().catch(() => undefined)
   }, [loadProject, loadProjects])
 
+  async function createProject() {
+    setSaving(true)
+    setCreateError(null)
+    try {
+      const created = await api.createProject({ name: projectName.trim(), timezone: projectTimezone.trim() })
+      await loadProjects()
+      setProjectId(created.id)
+      setProject(created)
+      setCreating(false)
+      setProjectName('')
+    } catch (error) {
+      setCreateError(error instanceof ApiError ? error.message : 'Не удалось создать проект')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) return <BootSkeleton />
 
   return (
@@ -81,9 +112,22 @@ function Workspace() {
         projects={projects}
         project={project}
         current={screen}
-        onSelectProject={setProjectId}
+        onSelectProject={(id) => {
+          if (id === projectId) return
+          projectRequest.current++
+          setProject(null)
+          setProjectId(id)
+        }}
+        onCreateProject={() => { setCreateError(null); setCreating(true) }}
       />
-      {notFound ? (
+      {projects.length === 0 ? (
+        <div className="flex min-w-0 flex-1 items-center justify-center p-6">
+          <div className="space-y-4 text-center">
+            <h1 className="text-xl font-semibold">Первый проект</h1>
+            <Button onClick={() => setCreating(true)}><Plus className="h-4 w-4" />Создать проект</Button>
+          </div>
+        </div>
+      ) : notFound ? (
         <div className="min-w-0 flex-1 p-4 md:p-6">
           <Alert tone="error" title="Проект не найден">
             Объекта нет или он недоступен. Выберите другой проект.
@@ -96,6 +140,7 @@ function Workspace() {
         </div>
       ) : screen === 'plan' ? (
         <PlanScreen
+          key={project.id}
           project={project}
           onProjectChanged={refresh}
           focus={
@@ -105,12 +150,29 @@ function Workspace() {
           }
         />
       ) : screen === 'posts' ? (
-        <PostsScreen project={project} onChanged={refresh} />
+        <PostsScreen key={project.id} project={project} onChanged={refresh} />
       ) : screen === 'media' ? (
-        <MediaScreen project={project} onChanged={refresh} />
+        <MediaScreen key={project.id} project={project} onChanged={refresh} />
       ) : (
-        <SettingsScreen project={project} onChanged={refresh} />
+        <SettingsScreen key={project.id} project={project} onChanged={refresh} />
       )}
+      <Dialog open={creating} onOpenChange={(open) => { if (!saving) setCreating(open) }}>
+        <DialogContent>
+          <DialogTitle>Новый проект</DialogTitle>
+          <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void createProject() }}>
+            <div className="space-y-1.5">
+              <Label htmlFor="project-name">Название</Label>
+              <Input id="project-name" value={projectName} maxLength={200} required onChange={(event) => setProjectName(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="project-timezone">Таймзона</Label>
+              <Input id="project-timezone" value={projectTimezone} required onChange={(event) => setProjectTimezone(event.target.value)} />
+            </div>
+            {createError && <Alert tone="error" title="Проект не создан">{createError}</Alert>}
+            <Button type="submit" disabled={saving || !projectName.trim() || !projectTimezone.trim()}>{saving ? 'Создаю…' : 'Создать проект'}</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
       </div>
     </NavProvider>
   )

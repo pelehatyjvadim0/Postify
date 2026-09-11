@@ -25,8 +25,15 @@ export function AuthScreen() {
   React.useEffect(() => {
     if (!request || !waiting) return
     let active = true
+    let inFlight = false
     const timer = window.setInterval(async () => {
-      if (!active) return
+      if (!active || inFlight) return
+      if (Date.now() >= Date.parse(request.expires_at)) {
+        setStatus('expired')
+        setError('Запрос на вход истёк')
+        return
+      }
+      inFlight = true
       try {
         const result = await api.loginStatus(request.browser_token)
         if (!active) return
@@ -40,6 +47,10 @@ export function AuthScreen() {
           active = false
           setError('Авторизация не удалась')
         }
+        if (result.status === 'expired') {
+          active = false
+          setError('Запрос на вход истёк')
+        }
       } catch (caught) {
         if (!active) return
         // Истёкший или неизвестный запрос приходит как 404.
@@ -47,10 +58,13 @@ export function AuthScreen() {
           active = false
           setStatus('expired')
           setError('Запрос на вход истёк')
-        } else if (caught instanceof ApiError && caught.status === 503) {
+        } else if (caught instanceof ApiError && (caught.status === 403 || caught.status === 503)) {
           active = false
-          setError('Бот недоступен, вход временно невозможен')
+          setStatus('denied')
+          setError(caught.message)
         }
+      } finally {
+        inFlight = false
       }
     }, POLL_MS)
     return () => {

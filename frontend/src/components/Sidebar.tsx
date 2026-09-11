@@ -1,4 +1,4 @@
-import { Calendar, ChevronsUpDown, Image, List, Settings, X } from 'lucide-react'
+import { Calendar, ChevronsUpDown, Image, List, Plus, Settings, X } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as React from 'react'
 import { useNav } from '@/lib/nav'
@@ -18,11 +18,13 @@ export function Sidebar({
   project,
   current,
   onSelectProject,
+  onCreateProject,
 }: {
   projects: ProjectSummary[]
   project: Project | null
   current: Screen
   onSelectProject: (id: number) => void
+  onCreateProject: () => void
 }) {
   const { open, setOpen } = useNav()
   const wasOpen = React.useRef(false)
@@ -108,6 +110,10 @@ export function Sidebar({
                   )}
                 </DropdownMenu.Item>
               ))}
+              <DropdownMenu.Separator className="my-1 h-px bg-border" />
+              <DropdownMenu.Item onSelect={() => { onCreateProject(); setOpen(false) }} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] outline-none focus:bg-accent">
+                <Plus className="h-4 w-4" /> Создать проект
+              </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>

@@ -147,7 +147,7 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                           Одобрить
                         </Button>
                       )}
-                      {post.status !== 'published' && (
+                      {post.status !== 'published' && post.status !== 'generating' && (
                         <Button
                           size="xs"
                           variant="outline"

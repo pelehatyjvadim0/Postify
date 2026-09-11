@@ -329,7 +329,7 @@ export function PlanScreen({
       <ConfirmDialog
         open={pendingDelete !== null}
         title="Удалить слот из плана?"
-        description="Слот и связанный с ним пост исчезнут из плана. Действие необратимо."
+        description="Слот исчезнет из плана. Действие необратимо."
         onConfirm={() => pendingDelete && void removeSlot(pendingDelete)}
         onClose={() => setPendingDelete(null)}
       />

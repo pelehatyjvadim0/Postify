@@ -1,609 +1,538 @@
+"""Контракт HTTP-слоя: маршруты, коды ответов и формат ошибки.
+
+Фасад подменён заглушкой, поэтому тесты проверяют ровно то, за что отвечает
+веб-слой: разбор запроса, вызов нужного действия и форму ответа.
+"""
+
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 
 import httpx
+import pytest
+
+from postify.domain.auth.models import User
+from postify.web.errors import ConflictError
+from postify.web.security import CSRF_HEADER, SESSION_COOKIE, csrf_token
 
 
-NOW = datetime(2026, 8, 12, 9, tzinfo=UTC)
+NOW = datetime(2026, 9, 11, 12, tzinfo=UTC)
+SESSION = "test-session-token"
+OWNER = User(1, "101", "user_101", "Иван Петров", NOW, NOW, True)
+
+
+class AuthStub:
+    """Сервис входа без базы: одна сессия и явный список своих проектов."""
+
+    def __init__(self, *, owned: tuple[int, ...] = (1, 3)) -> None:
+        self._owned = frozenset(owned)
+
+    def resolve_session(self, token: str | None) -> User | None:
+        return OWNER if token == SESSION else None
+
+    def owns_project(self, *, user_id: int, project_id: int) -> bool:
+        return user_id == OWNER.id and project_id in self._owned
+
+
+def _project(project_id: int = 1) -> dict[str, object]:
+    return {
+        "id": project_id,
+        "name": "Агротех",
+        "timezone": "Europe/Moscow",
+        "language": "ru",
+        "audience": "Фермеры",
+        "tone": "Нейтральный",
+        "project_prompt": "",
+        "publication_mode": "review",
+        "generation_lead_minutes": 1440,
+        "media_reuse_days": 30,
+        "channel": {
+            "configured": True,
+            "chat_id": "@agrotech",
+            "status": "ok",
+            "checked_at": NOW,
+        },
+        "media": {"total": 0, "available": 0},
+    }
+
+
+def _post(post_id: int = 77, status: str = "needs_review") -> dict[str, object]:
+    return {
+        "id": post_id,
+        "slot_id": 41,
+        "status": status,
+        "post_text": "Текст поста",
+        "char_count": 11,
+        "media": {"asset_id": 5, "caption": "Поле", "url": "/api/projects/1/media/5/file", "rationale": "По теме", "last_used_at": NOW},
+        "generation": {"provider": "codex", "model": "gpt-5.6-terra"},
+        "validation": {"passed": True, "iterations": 0, "layers": []},
+        "delivery": None,
+        "published": None,
+        "history": [{"status": "needs_review", "reason": "generated", "created_at": NOW}],
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
 
 
 class ApiStub:
+    """Фасад приложения без базы: запоминает вызовы и отдаёт готовые ответы."""
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...]]] = []
-        self.run_once_busy = False
-        self.fail = False
+        self.error: BaseException | None = None
 
-    def bootstrap(self):
+    def _record(self, name: str, *values: object) -> None:
+        self.calls.append((name, values))
+        if self.error is not None:
+            raise self.error
+
+    def scheduler_tick(self) -> tuple[()]:
+        return ()
+
+    def close(self) -> None:
+        self._record("close")
+
+    # --- проекты ---
+
+    def list_projects(self, *, owner_id):
+        self._record("list_projects", owner_id)
+        return [
+            {
+                "id": 1,
+                "name": "Агротех",
+                "channel_title": "@agrotech",
+                "publication_mode": "review",
+                "counts": {"needs_review": 1},
+            }
+        ]
+
+    def create_project(self, payload, *, owner_id):
+        self._record("create_project", payload, owner_id)
+        return _project()
+
+    def project(self, project_id):
+        self._record("project", project_id)
+        return _project(project_id)
+
+    def update_project(self, project_id, payload):
+        self._record("update_project", project_id, payload)
+        return _project(project_id)
+
+    def delete_project(self, project_id):
+        self._record("delete_project", project_id)
+
+    # --- канал ---
+
+    def set_channel(self, project_id, *, bot_token, chat_id):
+        self._record("set_channel", project_id, bot_token, chat_id)
         return {
-            "activeProject": {"id": 1, "name": "Редакция"},
-            "providers": {
-                "sources": [{"code": "hn_algolia", "label": "HN Algolia", "fields": []}],
-                "channels": [{"code": "telegram", "label": "Telegram", "fields": []}],
-            },
+            "configured": True,
+            "chat_id": chat_id,
+            "status": "configured",
+            "checked_at": None,
         }
 
-    def materials(self, project_id: int, **filters: object):
-        return {"projectId": project_id, "items": [], "filters": filters}
-
-    def packages(self, project_id: int, **filters: object):
-        return {"projectId": project_id, "items": [], "filters": filters}
-
-    def package(self, project_id: int, package_id: int):
-        return {"projectId": project_id, "id": package_id, "history": []}
-
-    def save_plan(self, project_id: int, package_id: int, *, scheduled_at: datetime, route_id: int):
-        self.calls.append(("save_plan", (project_id, package_id, scheduled_at, route_id)))
-        return {"id": package_id, "routeId": route_id}
-
-    def approve(self, project_id: int, package_id: int):
-        self.calls.append(("approve", (project_id, package_id)))
-        return {"id": package_id, "status": "approved"}
-
-    def reject(self, project_id: int, package_id: int):
-        self.calls.append(("reject", (project_id, package_id)))
-        return {"id": package_id, "status": "rejected"}
-
-    def queue(self, project_id: int):
-        return {"projectId": project_id, "items": []}
-
-    def publications(self, project_id: int, **filters: object):
-        return {"projectId": project_id, "items": [], "filters": filters}
-
-    def operations(self, project_id: int, **filters: object):
-        return {"projectId": project_id, "items": [], "filters": filters}
-
-    def operation(self, project_id: int, operation_run_id: int):
-        self.calls.append(("operation", (project_id, operation_run_id)))
+    def check_channel(self, project_id):
+        self._record("check_channel", project_id)
         return {
-            "run_id": operation_run_id,
-            "kind": "manual_search",
-            "mode": "manual",
-            "actor": "ui",
+            "configured": True,
+            "chat_id": "@agrotech",
+            "status": "ok",
+            "checked_at": NOW,
+        }
+
+    def remove_channel(self, project_id):
+        self._record("remove_channel", project_id)
+
+    # --- рубрики ---
+
+    def rubrics(self, project_id):
+        self._record("rubrics", project_id)
+        return [{"id": 5, "name": "Кейс", "instructions": "Как есть", "enabled": True}]
+
+    def create_rubric(self, project_id, payload):
+        self._record("create_rubric", project_id, payload)
+        return {"id": 5, "name": payload["name"], "instructions": payload["instructions"], "enabled": payload["enabled"]}
+
+    def update_rubric(self, project_id, rubric_id, payload):
+        self._record("update_rubric", project_id, rubric_id, payload)
+        return {"id": rubric_id, "name": "Кейс", "instructions": "Как есть", "enabled": payload.get("enabled", True)}
+
+    def delete_rubric(self, project_id, rubric_id):
+        self._record("delete_rubric", project_id, rubric_id)
+
+    # --- посты ---
+
+    def posts(self, project_id, *, status=None, limit=50, offset=0):
+        self._record("posts", project_id, status, limit, offset)
+        return [
+            {
+                "id": 77,
+                "slot_id": 41,
+                "status": "needs_review",
+                "title": "Хранение зерна",
+                "excerpt": "Текст поста",
+                "publish_at": NOW,
+                "rubric": {"id": 2, "name": "Советы"},
+                "checks_summary": {"passed": True, "blocking": 0, "warnings": 0},
+            }
+        ]
+
+    def post(self, project_id, post_id):
+        self._record("post", project_id, post_id)
+        return _post(post_id)
+
+    def update_post(self, project_id, post_id, *, post_text=None, media_asset_id=None):
+        self._record("update_post", project_id, post_id, post_text, media_asset_id)
+        return _post(post_id)
+
+    def approve_post(self, project_id, post_id):
+        self._record("approve_post", project_id, post_id)
+        return _post(post_id, status="approved")
+
+    def reject_post(self, project_id, post_id):
+        self._record("reject_post", project_id, post_id)
+        return _post(post_id, status="rejected")
+
+    def post_media(self, project_id, post_id):
+        self._record("post_media", project_id, post_id)
+        return b"image-bytes", "image/jpeg"
+
+    # --- журнал и публикации ---
+
+    def operations(self, project_id, *, limit=50, offset=0):
+        self._record("operations", project_id, limit, offset)
+        return [self.operation(project_id, 1841)]
+
+    def operation(self, project_id, operation_id):
+        self._record("operation", project_id, operation_id)
+        return {
+            "operation_id": operation_id,
+            "purpose": "publish_once",
             "status": "succeeded",
-            "outcome": "completed",
-            "failure_code": None,
-            "codex_model": "gpt-5.3-codex",
-            "codex_reasoning_effort": "high",
-            "materials_taken": 3,
-            "packages_created": 3,
+            "actor": "user",
+            "mode": "manual",
+            "outcome": "published",
+            "result": {"post_id": 77},
+            "error": None,
             "started_at": NOW,
             "finished_at": NOW,
-            "duration": 0,
-            "raw_prompt": "must not cross the HTTP boundary",
         }
 
-    def _accepted(self, name: str, *values: int):
-        self.calls.append((name, values))
-        return {"status": "accepted", "operationRunId": 17}
+    def publications(self, project_id, *, limit=50, offset=0):
+        self._record("publications", project_id, limit, offset)
+        return [
+            {
+                "delivery_id": 9,
+                "post_id": 77,
+                "provider": "telegram",
+                "status": "published",
+                "attempt_count": 1,
+                "message_id": 12,
+                "failure_code": None,
+                "failure_reason": None,
+                "sending_started_at": NOW,
+                "confirmed_at": NOW,
+                "created_at": NOW,
+                "updated_at": NOW,
+                "attempts": [
+                    {
+                        "attempt_no": 1,
+                        "outcome": "published",
+                        "code": None,
+                        "reason": None,
+                        "message_id": 12,
+                        "started_at": NOW,
+                        "finished_at": NOW,
+                    }
+                ],
+            }
+        ]
 
-    def manual_search(self, project_id: int):
-        return self._accepted("manual_search", project_id)
-
-    def retry_analysis(self, project_id: int, attempt_id: int):
-        return self._accepted("retry_analysis", project_id, attempt_id)
-
-    def return_to_analysis(self, project_id: int, package_id: int):
-        return self._accepted("return_to_analysis", project_id, package_id)
-
-    def regenerate_post(self, project_id: int, package_id: int):
-        return self._accepted("regenerate_post", project_id, package_id)
-
-    def retry_delivery(self, project_id: int, delivery_id: int):
-        return self._accepted("retry_delivery", project_id, delivery_id)
-
-    def run_once(self, project_id: int):
-        if self.run_once_busy:
-            raise RuntimeError("operation_busy")
-        self.calls.append(("run_once", (project_id,)))
-        return {"status": "accepted"}
-
-    def settings(self, project_id: int):
-        return {
-            "project": {"id": project_id, "name": "Редакция"},
-            "channels": [
-                {
-                    "id": 2,
-                    "provider": "telegram",
-                    "name": "Основной",
-                    "configuration": {"chat_id": "-1001"},
-                    "secretConfigured": True,
-                }
-            ],
-        }
-
-    def update_settings(self, project_id: int, section: str, payload: dict[str, object]):
-        self.calls.append(("update_settings", (project_id, section, payload)))
-        return {"id": project_id, "name": payload.get("name", "Редакция")}
-
-    def resources(self, project_id: int, resource: str):
-        return {"projectId": project_id, "resource": resource, "items": []}
-
-    def create_resource(self, project_id: int, resource: str, payload: dict[str, object]):
-        self.calls.append(("create_resource", (project_id, resource, payload)))
-        return {"id": 10, **payload}
-
-    def update_resource(self, project_id: int, resource: str, resource_id: int, payload: dict[str, object]):
-        self.calls.append(("update_resource", (project_id, resource, resource_id, payload)))
-        return {"id": resource_id, **payload}
-
-    def delete_resource(self, project_id: int, resource: str, resource_id: int):
-        self.calls.append(("delete_resource", (project_id, resource, resource_id)))
-
-    def check_channel(self, project_id: int, channel_id: int):
-        self.calls.append(("check_channel", (project_id, channel_id)))
-        return {"id": channel_id, "connectionStatus": "ok"}
-
-    def remove_channel_secret(self, project_id: int, channel_id: int):
-        self.calls.append(("remove_channel_secret", (project_id, channel_id)))
-        return {"id": channel_id, "secretConfigured": False}
-
-    def package_media(self, project_id: int, package_id: int):
-        self.calls.append(("package_media", (project_id, package_id)))
-        return b"image", "image/jpeg"
+    def retry_delivery(self, project_id, delivery_id):
+        self._record("retry_delivery", project_id, delivery_id)
+        return {"operation_id": 1841, "status": "running"}
 
 
 class ApiClient:
-    def __init__(self, app) -> None:
-        self._app = app
-        self._cookies = httpx.Cookies()
-        self._csrf_token: str | None = None
+    """Клиент вошедшего пользователя: сессионная cookie, CSRF и Origin."""
 
-    def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+    def __init__(self, app, *, session: str | None = SESSION) -> None:
+        self._app = app
+        self._session = session
+
+    def request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        cookies = {} if self._session is None else {SESSION_COOKIE: self._session}
+        if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+            headers.setdefault("Origin", "http://testserver")
+            if self._session is not None:
+                headers.setdefault(
+                    CSRF_HEADER,
+                    csrf_token(self._app.state.csrf_secret, self._session),
+                )
+
         async def send() -> httpx.Response:
             transport = httpx.ASGITransport(app=self._app)
             async with httpx.AsyncClient(
-                transport=transport,
-                base_url="http://testserver",
-                cookies=self._cookies,
+                transport=transport, base_url="http://testserver", cookies=cookies
             ) as client:
-                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
-                    if self._csrf_token is None:
-                        bootstrap = await client.get("/api/v1/bootstrap")
-                        self._csrf_token = bootstrap.json()["csrfToken"]
-                    headers = dict(kwargs.pop("headers", {}) or {})
-                    headers.setdefault("Origin", "http://testserver")
-                    headers.setdefault("X-Postify-CSRF", self._csrf_token)
-                    kwargs["headers"] = headers
-                response = await client.request(method, path, **kwargs)
-                self._cookies.update(client.cookies)
-                if path == "/api/v1/bootstrap" and response.is_success:
-                    self._csrf_token = response.json()["csrfToken"]
-                return response
+                return await client.request(method, path, headers=headers, **kwargs)
 
         return asyncio.run(send())
 
-    def get(self, path: str, **kwargs: object) -> httpx.Response:
+    def get(self, path: str, **kwargs) -> httpx.Response:
         return self.request("GET", path, **kwargs)
 
-    def post(self, path: str, **kwargs: object) -> httpx.Response:
+    def post(self, path: str, **kwargs) -> httpx.Response:
         return self.request("POST", path, **kwargs)
 
-    def put(self, path: str, **kwargs: object) -> httpx.Response:
+    def put(self, path: str, **kwargs) -> httpx.Response:
         return self.request("PUT", path, **kwargs)
 
-    def delete(self, path: str, **kwargs: object) -> httpx.Response:
+    def patch(self, path: str, **kwargs) -> httpx.Response:
+        return self.request("PATCH", path, **kwargs)
+
+    def delete(self, path: str, **kwargs) -> httpx.Response:
         return self.request("DELETE", path, **kwargs)
 
 
-def client_for(stub: ApiStub) -> ApiClient:
+def app_for(stub: ApiStub, *, auth: AuthStub | None = None):
+    """Приложение с подставленным сервисом входа вместо настоящей базы."""
     from postify.web.app import create_app
     from postify.web.dependencies import WebContainer
 
-    return ApiClient(create_app(WebContainer(api=stub)))
+    return create_app(WebContainer(api=stub), auth=auth or AuthStub())
 
 
-def test_bootstrap_returns_active_project_and_registered_providers() -> None:
-    # Break caught: bootstrap does not expose the active project through the API boundary.
-    response = client_for(ApiStub()).get("/api/v1/bootstrap")
-
-    assert response.status_code == 200
-    assert response.json()["activeProject"]["id"] == 1
-    assert response.json()["providers"]["channels"] == [
-        {"code": "telegram", "label": "Telegram", "fields": []}
-    ]
+def client_for(stub: ApiStub) -> ApiClient:
+    return ApiClient(app_for(stub))
 
 
-def test_bootstrap_response_schema_keeps_descriptor_and_drops_unknown_values() -> None:
-    # Поломка final review: recursive key heuristic пропускает value
-    # внутри безопасно названного credential descriptor.
-    class LeakyCatalog(ApiStub):
-        def bootstrap(self):
-            return {
-                "activeProject": {
-                    "id": 1,
-                    "name": "Редакция",
-                    "encrypted_secret": "project-leak",
-                },
-                "providers": {
-                    "sources": [],
-                    "channels": [
-                        {
-                            "code": "telegram",
-                            "label": "Telegram",
-                            "fields": [],
-                            "credential": {
-                                "name": "token",
-                                "label": "Токен бота",
-                                "input_type": "password",
-                                "value": "descriptor-leak",
-                            },
-                            "token": "provider-leak",
-                        }
-                    ],
-                },
-            }
+def test_projects_collection_lists_and_creates() -> None:
+    stub = ApiStub()
+    client = client_for(stub)
 
-    response = client_for(LeakyCatalog()).get("/api/v1/bootstrap")
+    listed = client.get("/api/projects")
+    created = client.post(
+        "/api/projects", json={"name": "Агротех", "timezone": "Europe/Moscow"}
+    )
 
-    assert response.status_code == 200
-    assert response.json()["providers"]["channels"] == [
+    assert listed.status_code == 200
+    assert listed.json() == [
         {
-            "code": "telegram",
-            "label": "Telegram",
-            "fields": [],
-            "credential": {
-                "name": "token",
-                "label": "Токен бота",
-                "input_type": "password",
-            },
+            "id": 1,
+            "name": "Агротех",
+            "channel_title": "@agrotech",
+            "publication_mode": "review",
+            "counts": {"needs_review": 1},
         }
     ]
-    assert "leak" not in response.text
+    assert created.status_code == 201
+    assert created.json()["timezone"] == "Europe/Moscow"
+    assert ("list_projects", (OWNER.id,)) in stub.calls
+    assert (
+        "create_project",
+        ({"name": "Агротех", "timezone": "Europe/Moscow"}, OWNER.id),
+    ) in stub.calls
 
 
-def test_route_and_explicit_secret_removal_have_strict_commands() -> None:
-    stub = ApiStub()
-    client = client_for(stub)
-    route = client.put(
-        "/api/v1/projects/1/routes/10",
-        json={
-            "format_id": 1,
-            "channel_id": 2,
-            "enabled": True,
-        },
-    )
-    removed = client.post("/api/v1/projects/1/channels/2/secret/remove")
-    invalid = client.put(
-        "/api/v1/projects/1/routes/10",
-        json={
-            "format_id": 1,
-            "channel_id": 2,
-            "enabled": True,
-                "schedule": {"autopublish": True, "slots": ["09:00", "99:00"]},
-        },
-    )
-
-    assert route.status_code == 200
-    assert removed.status_code == 200
-    assert invalid.status_code == 422
-    assert stub.calls == [
-        (
-            "update_resource",
-            (
-                1,
-                "routes",
-                10,
-                {
-                    "format_id": 1,
-                    "channel_id": 2,
-                    "enabled": True,
-                },
-            ),
-        ),
-        ("remove_channel_secret", (1, 2)),
-    ]
-
-
-def test_optional_route_schedule_is_omitted_and_invalid_source_cron_is_rejected() -> None:
-    # Поломка review: schedule=None перезатирает NOT NULL default; bad cron тихо never-due.
+def test_project_read_update_delete() -> None:
     stub = ApiStub()
     client = client_for(stub)
 
-    route = client.post(
-        "/api/v1/projects/1/routes",
-        json={"format_id": 1, "channel_id": 2, "enabled": True},
-    )
-    invalid_source = client.post(
-        "/api/v1/projects/1/sources",
-        json={
-            "provider": "hn_algolia",
-            "name": "Broken cron",
-            "enabled": True,
-            "configuration": {},
-            "schedule": "whenever convenient",
-        },
-    )
+    read = client.get("/api/projects/3")
+    updated = client.put("/api/projects/3", json={"tone": "Дружелюбный"})
+    deleted = client.delete("/api/projects/3")
 
-    assert route.status_code == 201
-    assert invalid_source.status_code == 422
-    assert stub.calls == [
-        (
-            "create_resource",
-            (
-                1,
-                "routes",
-                {"format_id": 1, "channel_id": 2, "enabled": True},
-            ),
-        )
+    assert read.status_code == 200
+    assert read.json()["id"] == 3
+    assert updated.status_code == 200
+    # Частичная правка не должна дописывать в действие None-поля.
+    assert ("update_project", (3, {"tone": "Дружелюбный"})) in stub.calls
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+
+
+def test_channel_accepts_token_and_never_returns_it() -> None:
+    stub = ApiStub()
+    client = client_for(stub)
+
+    saved = client.put(
+        "/api/projects/1/channel",
+        json={"bot_token": "secret-token", "chat_id": "@agrotech"},
+    )
+    checked = client.post("/api/projects/1/channel/check")
+    removed = client.delete("/api/projects/1/channel")
+
+    assert saved.status_code == 200
+    assert saved.json() == {
+        "configured": True,
+        "chat_id": "@agrotech",
+        "status": "configured",
+        "checked_at": None,
+    }
+    assert "secret-token" not in saved.text
+    assert ("set_channel", (1, "secret-token", "@agrotech")) in stub.calls
+    assert checked.status_code == 200
+    assert checked.json()["status"] == "ok"
+    assert removed.status_code == 204
+
+
+def test_rubrics_crud() -> None:
+    stub = ApiStub()
+    client = client_for(stub)
+
+    listed = client.get("/api/projects/1/rubrics")
+    created = client.post(
+        "/api/projects/1/rubrics", json={"name": "Кейс", "instructions": "Как есть"}
+    )
+    updated = client.put("/api/projects/1/rubrics/5", json={"enabled": False})
+    deleted = client.delete("/api/projects/1/rubrics/5")
+
+    assert listed.json() == [
+        {"id": 5, "name": "Кейс", "instructions": "Как есть", "enabled": True}
     ]
+    assert created.status_code == 201
+    assert (
+        "create_rubric",
+        (1, {"name": "Кейс", "instructions": "Как есть", "enabled": True}),
+    ) in stub.calls
+    assert updated.status_code == 200
+    assert ("update_rubric", (1, 5, {"enabled": False})) in stub.calls
+    assert deleted.status_code == 204
 
 
-def test_selection_policy_version_is_not_a_client_owned_setting() -> None:
-    # Поломка review: client может подменить audit policy version.
-    response = client_for(ApiStub()).put(
-        "/api/v1/projects/1/settings/configuration",
-        json={"selection_policy_version": "user-controlled-v999"},
+def test_posts_reading_and_editorial_actions() -> None:
+    stub = ApiStub()
+    client = client_for(stub)
+
+    listed = client.get("/api/projects/1/posts?status=needs_review&limit=10")
+    read = client.get("/api/projects/1/posts/77")
+    edited = client.patch(
+        "/api/projects/1/posts/77",
+        json={"post_text": "Новый текст", "media_asset_id": 5},
+    )
+    approved = client.post("/api/projects/1/posts/77/approve")
+    rejected = client.post("/api/projects/1/posts/77/reject")
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == 77
+    assert ("posts", (1, "needs_review", 10, 0)) in stub.calls
+    assert read.json()["post_text"] == "Текст поста"
+    assert read.json()["media"]["url"] == "/api/projects/1/media/5/file"
+    assert edited.status_code == 200
+    edit_call = next(call for name, call in stub.calls if name == "update_post")
+    assert edit_call[:3] == (1, 77, "Новый текст")
+    assert edit_call[3] == 5
+    assert approved.json()["status"] == "approved"
+    assert rejected.json()["status"] == "rejected"
+
+
+def test_patch_post_requires_at_least_one_field() -> None:
+    response = client_for(ApiStub()).patch("/api/projects/1/posts/77", json={})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_patch_post_rejects_unknown_schedule_field() -> None:
+    response = client_for(ApiStub()).patch(
+        "/api/projects/1/posts/77", json={"scheduled_at": "2026-10-09T18:00:00"}
     )
 
     assert response.status_code == 422
+    assert response.json()["error"]["field"] == "scheduled_at"
 
 
-def test_source_schedule_section_is_one_strict_atomic_command() -> None:
-    stub = ApiStub()
-    client = client_for(stub)
-    payload = {
-        "sources": [{"id": 1, "schedule": "0 8 * * *"}],
-    }
-
-    updated = client.put("/api/v1/projects/1/settings/schedule", json=payload)
-    invalid = client.put(
-        "/api/v1/projects/1/settings/schedule",
-        json={
-            "sources": [],
-            "routes": [{"id": 10, "autopublish": True, "slots": ["09:00", "09:00", "19:00"]}],
-        },
-    )
-
-    assert updated.status_code == 200
-    assert invalid.status_code == 422
-    assert stub.calls == [("update_settings", (1, "schedule", payload))]
-
-
-def test_settings_never_serializes_channel_secret_and_forbids_unknown_request_fields() -> None:
-    # Break caught: a persistence secret reaches a GET payload or Pydantic silently accepts typoed fields.
-    client = client_for(ApiStub())
-
-    settings = client.get("/api/v1/projects/1/settings")
-    invalid = client.post(
-        "/api/v1/projects/1/packages/7/reject",
-        json={"unexpected": True},
-    )
-
-    assert settings.status_code == 200
-    assert "token" not in json.dumps(settings.json()).casefold()
-    assert settings.json()["channels"][0]["secretConfigured"] is True
-    assert invalid.status_code == 422
-
-
-def test_reject_accepts_no_reason_and_rejects_reason_payloads() -> None:
-    # Break caught: a package rejection records untrusted feedback or requires a second confirmation step.
-    stub = ApiStub()
-    client = client_for(stub)
-
-    with_reason = client.post("/api/v1/projects/1/packages/7/reject", json={"reason": "Не подходит"})
-    valid = client.post("/api/v1/projects/1/packages/7/reject")
-
-    assert with_reason.status_code == 422
-    assert valid.status_code == 200
-    assert stub.calls == [("reject", (1, 7))]
-
-
-def test_operations_return_accepted_and_map_duplicate_run_to_conflict() -> None:
-    # Break caught: synchronous run-once blocks the request or allows a second job of the same kind.
-    stub = ApiStub()
-    client = client_for(stub)
-
-    accepted = client.post("/api/v1/projects/1/operations/run-once")
-    stub.run_once_busy = True
-    conflict = client.post("/api/v1/projects/1/operations/run-once")
-
-    assert accepted.status_code == 202
-    assert conflict.status_code == 409
-    assert conflict.json()["code"] == "operation_busy"
-
-
-def test_operation_polling_is_project_scoped() -> None:
-    stub = ApiStub()
-    response = client_for(stub).get("/api/v1/projects/1/operations/17")
+def test_post_media_returns_file_bytes() -> None:
+    response = client_for(ApiStub()).get("/api/projects/1/posts/77/media")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "run_id": 17,
-        "kind": "manual_search",
-        "mode": "manual",
-        "actor": "ui",
-        "status": "succeeded",
-        "outcome": "completed",
-        "failure_code": None,
-        "codex_model": "gpt-5.3-codex",
-        "codex_reasoning_effort": "high",
-        "materials_taken": 3,
-        "packages_created": 3,
-        "started_at": "2026-08-12T09:00:00Z",
-        "finished_at": "2026-08-12T09:00:00Z",
-    }
-    assert stub.calls == [("operation", (1, 17))]
+    assert response.content == b"image-bytes"
+    assert response.headers["content-type"] == "image/jpeg"
 
 
-def test_retained_manual_commands_are_accepted_server_owned_empty_body_mutations() -> None:
+def test_operations_publications_and_retry() -> None:
     stub = ApiStub()
     client = client_for(stub)
-    paths = (
-        "/api/v1/projects/1/operations/search",
-        "/api/v1/projects/1/attempts/8/retry-analysis",
-        "/api/v1/projects/1/packages/7/return-to-analysis",
-        "/api/v1/projects/1/packages/7/regenerate",
-        "/api/v1/projects/1/deliveries/6/retry",
+
+    operations = client.get("/api/projects/1/operations?limit=10")
+    operation = client.get("/api/projects/1/operations/1841")
+    publications = client.get("/api/projects/1/publications")
+    retried = client.post("/api/projects/1/publications/9/retry")
+
+    assert operations.status_code == 200
+    assert operation.json()["operation_id"] == 1841
+    assert operation.json()["purpose"] == "publish_once"
+    assert publications.json()[0]["delivery_id"] == 9
+    assert retried.status_code == 202
+    assert retried.json() == {"operation_id": 1841, "status": "running"}
+    assert ("retry_delivery", (1, 9)) in stub.calls
+
+
+def test_unknown_body_field_is_rejected_with_field_name() -> None:
+    response = client_for(ApiStub()).post(
+        "/api/projects", json={"name": "Агротех", "timezone": "UTC", "owner": 2}
     )
 
-    accepted = [client.post(path) for path in paths]
-    hostile = client.post(paths[1], json={"bypass_quotas": True, "mode": "manual"})
-
-    assert all(response.status_code == 202 for response in accepted)
-    assert all(response.json()["operationRunId"] == 17 for response in accepted)
-    assert hostile.status_code == 422
-    assert [name for name, _ in stub.calls] == [
-        "manual_search",
-        "retry_analysis",
-        "return_to_analysis",
-        "regenerate_post",
-        "retry_delivery",
-    ]
+    assert response.status_code == 422
+    body = response.json()["error"]
+    assert body["code"] == "validation_error"
+    assert body["field"] == "owner"
+    assert body["message"]
 
 
-def test_invalid_review_transition_is_a_conflict_not_validation_error() -> None:
-    # Break caught: a repeated review action gets reported as a malformed request instead of a state conflict.
-    from postify.domain.content.models import InvalidContentTransition
-
+def test_mutation_requires_origin_and_csrf_header() -> None:
     stub = ApiStub()
-    client = client_for(stub)
+    app = app_for(stub)
+    без_csrf = ApiClient(app, session=None)
 
-    def invalid(project_id: int, package_id: int):
-        raise InvalidContentTransition("state details must not escape")
-
-    stub.approve = invalid
-    response = client.post("/api/v1/projects/1/packages/7/approve")
-
-    assert response.status_code == 409
-    assert response.json()["code"] == "invalid_transition"
-    assert "details" not in response.text
-
-
-def test_expired_publication_plan_has_an_actionable_error_code() -> None:
-    from postify.domain.content.models import PublicationPlanExpired
-
-    stub = ApiStub()
-    client = client_for(stub)
-
-    def expired(project_id: int, package_id: int):
-        raise PublicationPlanExpired("internal details")
-
-    stub.approve = expired
-    response = client.post("/api/v1/projects/1/packages/7/approve")
-
-    assert response.status_code == 409
-    assert response.json()["code"] == "publication_plan_expired"
-    assert "internal details" not in response.text
-
-
-def test_all_project_commands_delegate_to_the_application_boundary() -> None:
-    # Break caught: route handlers grow their own persistence/domain work instead of dispatching an application action.
-    stub = ApiStub()
-    client = client_for(stub)
-
-    assert client.post("/api/v1/projects/1/packages/7/approve").status_code == 200
-    assert client.put(
-        "/api/v1/projects/1/settings/main",
-        json={"name": "Новая редакция", "topic": "AI", "language": "ru", "audience": "Команды", "timezone": "Europe/Moscow"},
-    ).status_code == 200
-    assert client.post(
-        "/api/v1/projects/1/channels",
-        json={"provider": "telegram", "name": "Новый", "enabled": True, "configuration": {"chat_id": "-1002"}, "token": "secret"},
-    ).status_code == 201
-    assert client.post("/api/v1/projects/1/channels/10/check").status_code == 200
-    assert client.delete("/api/v1/projects/1/routes/10").status_code == 204
-
-    assert [call[0] for call in stub.calls] == [
-        "approve", "update_settings", "create_resource", "check_channel", "delete_resource"
-    ]
-
-
-def test_mutations_require_same_origin_session_capability_and_trusted_host() -> None:
-    # Поломка review: hostile form/cross-origin page может approve/publish/remove secret.
-    from postify.web.app import create_app
-    from postify.web.dependencies import WebContainer
-
-    async def exercise():
-        app = create_app(WebContainer(api=ApiStub()))
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
-            bootstrap = await client.get("/api/v1/bootstrap")
-            token = bootstrap.json()["csrfToken"]
-            missing = await client.post(
-                "/api/v1/projects/1/packages/7/approve",
-                headers={"Origin": "http://testserver"},
-            )
-            foreign = await client.post(
-                "/api/v1/projects/1/packages/7/approve",
-                headers={
-                    "Origin": "https://attacker.example",
-                    "X-Postify-CSRF": token,
-                },
-            )
-            valid = await client.post(
-                "/api/v1/projects/1/packages/7/approve",
-                headers={
-                    "Origin": "http://testserver",
-                    "X-Postify-CSRF": token,
-                },
-            )
-            hostile_host = await client.get(
-                "/api/v1/bootstrap", headers={"Host": "attacker.example"}
-            )
-        return missing, foreign, valid, hostile_host
-
-    missing, foreign, valid, hostile_host = asyncio.run(exercise())
-
-    assert (missing.status_code, missing.json()["code"]) == (403, "csrf_required")
-    assert (foreign.status_code, foreign.json()["code"]) == (403, "origin_rejected")
-    assert valid.status_code == 200
-    assert (hostile_host.status_code, hostile_host.json()["code"]) == (
-        400,
-        "untrusted_host",
+    без_origin = ApiClient(app).post(
+        "/api/projects/1/posts/77/approve", headers={"Origin": "http://evil.test"}
     )
+    без_токена = без_csrf.post("/api/projects/1/posts/77/approve")
+
+    assert без_origin.status_code == 400
+    assert без_origin.json()["error"]["code"] == "origin_rejected"
+    assert без_токена.status_code == 400
+    assert без_токена.json()["error"]["code"] == "csrf_required"
+    assert stub.calls == []
 
 
-def test_unexpected_error_is_safe_service_unavailable_response(monkeypatch) -> None:
-    # Break caught: database/exception internals are echoed to an API client.
+@pytest.mark.parametrize(
+    ("error", "status_code", "code"),
+    (
+        (LookupError(77), 404, "not_found"),
+        (RuntimeError("operation_busy"), 409, "operation_busy"),
+        (ConflictError("delivery_not_retryable"), 409, "delivery_not_retryable"),
+        (ValueError("Назначьте время в будущем"), 422, "validation_error"),
+        (RuntimeError("boom"), 500, "internal_error"),
+    ),
+)
+def test_errors_use_the_contract_envelope(
+    error: BaseException, status_code: int, code: str
+) -> None:
     stub = ApiStub()
-    client = client_for(stub)
+    stub.error = error
 
-    def broken(project_id: int):
-        raise OSError("postgresql://user:very-secret@/private/path")
+    response = client_for(stub).get("/api/projects/1/posts/77")
 
-    monkeypatch.setattr(stub, "materials", broken)
-    response = client.get("/api/v1/projects/1/materials")
+    assert response.status_code == status_code
+    body = response.json()
+    assert set(body) == {"error"}
+    assert body["error"]["code"] == code
+    assert body["error"]["message"]
+    assert body["error"]["request_id"]
+    # Тело исключения не должно утекать в ответ вместо человеческого текста.
+    assert "Traceback" not in body["error"]["message"]
 
-    assert response.status_code == 503
-    assert response.json()["code"] == "service_unavailable"
-    assert response.json()["requestId"]
-    assert "secret" not in response.text
-    assert "private" not in response.text
 
-
-def test_media_is_loaded_only_by_owned_package_id_without_url_proxying() -> None:
-    # Break caught: a media endpoint accepts external URLs or bypasses project ownership lookup.
+def test_domain_message_reaches_the_user() -> None:
     stub = ApiStub()
-    client = client_for(stub)
+    stub.error = ValueError("Назначьте время в будущем")
 
-    response = client.get("/api/v1/projects/1/media/packages/7")
+    response = client_for(stub).get("/api/projects/1/posts/77")
 
-    assert response.status_code == 200
-    assert response.content == b"image"
-    assert stub.calls == [("package_media", (1, 7))]
-
-
-def test_every_missing_resource_uses_stable_not_found_error_contract() -> None:
-    # Break caught: repository and unmatched-route not-found paths return a framework payload or 503.
-    from sqlalchemy.exc import NoResultFound
-
-    stub = ApiStub()
-    client = client_for(stub)
-
-    def missing(project_id: int, package_id: int):
-        raise NoResultFound("internal package lookup")
-
-    stub.approve = missing
-    missing_package = client.post("/api/v1/projects/1/packages/999/approve")
-    missing_route = client.get("/api/v1/projects/1/unknown-resource")
-
-    for response in (missing_package, missing_route):
-        assert response.status_code == 404
-        assert response.json()["code"] == "not_found"
-        assert response.json()["requestId"]
-        assert "internal" not in response.text
+    assert response.json()["error"]["message"] == "Назначьте время в будущем"

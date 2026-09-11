@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import timedelta
 
 from sqlalchemy import select, text
@@ -8,12 +7,8 @@ from sqlalchemy import select, text
 from postify.application.scheduling.project_scheduler import (
     ProjectSchedule,
     ScheduledCommand,
-    SourceSchedule,
 )
-from postify.infrastructure.database.models import (
-    ContentProjectModel,
-    SourceConnectionModel,
-)
+from postify.infrastructure.database.models import ContentProjectModel
 
 _PRE_DELIVERY_RETRY_DELAY = timedelta(minutes=1)
 
@@ -42,23 +37,8 @@ class SqlAlchemyScheduleRepository:
                     ContentProjectModel.id
                 )
             ).all()
-            source_rows = session.execute(
-                select(
-                    SourceConnectionModel.project_id,
-                    SourceConnectionModel.schedule,
-                )
-                .where(SourceConnectionModel.enabled.is_(True))
-                .order_by(SourceConnectionModel.project_id, SourceConnectionModel.id)
-            ).all()
-        sources = defaultdict(list)
-        for project_id, cron in source_rows:
-            sources[project_id].append(SourceSchedule(enabled=True, cron=cron))
         return tuple(
-            ProjectSchedule(
-                project_id=project_id,
-                timezone=timezone,
-                sources=tuple(sources[project_id]),
-            )
+            ProjectSchedule(project_id=project_id, timezone=timezone)
             for project_id, timezone in projects
         )
 
@@ -78,21 +58,46 @@ class SqlAlchemyScheduleRepository:
         with self._session_factory() as session:
             self._set_timeouts(session)
             rows = session.execute(text("""
-                SELECT p.id,p.route_id,p.scheduled_at FROM content_packages p
-                JOIN publication_routes r ON r.id=p.route_id AND r.project_id=p.project_id
-                JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id
+                SELECT p.id,s.publish_at FROM posts p
+                JOIN content_plan_slots s ON s.project_id=p.project_id
+                                         AND s.post_id=p.id
+                JOIN channel_connections c ON c.project_id=p.project_id
                 WHERE p.project_id=:project AND p.status='approved'
-                  AND p.scheduled_at<=:now AND r.enabled AND c.enabled
+                  AND s.status<>'skipped' AND s.publish_at<=:now AND c.enabled
                     AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.project_id=p.project_id
-                    AND d.package_id=p.id AND d.status IN ('sending','published','uncertain','failed'))
-                ORDER BY p.scheduled_at,p.id
+                    AND d.post_id=p.id AND d.status IN ('sending','published','uncertain','failed'))
+                ORDER BY s.publish_at,p.id
             """), {"project": project_id, "now": now}).all()
-            return tuple(ScheduledCommand(project_id, "publish_once", row.scheduled_at,
-                route_id=row.route_id, package_id=row.id) for row in rows)
+            return tuple(
+                ScheduledCommand(project_id, "publish_once", row.publish_at, post_id=row.id)
+                for row in rows
+            )
+
+    def due_generations(self, *, project_id, now) -> tuple[ScheduledCommand, ...]:
+        """Слоты плана, которым пора генерировать.
+
+        Выборка живёт в репозитории плана: условие «пора генерировать» одно на
+        весь проект, и раздваивать его между двумя SQL нельзя.
+        """
+        from postify.infrastructure.repositories.sqlalchemy_plan import (
+            SqlAlchemyPlanRepository,
+        )
+
+        slots = SqlAlchemyPlanRepository(
+            self._session_factory, project_id
+        ).due_generations(now=now)
+        return tuple(
+            ScheduledCommand(
+                project_id, "generate_post", slot.generate_at, slot_id=slot.id
+            )
+            for slot in slots
+        )
 
     def accept(self, command: ScheduledCommand) -> ScheduledCommand | None:
         """Atomically own a route slot, operation run, and recoverable queued job."""
-        if command.kind == "publish_once" and command.package_id is None:
+        if command.kind == "publish_once" and command.post_id is None:
+            return None
+        if command.kind == "generate_post" and command.slot_id is None:
             return None
         with self._session_factory() as session:
             try:
@@ -105,8 +110,8 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO schedule_slot_claims
-                            (project_id, kind, scheduled_for, route_id, package_id)
-                        VALUES (:project_id, :kind, :scheduled_for, :route_id, :package_id)
+                            (project_id, kind, scheduled_for, post_id, slot_id)
+                        VALUES (:project_id, :kind, :scheduled_for, :post_id, :slot_id)
                         ON CONFLICT DO NOTHING
                         RETURNING true
                         """
@@ -115,8 +120,8 @@ class SqlAlchemyScheduleRepository:
                         "project_id": command.project_id,
                         "kind": command.kind,
                         "scheduled_for": command.scheduled_for,
-                        "route_id": command.route_id,
-                        "package_id": command.package_id,
+                        "post_id": command.post_id,
+                        "slot_id": command.slot_id,
                     },
                 ).scalar_one_or_none()
                 if claimed is not True:
@@ -141,18 +146,18 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO scheduled_jobs
-                            (project_id,kind,route_id,package_id,scheduled_for,operation_run_id,
-                             status,attempt_count,created_at,updated_at)
-                        VALUES (:project_id,:kind,:route_id,:package_id,:scheduled_for,:run_id,
-                                'queued',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                            (project_id,kind,post_id,slot_id,scheduled_for,
+                             operation_run_id,status,attempt_count,created_at,updated_at)
+                        VALUES (:project_id,:kind,:post_id,:slot_id,:scheduled_for,
+                                :run_id,'queued',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
                         RETURNING id
                         """
                     ),
                     {
                         "project_id": command.project_id,
                         "kind": command.kind,
-                        "route_id": command.route_id,
-                        "package_id": command.package_id,
+                        "post_id": command.post_id,
+                        "slot_id": command.slot_id,
                         "scheduled_for": command.scheduled_for,
                         "run_id": run_id,
                     },
@@ -162,10 +167,10 @@ class SqlAlchemyScheduleRepository:
                     command.project_id,
                     command.kind,
                     command.scheduled_for,
-                    route_id=command.route_id,
+                    post_id=command.post_id,
+                    slot_id=command.slot_id,
                     operation_run_id=run_id,
                     job_id=job_id,
-                    package_id=command.package_id,
                 )
             except BaseException:
                 session.rollback()
@@ -190,18 +195,19 @@ class SqlAlchemyScheduleRepository:
                 rows = session.execute(
                     text(
                         f"""
-                        SELECT id,project_id,kind,route_id,package_id,scheduled_for,operation_run_id,status
+                        SELECT id,project_id,kind,post_id,slot_id,scheduled_for,
+                               operation_run_id,status
                         FROM scheduled_jobs
                         WHERE true {job_filter}
                           AND (status='queued' OR
                                (status='leased' AND lease_expires_at<=:now) OR
                                (status='failed' AND kind='publish_once'
-                                AND package_id IS NOT NULL
+                                AND post_id IS NOT NULL
                                 AND updated_at<=:failed_before
                                 AND NOT EXISTS (
                                     SELECT 1 FROM deliveries d
                                     WHERE d.project_id=scheduled_jobs.project_id
-                                      AND d.package_id=scheduled_jobs.package_id
+                                      AND d.post_id=scheduled_jobs.post_id
                                 )))
                         ORDER BY id
                         FOR UPDATE SKIP LOCKED
@@ -215,9 +221,13 @@ class SqlAlchemyScheduleRepository:
                 ).mappings().all()
                 commands = []
                 for row in rows:
-                    if row.kind == "publish_once" and row.package_id is None:
+                    # Задача без цели невыполнима: гасим её вместе с операцией,
+                    # иначе UI будет вечно опрашивать running.
+                    if (row.kind == "publish_once" and row.post_id is None) or (
+                        row.kind == "generate_post" and row.slot_id is None
+                    ):
                         session.execute(text("UPDATE scheduled_jobs SET status='failed',lease_expires_at=NULL,updated_at=:now WHERE id=:id"), {"id": row.id, "now": now})
-                        session.execute(text("UPDATE operation_runs SET status='failed',failure_code='publish_once_failed',finished_at=:now WHERE id=:id AND status='running'"), {"id": row.operation_run_id, "now": now})
+                        session.execute(text("UPDATE operation_runs SET status='failed',failure_code=:code,finished_at=:now WHERE id=:id AND status='running'"), {"id": row.operation_run_id, "code": f"{row.kind}_failed", "now": now})
                         continue
                     operation_run_id = row.operation_run_id
                     if row.status == "failed":
@@ -267,10 +277,10 @@ class SqlAlchemyScheduleRepository:
                             row.project_id,
                             row.kind,
                             row.scheduled_for,
-                            route_id=row.route_id,
+                            post_id=row.post_id,
+                            slot_id=row.slot_id,
                             operation_run_id=operation_run_id,
                             job_id=row.id,
-                            package_id=row.package_id,
                         )
                     )
                 session.commit()

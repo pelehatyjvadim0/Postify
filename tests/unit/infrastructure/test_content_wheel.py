@@ -6,7 +6,7 @@ import subprocess
 from zipfile import ZipFile
 
 
-def test_built_wheel_contains_wave_three_alembic_head(tmp_path: Path) -> None:
+def test_built_wheel_contains_baseline_alembic_head(tmp_path: Path) -> None:
     # Поломка (gate 12/re-review 7): stale build/egg-info скрывает потерянный head.
     project_root = Path(__file__).parents[3]
     isolated_source = tmp_path / "source"
@@ -49,5 +49,5 @@ def test_built_wheel_contains_wave_three_alembic_head(tmp_path: Path) -> None:
 
     assert (
         "postify/infrastructure/database/migrations/versions/"
-        "20260808_03_add_content_packages.py"
+        "20260911_01_baseline.py"
     ) in names

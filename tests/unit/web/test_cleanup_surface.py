@@ -1,56 +1,91 @@
+"""Поверхность API: то, чего в контракте нет, не должно отвечать.
+
+Старый контур импорта материалов снесён вместе с префиксом ``/api/v1``. Тест
+держит границу: возвращённый эндпоинт заметен сразу, а не по чужому багу.
+"""
+
 from __future__ import annotations
 
 import pytest
 
 from tests.unit.web.test_api import ApiStub, client_for
+from tests.unit.web.test_project_isolation import _api_routes
+
+
+# Маршруты T0 из контракта: они обязаны существовать.
+CONTRACT_ROUTES = (
+    ("GET", "/api/projects"),
+    ("POST", "/api/projects"),
+    ("GET", "/api/projects/{project_id}"),
+    ("PUT", "/api/projects/{project_id}"),
+    ("DELETE", "/api/projects/{project_id}"),
+    ("PUT", "/api/projects/{project_id}/channel"),
+    ("POST", "/api/projects/{project_id}/channel/check"),
+    ("DELETE", "/api/projects/{project_id}/channel"),
+    ("GET", "/api/projects/{project_id}/rubrics"),
+    ("POST", "/api/projects/{project_id}/rubrics"),
+    ("PUT", "/api/projects/{project_id}/rubrics/{rubric_id}"),
+    ("DELETE", "/api/projects/{project_id}/rubrics/{rubric_id}"),
+    ("GET", "/api/projects/{project_id}/posts"),
+    ("GET", "/api/projects/{project_id}/posts/{post_id}"),
+    ("PATCH", "/api/projects/{project_id}/posts/{post_id}"),
+    ("POST", "/api/projects/{project_id}/posts/{post_id}/approve"),
+    ("POST", "/api/projects/{project_id}/posts/{post_id}/reject"),
+    ("GET", "/api/projects/{project_id}/posts/{post_id}/media"),
+    ("GET", "/api/projects/{project_id}/operations"),
+    ("GET", "/api/projects/{project_id}/operations/{operation_id}"),
+    ("GET", "/api/projects/{project_id}/publications"),
+    ("POST", "/api/projects/{project_id}/publications/{delivery_id}/retry"),
+)
+
+
+def test_contract_routes_are_served() -> None:
+    from tests.unit.web.test_api import app_for
+
+    served = {
+        (method, route.path)
+        for route in _api_routes(app_for(ApiStub()))
+        for method in route.methods - {"HEAD", "OPTIONS"}
+    }
+
+    assert set(CONTRACT_ROUTES) <= served
 
 
 @pytest.mark.parametrize(
-    ("method", "path", "status_code", "code"),
+    ("method", "path"),
     (
-        ("get", "/api/v1/projects/1/dashboard", 404, "not_found"),
-        ("post", "/api/v1/projects/1/packages/load-more", 405, "http_error"),
-        ("post", "/api/v1/projects/1/packages/7/publish-now", 405, "http_error"),
-        ("post", "/api/v1/projects/1/operations/publish-once", 405, "http_error"),
-        ("post", "/api/v1/projects/1/packages/7/media/replace", 405, "http_error"),
+        # Префикса /api/v1 больше нет.
+        ("get", "/api/v1/bootstrap"),
+        ("get", "/api/v1/projects/1/packages"),
+        # Старый контур импорта материалов.
+        ("get", "/api/bootstrap"),
+        ("get", "/api/projects/1/materials"),
+        ("get", "/api/projects/1/packages"),
+        ("get", "/api/projects/1/queue"),
+        ("get", "/api/projects/1/sources"),
+        ("get", "/api/projects/1/routes"),
+        ("get", "/api/projects/1/channels"),
+        ("get", "/api/projects/1/settings"),
+        ("get", "/api/projects/1/formats"),
     ),
 )
-def test_removed_postify_endpoints_are_unavailable(method: str, path: str, status_code: int, code: str) -> None:
+def test_removed_endpoints_answer_404(method: str, path: str) -> None:
     response = getattr(client_for(ApiStub()), method)(path)
 
-    assert response.status_code == status_code
-    assert response.json()["code"] == code
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
 
 
-def test_workspace_endpoints_keep_their_project_scoped_contracts() -> None:
-    class WorkspaceApi(ApiStub):
-        def materials(self, project_id: int, **filters: object):
-            return {"projectId": project_id, "items": [{"id": 41, "status": "received"}], "filters": filters}
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/api/projects/1/operations/run-once",
+        "/api/projects/1/operations/search",
+    ),
+)
+def test_removed_operations_are_not_callable(path: str) -> None:
+    # Путь совпадает с чтением операции, но POST по нему больше не существует.
+    response = client_for(ApiStub()).post(path)
 
-        def packages(self, project_id: int, **filters: object):
-            return {"projectId": project_id, "items": [{"id": 71, "status": "awaiting_review"}], "filters": filters}
-
-        def queue(self, project_id: int):
-            return {"projectId": project_id, "items": [{"packageId": 71, "scheduledAt": "2026-09-05T10:00:00Z"}]}
-
-        def publications(self, project_id: int, **filters: object):
-            return {"projectId": project_id, "items": [{"packageId": 71, "outcome": "published"}], "filters": filters}
-
-        def operations(self, project_id: int, **filters: object):
-            return {"projectId": project_id, "items": [{"runId": 17, "outcome": "completed"}], "filters": filters}
-
-    client = client_for(WorkspaceApi())
-
-    materials = client.get("/api/v1/projects/1/materials?status=received&limit=7")
-    packages = client.get("/api/v1/projects/1/packages?status=awaiting_review&limit=7")
-    queue = client.get("/api/v1/projects/1/queue")
-    publications = client.get("/api/v1/projects/1/publications?limit=7")
-    operations = client.get("/api/v1/projects/1/operations?limit=7")
-    settings = client.get("/api/v1/projects/1/settings")
-
-    assert materials.json() == {"projectId": 1, "items": [{"id": 41, "status": "received"}], "filters": {"status": "received", "query": None, "limit": 7, "offset": 0}}
-    assert packages.json() == {"projectId": 1, "items": [{"id": 71, "status": "awaiting_review"}], "filters": {"status": "awaiting_review", "limit": 7, "offset": 0}}
-    assert queue.json() == {"projectId": 1, "items": [{"packageId": 71, "scheduledAt": "2026-09-05T10:00:00Z"}]}
-    assert publications.json() == {"projectId": 1, "items": [{"packageId": 71, "outcome": "published"}], "filters": {"limit": 7, "offset": 0}}
-    assert operations.json() == {"projectId": 1, "items": [{"runId": 17, "outcome": "completed"}], "filters": {"limit": 7, "offset": 0}}
-    assert settings.json()["project"] == {"id": 1, "name": "Редакция"}
+    assert response.status_code == 405
+    assert response.json()["error"]["code"] == "method_not_allowed"

@@ -117,21 +117,20 @@ export function SlotDialog({
 
           {topicLocked && (
             <Alert tone="info" title="Промпт заблокирован">
-              По слоту уже сгенерирован пост. Чтобы изменить промпт, сначала перепишите пост или
-              удалите его.
+              По слоту уже сгенерирован пост. Для нового промпта создайте отдельный слот.
             </Alert>
           )}
 
           {error && <Alert tone="error" title="Не сохранено">{error}</Alert>}
 
           <div className="flex items-center gap-2 pt-1">
-            <Button onClick={save} disabled={saving || !date}>
+            <Button onClick={save} disabled={saving || !date || !time}>
               {saving ? 'Сохраняю…' : 'Сохранить'}
             </Button>
             <Button variant="outline" onClick={onClose}>
               Отмена
             </Button>
-            {slot && (
+            {slot && !slot.post && slot.status !== 'generating' && (
               <Button
                 variant="ghost"
                 className="ml-auto text-muted-foreground"

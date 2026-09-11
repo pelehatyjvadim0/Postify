@@ -34,16 +34,18 @@ export function ChecksReport({ report }: { report: ValidationReport }) {
 
 function LayerRow({ layer }: { layer: ValidationLayer }) {
   const detail = summarize(layer)
+  const issues = layer.items.filter((item) => item.passed === false || (item.verdict && item.verdict !== 'supported' && item.verdict !== 'match'))
+  const hasIssues = !layer.passed || issues.length > 0
   return (
     <div
       className={cn(
         'flex items-start gap-2.5 rounded-md border px-3 py-2',
-        layer.passed
-          ? 'border-border'
-          : 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10',
+        hasIssues
+          ? 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10'
+          : 'border-border',
       )}
     >
-      {layer.passed ? (
+      {!hasIssues ? (
         <Check
           className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400"
           strokeWidth={2.5}
@@ -57,13 +59,12 @@ function LayerRow({ layer }: { layer: ValidationLayer }) {
       <div className="min-w-0">
         <p className="text-[13px] font-medium">{LAYER_TITLE[layer.layer]}</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground">{detail}</p>
-        {!layer.passed && (
+        {issues.length > 0 && (
           <ul className="mt-1.5 space-y-1">
-            {layer.items
-              .filter((item) => item.passed === false || (item.verdict && item.verdict !== 'supported' && item.verdict !== 'match'))
+            {issues
               .map((item, index) => (
                 <li key={index} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                  <X className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />
+                  {item.severity === 'warn' ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" /> : <X className="mt-0.5 h-3 w-3 shrink-0 text-red-600 dark:text-red-400" />}
                   <span>
                     {item.claim ? `«${item.claim}» — ` : item.text ? `${item.text} — ` : ''}
                     {item.verdict ? (VERDICT_LABEL[item.verdict] ?? 'не подтверждено') : item.detail}

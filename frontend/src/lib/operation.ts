@@ -37,15 +37,19 @@ export function useOperation(projectId: number | null) {
       } = {},
     ) => {
       if (projectId === null) return null
+      if (controller.current && !controller.current.signal.aborted) return null
+      const activeController = new AbortController()
+      controller.current = activeController
       setRunning(true)
       setLastError(null)
       try {
         const { operation_id } = await start()
+        if (activeController.signal.aborted) return null
         supportLog('operation_started', { project_id: projectId, operation_id })
         await options.onStarted?.()
-        controller.current = new AbortController()
+        if (activeController.signal.aborted) return null
         const operation = await pollOperation(projectId, operation_id, {
-          signal: controller.current.signal,
+          signal: activeController.signal,
         })
         if (aborted.current) return operation
         supportLog('operation_finished', {
@@ -73,6 +77,7 @@ export function useOperation(projectId: number | null) {
         }
         return null
       } finally {
+        if (controller.current === activeController) controller.current = null
         if (!aborted.current) setRunning(false)
       }
     },

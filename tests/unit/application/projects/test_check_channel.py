@@ -2,38 +2,108 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from postify.application.projects.check_channel import CheckChannel
+from postify.domain.projects.models import ChannelConnection
 
 
-NOW = datetime(2026, 8, 12, 10, tzinfo=UTC)
+NOW = datetime(2026, 9, 11, 10, tzinfo=UTC)
 
 
-def test_check_channel_decrypts_configured_secret_and_persists_actual_result() -> None:
-    # Break caught: UI reports a configured channel as checked without calling the provider.
-    events: list[tuple[object, ...]] = []
+def connection(project_id: int = 1) -> ChannelConnection:
+    return ChannelConnection(
+        1, project_id, "telegram", "Telegram", True, {"chat_id": "@agrotech"}, True, "configured"
+    )
 
-    class Repository:
-        def get_resource(self, project_id: int, resource: str, resource_id: int):
-            assert (project_id, resource, resource_id) == (1, "channels", 2)
-            return {"provider": "telegram", "configuration": {"chat_id": "-100"}, "encrypted_secret": "cipher"}
 
-        def set_channel_status(self, project_id: int, channel_id: int, status: str, now):
-            events.append((project_id, channel_id, status, now))
+_CONFIGURED = "configured"
 
-    class Cipher:
-        def decrypt(self, value: str) -> str:
-            assert value == "cipher"
-            return "token"
 
-    class Checker:
-        last_reason = ""
+class Repository:
+    def __init__(self, channel: object = _CONFIGURED) -> None:
+        self._channel = (connection(), "cipher") if channel == _CONFIGURED else channel
+        self.statuses: list[tuple[int, str, datetime]] = []
 
-        def check(self, configuration: dict[str, object], secret: str) -> str:
-            assert configuration == {"chat_id": "-100"}
-            assert secret == "token"
-            return "ok"
+    def get(self, project_id: int):
+        if project_id != 1:
+            raise LookupError(project_id)
+        return object()
 
-    result = CheckChannel(Repository(), Cipher(), Checker(), clock=lambda: NOW).execute(1, 2)
+    def get_channel(self, project_id: int):
+        return self._channel
 
-    assert result == {"id": 2, "connectionStatus": "ok", "reason": ""}
-    assert events == [(1, 2, "ok", NOW)]
+    def set_channel_status(self, project_id: int, status: str, now: datetime) -> None:
+        self.statuses.append((project_id, status, now))
+
+
+class Cipher:
+    def decrypt(self, value: str) -> str:
+        assert value == "cipher"
+        return "123:secret"
+
+
+class Checker:
+    def __init__(self, status: str = "ok", reason: str = "") -> None:
+        self.status = status
+        self.last_reason = reason
+        self.seen: list[tuple[dict[str, object], str]] = []
+
+    def check(self, configuration: dict[str, object], secret: str) -> str:
+        self.seen.append((configuration, secret))
+        return self.status
+
+
+def test_check_decrypts_project_channel_and_persists_observed_status() -> None:
+    # Поломка: UI показывает настроенный канал проверенным, не вызвав провайдера.
+    repository = Repository()
+    checker = Checker()
+
+    result = CheckChannel(repository, Cipher(), checker, clock=lambda: NOW).execute(1)
+
+    assert checker.seen == [({"chat_id": "@agrotech"}, "123:secret")]
+    assert result == {
+        "configured": True,
+        "chat_id": "@agrotech",
+        "status": "ok",
+        "reason": "",
+    }
+    assert repository.statuses == [(1, "ok", NOW)]
+
+
+def test_failed_check_returns_reason_and_stores_failure() -> None:
+    repository = Repository()
+    checker = Checker("failed", "Добавьте бота администратором Telegram-канала.")
+
+    result = CheckChannel(repository, Cipher(), checker, clock=lambda: NOW).execute(1)
+
+    assert result["status"] == "failed"
+    assert result["reason"].startswith("Добавьте бота")
+    assert repository.statuses == [(1, "failed", NOW)]
+
+
+def test_project_without_channel_is_not_checked() -> None:
+    repository = Repository(channel=None)
+
+    with pytest.raises(LookupError):
+        CheckChannel(repository, Cipher(), Checker(), clock=lambda: NOW).execute(1)
+
+    assert repository.statuses == []
+
+
+def test_channel_without_stored_secret_is_not_checked() -> None:
+    repository = Repository(channel=(connection(), None))
+
+    with pytest.raises(RuntimeError, match="secret_storage_unavailable"):
+        CheckChannel(repository, Cipher(), Checker(), clock=lambda: NOW).execute(1)
+
+    assert repository.statuses == []
+
+
+def test_foreign_project_id_is_not_checked() -> None:
+    repository = Repository()
+
+    with pytest.raises(LookupError):
+        CheckChannel(repository, Cipher(), Checker(), clock=lambda: NOW).execute(2)
+
+    assert repository.statuses == []

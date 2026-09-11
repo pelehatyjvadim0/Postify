@@ -37,5 +37,5 @@ def test_clean_wheel_contains_operation_journal_modules(
         "postify/application/observability/record_operation.py",
         "postify/application/ports/observability.py",
         "postify/infrastructure/repositories/sqlalchemy_observability.py",
-        "postify/infrastructure/database/migrations/versions/20260809_05_add_operation_runs.py",
+        "postify/infrastructure/database/migrations/versions/20260911_01_baseline.py",
     } <= names

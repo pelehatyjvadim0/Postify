@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { ExternalLink, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { ExternalLink, ImagePlus, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { ChecksReport } from './ChecksReport'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,7 +11,7 @@ import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { dateTimeLabel } from '@/lib/dates'
 import { SLOT_STATUS } from '@/lib/status'
-import type { Post, Slot } from '@/lib/types'
+import type { MediaAsset, Post, Slot } from '@/lib/types'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 
@@ -45,21 +46,29 @@ export function PostPanel({
   const [editing, setEditing] = React.useState(false)
   const [draft, setDraft] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [choosingMedia, setChoosingMedia] = React.useState(false)
+  const [assets, setAssets] = React.useState<MediaAsset[]>([])
+  const [mediaCursor, setMediaCursor] = React.useState<string | null>(null)
+  const [loadingMedia, setLoadingMedia] = React.useState(false)
   const toast = useToast()
 
   const postId = slot?.post?.id ?? null
 
   React.useEffect(() => {
+    let active = true
     setEditing(false)
+    setChoosingMedia(false)
     setMissing(false)
+    setPost(null)
     if (postId === null) {
-      setPost(null)
+      setLoading(false)
       return
     }
     setLoading(true)
     api
       .post(projectId, postId)
       .then((loaded) => {
+        if (!active) return
         setPost(loaded)
         setDraft(loaded.post_text)
         supportLog('post_loaded', {
@@ -73,17 +82,52 @@ export function PostPanel({
         })
       })
       .catch((error) => {
+        if (!active) return
         // 404 — объекта нет: он удалён либо принадлежит другому пользователю.
         if (error instanceof ApiError && error.isNotFound) setMissing(true)
         else toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пост')
         setPost(null)
       })
-      .finally(() => setLoading(false))
-  }, [projectId, postId, toast, operationRunning])
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [projectId, postId, slot?.status, toast, operationRunning])
 
   if (!slot) return null
 
   const status = SLOT_STATUS[slot.status]
+  const editable = post?.status === 'needs_review' || post?.status === 'approved'
+  const canSkip = ['planned', 'no_topic', 'failed'].includes(slot.status)
+  const canDelete = !slot.post && slot.status !== 'generating'
+
+  async function loadMedia(cursor?: string) {
+    setChoosingMedia(true)
+    setLoadingMedia(true)
+    try {
+      const page = await api.media(projectId, { available: true, limit: 60, cursor })
+      setAssets((current) => cursor ? [...current, ...page.items] : page.items)
+      setMediaCursor(page.next_cursor)
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить изображения')
+    } finally {
+      setLoadingMedia(false)
+    }
+  }
+
+  async function selectMedia(asset: MediaAsset) {
+    if (!post) return
+    setBusy(true)
+    try {
+      const updated = await api.updatePost(projectId, post.id, { media_asset_id: asset.id })
+      setPost(updated)
+      setChoosingMedia(false)
+      toast.ok('Изображение сохранено')
+      onChanged()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Не удалось сохранить изображение')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function act(action: 'approve' | 'reject' | 'save') {
     if (!post) return
@@ -136,10 +180,10 @@ export function PostPanel({
             <p className="px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
               {slot.topic || 'Промпт не заполнен — агент не возьмёт слот в работу.'}
             </p>
-            <div className="flex gap-2 border-t border-border px-3 py-2">
+            <div className="flex flex-wrap gap-2 border-t border-border px-3 py-2">
               <Button size="xs" variant="outline" onClick={() => onEditTopic(slot)}>
                 <Pencil className="h-3 w-3" />
-                {slot.topic ? 'Изменить промпт' : 'Заполнить промпт'}
+                {slot.post ? 'Изменить время' : slot.topic ? 'Изменить промпт' : 'Заполнить промпт'}
               </Button>
               {(slot.status === 'planned' || slot.status === 'no_topic' || slot.status === 'failed') && (
                 <Button
@@ -153,7 +197,7 @@ export function PostPanel({
                 </Button>
               )}
               <div className="ml-auto flex items-center gap-1">
-                {slot.status !== 'skipped' && slot.status !== 'published' && (
+                {canSkip && (
                   <Button
                     size="xs"
                     variant="ghost"
@@ -163,7 +207,7 @@ export function PostPanel({
                     Пропустить
                   </Button>
                 )}
-                <Button
+                {canDelete && <Button
                   size="icon-sm"
                   variant="ghost"
                   className="text-muted-foreground"
@@ -172,7 +216,7 @@ export function PostPanel({
                   onClick={() => onDelete(slot)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                </Button>}
               </div>
             </div>
           </div>
@@ -217,7 +261,7 @@ export function PostPanel({
                         className="text-[13px]"
                       />
                       <div className="flex gap-2">
-                        <Button size="sm" disabled={busy} onClick={() => act('save')}>
+                        <Button size="sm" disabled={busy || !draft.trim() || draft.length > (post.media ? 1024 : 4096)} onClick={() => act('save')}>
                           Сохранить
                         </Button>
                         <Button
@@ -238,17 +282,44 @@ export function PostPanel({
                   {!editing && (
                     <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] tabular-nums text-muted-foreground">
                       <span>{post.char_count} знаков</span>
-                      <button
+                      {editable && <button
                         className="ml-auto inline-flex items-center gap-1 transition-colors hover:text-foreground"
                         onClick={() => setEditing(true)}
+                        disabled={busy || operationRunning}
                       >
                         <Pencil className="h-3 w-3" />
                         Править текст
-                      </button>
+                      </button>}
                     </div>
                   )}
                 </div>
               </div>
+
+              {editable && !editing && (
+                <div className="space-y-3">
+                  <Button variant="outline" size="sm" disabled={busy || operationRunning} onClick={() => choosingMedia ? setChoosingMedia(false) : void loadMedia()}>
+                    <ImagePlus className="h-4 w-4" />
+                    {choosingMedia ? 'Закрыть выбор изображения' : 'Выбрать изображение'}
+                  </Button>
+                  {choosingMedia && (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {assets.map((asset) => (
+                          <button key={asset.id} disabled={busy || loadingMedia} onClick={() => void selectMedia(asset)} className="overflow-hidden rounded-md border border-border text-left disabled:opacity-50" title={asset.caption ?? 'Выбрать изображение'}>
+                            <img src={asset.url} alt={asset.caption ?? ''} className="aspect-[16/10] w-full object-cover" />
+                            <span className="block line-clamp-2 p-2 text-xs">{asset.caption}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {loadingMedia && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {!loadingMedia && assets.length === 0 && <p className="text-xs text-muted-foreground">Нет доступных изображений.</p>}
+                      {mediaCursor && <Button size="sm" variant="outline" disabled={loadingMedia} onClick={() => void loadMedia(mediaCursor)}>Показать ещё</Button>}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <ChecksReport report={post.validation} />
 
               {post.media && (
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -271,20 +342,20 @@ export function PostPanel({
                 </Alert>
               )}
 
-              {!post.published && (
+              {!post.published && post.status !== 'generating' && (
                 <div className="flex items-center gap-2 pt-1">
                   {post.status === 'approved' ? (
-                    <Button className="flex-1" variant="outline" disabled={busy} onClick={() => act('reject')}>
+                    <Button className="flex-1" variant="outline" disabled={busy || editing || operationRunning} onClick={() => act('reject')}>
                       Вернуть на доработку
                     </Button>
-                  ) : (
-                    <Button className="flex-1" disabled={busy} onClick={() => act('approve')}>
+                  ) : post.status === 'needs_review' ? (
+                    <Button className="flex-1" disabled={busy || editing || operationRunning} onClick={() => act('approve')}>
                       Одобрить
                     </Button>
-                  )}
+                  ) : null}
                   <Button
                     variant="outline"
-                    disabled={operationRunning}
+                    disabled={busy || editing || operationRunning}
                     onClick={() => onRegenerate(slot)}
                   >
                     {operationRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

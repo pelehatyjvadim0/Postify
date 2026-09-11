@@ -18,7 +18,7 @@ import type {
   User,
 } from './types'
 
-// Заглушки включаются только явным флагом сборки: npm run dev и build:mock.
+// Заглушки включаются только явно: npm run dev:mock и build:mock.
 export { ApiError }
 
 export const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true'

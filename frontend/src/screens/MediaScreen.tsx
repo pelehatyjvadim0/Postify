@@ -49,6 +49,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   const load = React.useCallback(async () => {
     const id = ++requestId.current
     setLoading(true)
+    setLoadingMore(false)
     try {
       const page = await api.media(project.id, {
         available: availableOnly || undefined,
@@ -94,8 +95,12 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
 
   async function upload(files: FileList | null) {
     if (!files || files.length === 0) return
+    if (files.length > 20) {
+      toast.error('За один раз можно загрузить не больше 20 изображений')
+      return
+    }
     const form = new FormData()
-    for (const file of Array.from(files).slice(0, 20)) form.append('files', file)
+    for (const file of Array.from(files)) form.append('files', file)
     setUploadError(null)
     const result = await operation.run(() => api.uploadMedia(project.id, form), {
       successText: 'Изображения загружены и описаны',
@@ -211,7 +216,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
                   key={asset.id}
                   asset={asset}
                   projectId={project.id}
-                  onChanged={load}
+                  onChanged={async () => { await load(); onChanged() }}
                   operation={operation}
                   onRemoveRequest={setRemoving}
                 />

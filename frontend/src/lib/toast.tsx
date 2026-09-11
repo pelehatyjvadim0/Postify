@@ -18,7 +18,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const push = React.useCallback((tone: Toast['tone'], text: string) => {
     const id = Date.now() + Math.random()
-    setItems((list) => [...list, { id, tone, text }])
+    setItems((list) => [...list.slice(-1), { id, tone, text }])
     setTimeout(() => setItems((list) => list.filter((item) => item.id !== id)), 6000)
   }, [])
 
@@ -30,7 +30,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-[360px] flex-col gap-2">
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2" aria-live="polite">
         {items.map((item) => (
           <div
             key={item.id}

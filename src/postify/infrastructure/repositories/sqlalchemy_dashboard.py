@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import datetime
 from types import MappingProxyType
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import bindparam, text
 
 from postify.application.dashboard.models import (
-    Material,
     Operation,
-    PackageDetail,
-    PackageHistoryEntry,
-    PackageSummary,
+    PostDetail,
+    PostHistoryEntry,
+    PostSummary,
     Publication,
     PublicationAttempt,
-    QueueSlot,
 )
+
+
+# Список постов показывает превью, а не весь текст: полный отдаёт карточка.
+EXCERPT_LIMIT = 200
 
 
 def _bounded(limit: int, offset: int) -> None:
@@ -40,55 +41,53 @@ def _mapping(value: object) -> Mapping[str, object]:
     return _freeze(value if isinstance(value, Mapping) else {})  # type: ignore[return-value]
 
 
-def _media_status(path: str | None, deleted_at: datetime | None) -> tuple[bool, str]:
-    if deleted_at is not None:
-        return False, "deleted"
-    if path:
-        return True, "available"
-    return False, "unavailable"
-
-
 class SqlAlchemyDashboardRepository:
+    """Чтение для UI: посты, журнал операций и публикации.
+
+    Слой тонкий: только выборки. Каждый запрос фильтрует по ``project_id`` —
+    это изоляция данных, чужой проект обязан выглядеть пустым.
+    """
+
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
 
-    def materials(
+    def posts(
         self,
         project_id: int,
+        *,
         status: str | None = None,
-        query: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[Material, ...]:
+    ) -> tuple[PostSummary, ...]:
         _bounded(limit, offset)
-        clauses = ["c.project_id=:project"]
+        clauses = ["p.project_id=:project"]
         params: dict[str, object] = {
             "project": project_id,
             "limit": limit,
             "offset": offset,
+            "excerpt": EXCERPT_LIMIT,
         }
         if status is not None:
-            clauses.append("latest.status=:status")
+            clauses.append("p.status=:status")
             params["status"] = status
-        if query is not None:
-            clauses.append(
-                "(c.source_name ILIKE :query OR c.title ILIKE :query OR c.url ILIKE :query)"
-            )
-            params["query"] = f"%{query}%"
         with self._session_factory() as session:
             rows = (
                 session.execute(
                     text(
-                        f"""SELECT c.id AS candidate_id,c.source_name,c.title,c.url,c.discovered_at,c.source_text,
-                    CASE WHEN latest.status IN ('failed','retry_scheduled') THEN latest.id END AS retry_attempt_id,
-                    latest.status AS generation_status,latest.failure_code AS generation_failure_code
-                    FROM candidates c LEFT JOIN LATERAL (
-                        SELECT a.id,a.status,a.failure_code FROM content_attempts a
-                        WHERE a.project_id=c.project_id AND a.candidate_id=c.id
-                        ORDER BY a.attempt_no DESC,a.id DESC LIMIT 1
-                    ) latest ON true
-                    WHERE {" AND ".join(clauses)}
-                    ORDER BY c.discovered_at DESC,c.id DESC LIMIT :limit OFFSET :offset"""
+                        f"""SELECT p.id,p.status,left(p.post_text,:excerpt) AS excerpt,
+                        char_length(p.post_text) AS char_count,
+                        (p.media_path IS NOT NULL AND p.media_deleted_at IS NULL) AS media_available,
+                        p.created_at,p.updated_at,p.scheduled_at,d.status AS delivery_status,
+                        s.id AS slot_id,s.topic,s.publish_at,s.rubric_id,r.name AS rubric_name
+                        FROM posts p
+                        LEFT JOIN content_plan_slots s
+                            ON s.project_id=p.project_id AND s.post_id=p.id
+                        LEFT JOIN project_rubrics r
+                            ON r.project_id=s.project_id AND r.id=s.rubric_id
+                        LEFT JOIN deliveries d
+                            ON d.project_id=p.project_id AND d.post_id=p.id
+                        WHERE {" AND ".join(clauses)}
+                        ORDER BY p.created_at DESC,p.id DESC LIMIT :limit OFFSET :offset"""
                     ),
                     params,
                 )
@@ -96,172 +95,172 @@ class SqlAlchemyDashboardRepository:
                 .all()
             )
         return tuple(
-            Material(
-                row.candidate_id,
-                row.source_name,
-                row.title,
-                row.url,
-                row.discovered_at,
-                row.retry_attempt_id,
-                generation_status=row.generation_status,
-                generation_failure_code=row.generation_failure_code,
-                original_text=row.source_text,
-            )
-            for row in rows
-        )
-
-    def packages(
-        self,
-        project_id: int,
-        status: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> tuple[PackageSummary, ...]:
-        _bounded(limit, offset)
-        clauses = ["project_id=:project"]
-        params: dict[str, object] = {
-            "project": project_id,
-            "limit": limit,
-            "offset": offset,
-        }
-        if status is not None:
-            clauses.append("status=:status")
-            params["status"] = status
-        with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    text(
-                        """SELECT id,status,source_url,post_text,media_path,media_deleted_at,created_at,updated_at,scheduled_at,route_id,previous_package_id,
-                    (SELECT a.candidate_id FROM content_attempts a WHERE a.id=content_packages.attempt_id AND a.project_id=content_packages.project_id) AS candidate_id
-                    FROM content_packages WHERE """
-                        + " AND ".join(clauses)
-                        + " ORDER BY created_at DESC,id DESC LIMIT :limit OFFSET :offset"
-                    ),
-                    params,
-                )
-                .mappings()
-                .all()
-            )
-        return tuple(
-            PackageSummary(
+            PostSummary(
                 row.id,
                 row.status,
-                row.source_url,
-                row.post_text,
-                *_media_status(row.media_path, row.media_deleted_at),
+                row.excerpt,
+                row.char_count,
+                row.media_available,
                 row.created_at,
                 row.updated_at,
-                scheduled_at=row.scheduled_at, route_id=row.route_id,
-                candidate_id=row.candidate_id, previous_package_id=row.previous_package_id,
+                scheduled_at=row.scheduled_at,
+                delivery_status=row.delivery_status,
+                slot_id=row.slot_id,
+                topic=row.topic or "",
+                publish_at=row.publish_at,
+                rubric_id=row.rubric_id,
+                rubric_name=row.rubric_name,
             )
             for row in rows
         )
 
-    def package(self, project_id: int, package_id: int) -> PackageDetail:
+    def post(self, project_id: int, post_id: int) -> PostDetail:
         with self._session_factory() as session:
             row = (
                 session.execute(
                     text(
-                        """SELECT id,attempt_id,status,source_url,post_text,analysis,media_path,media_deleted_at,
-                    media_source_type,media_source_url,generation_snapshot,created_at,updated_at,context,scheduled_at,route_id,
-                    (SELECT d.status FROM deliveries d WHERE d.project_id=content_packages.project_id AND d.package_id=content_packages.id) AS delivery_status,
-                    (SELECT p.id FROM content_packages p WHERE p.project_id=content_packages.project_id AND p.previous_package_id=content_packages.id AND p.status='awaiting_review' ORDER BY p.id DESC LIMIT 1) AS replacement_package_id
-                    FROM content_packages WHERE project_id=:project AND id=:package"""
+                        """SELECT p.id,p.status,p.post_text,char_length(p.post_text) AS char_count,
+                        (p.media_path IS NOT NULL AND p.media_deleted_at IS NULL) AS media_available,
+                        p.media_mime,p.generation,p.created_at,p.updated_at,p.scheduled_at,
+                        d.status AS delivery_status,d.message_id AS delivery_message_id,
+                        d.failure_code,d.failure_reason,d.confirmed_at,
+                        s.id AS slot_id,a.id AS media_asset_id,a.caption AS media_caption,
+                        a.last_used_at AS media_last_used_at,
+                        COALESCE(d.channel_snapshot->'configuration'->>'chat_id',
+                                 c.configuration->>'chat_id') AS channel_chat_id
+                        FROM posts p
+                        LEFT JOIN content_plan_slots s
+                            ON s.project_id=p.project_id AND s.post_id=p.id
+                        LEFT JOIN media_assets a
+                            ON a.project_id=p.project_id
+                           AND a.id=CASE WHEN (p.generation->>'media_asset_id') ~ '^[0-9]+$'
+                                THEN (p.generation->>'media_asset_id')::bigint END
+                        LEFT JOIN deliveries d
+                            ON d.project_id=p.project_id AND d.post_id=p.id
+                        LEFT JOIN channel_connections c
+                            ON c.project_id=p.project_id AND c.id=d.channel_id
+                        WHERE p.project_id=:project AND p.id=:post"""
                     ),
-                    {"project": project_id, "package": package_id},
+                    {"project": project_id, "post": post_id},
                 )
                 .mappings()
                 .first()
             )
             if row is None:
-                raise LookupError(package_id)
+                raise LookupError(post_id)
             history = (
                 session.execute(
                     text(
-                        """SELECT status,reason,created_at FROM content_package_status_history
-                    WHERE project_id=:project AND package_id=:package ORDER BY created_at,id"""
+                        """SELECT status,reason,created_at FROM post_status_history
+                        WHERE project_id=:project AND post_id=:post
+                        ORDER BY created_at,id"""
                     ),
-                    {"project": project_id, "package": package_id},
+                    {"project": project_id, "post": post_id},
                 )
                 .mappings()
                 .all()
             )
-        return PackageDetail(
+        return PostDetail(
             row.id,
             row.status,
-            row.source_url,
             row.post_text,
-            row.analysis,
-            *_media_status(row.media_path, row.media_deleted_at),
-            row.media_source_type,
-            row.media_source_url,
+            row.char_count,
+            row.media_available,
+            row.media_mime,
+            _mapping(row.generation),
             tuple(
-                PackageHistoryEntry(item.status, item.reason, item.created_at)
+                PostHistoryEntry(item.status, item.reason, item.created_at)
                 for item in history
             ),
-            _mapping(row.generation_snapshot),
             row.created_at,
             row.updated_at,
-            row.attempt_id,
-            original_text=row.context, scheduled_at=row.scheduled_at, route_id=row.route_id,
+            scheduled_at=row.scheduled_at,
             delivery_status=row.delivery_status,
-            replacement_package_id=row.replacement_package_id,
+            delivery_message_id=row.delivery_message_id,
+            failure_code=row.failure_code,
+            failure_reason=row.failure_reason,
+            published_at=row.confirmed_at,
+            slot_id=row.slot_id,
+            media_asset_id=row.media_asset_id,
+            media_caption=row.media_caption,
+            media_last_used_at=row.media_last_used_at,
+            channel_chat_id=row.channel_chat_id,
         )
 
-    def package_media_path(self, project_id: int, package_id: int) -> tuple[str, str]:
+    def post_media_path(self, project_id: int, post_id: int) -> tuple[str, str]:
         with self._session_factory() as session:
-            row = session.execute(
-                text(
-                    """SELECT media_path,media_mime FROM content_packages
-                    WHERE project_id=:project AND id=:package
-                    AND media_path IS NOT NULL AND media_deleted_at IS NULL"""
-                ),
-                {"project": project_id, "package": package_id},
-            ).mappings().first()
+            row = (
+                session.execute(
+                    text(
+                        """SELECT media_path,media_mime FROM posts
+                        WHERE project_id=:project AND id=:post
+                        AND media_path IS NOT NULL AND media_deleted_at IS NULL"""
+                    ),
+                    {"project": project_id, "post": post_id},
+                )
+                .mappings()
+                .first()
+            )
         if row is None:
-            raise LookupError(package_id)
+            raise LookupError(post_id)
         return row.media_path, row.media_mime
 
-    def queue(self, project_id: int, day: date) -> tuple[QueueSlot, ...]:
+    def operations(
+        self, project_id: int, *, limit: int = 50, offset: int = 0
+    ) -> tuple[Operation, ...]:
+        _bounded(limit, offset)
         with self._session_factory() as session:
-            timezone = session.execute(text("SELECT timezone FROM content_projects WHERE id=:project"), {"project": project_id}).scalar_one()
-            day_start = datetime.combine(day, time.min, tzinfo=ZoneInfo(timezone))
-            rows = session.execute(text("""
-                SELECT p.id,p.scheduled_at,p.route_id,p.status,p.post_text,
-                       c.provider,c.name AS channel_name,d.id AS delivery_id,
-                       d.status AS delivery_status,d.failure_code,d.failure_reason
-                FROM content_packages p
-                JOIN content_projects project ON project.id=p.project_id
-                JOIN publication_routes r ON r.id=p.route_id AND r.project_id=p.project_id
-                JOIN channel_connections c ON c.id=r.channel_id AND c.project_id=r.project_id
-                LEFT JOIN deliveries d ON d.package_id=p.id AND d.project_id=p.project_id
-                WHERE p.project_id=:project AND (p.status IN ('awaiting_review','approved')
-                    OR (p.status='published' AND p.scheduled_at>=:start AND p.scheduled_at<:end))
-                ORDER BY p.scheduled_at,p.id
-            """), {"project": project_id, "start": day_start, "end": day_start + timedelta(days=1)}).mappings().all()
-        return tuple(QueueSlot(row.route_id,row.provider,row.scheduled_at.astimezone(ZoneInfo(timezone)).strftime("%H:%M"),
-            "confirmed" if row.delivery_status == "published" else "planned", row.id,row.delivery_id,
-            scheduled_at=row.scheduled_at,status=row.status,delivery_status=row.delivery_status,
-            channel_name=row.channel_name,post_text=row.post_text,failure_code=row.failure_code,
-            failure_reason=row.failure_reason) for row in rows)
+            rows = (
+                session.execute(
+                    text(
+                        """SELECT id,operation,status,outcome,failure_code,mode,actor,result,
+                        started_at,finished_at FROM operation_runs
+                        WHERE project_id=:project
+                        ORDER BY COALESCE(finished_at,started_at) DESC,id DESC
+                        LIMIT :limit OFFSET :offset"""
+                    ),
+                    {"project": project_id, "limit": limit, "offset": offset},
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(_operation(row) for row in rows)
+
+    def operation(self, project_id: int, operation_run_id: int) -> Operation:
+        with self._session_factory() as session:
+            row = (
+                session.execute(
+                    text(
+                        """SELECT id,operation,status,outcome,failure_code,mode,actor,result,
+                        started_at,finished_at FROM operation_runs
+                        WHERE project_id=:project AND id=:run"""
+                    ),
+                    {"project": project_id, "run": operation_run_id},
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise LookupError(operation_run_id)
+        return _operation(row)
 
     def publications(
-        self, project_id: int, limit: int = 50, offset: int = 0
+        self, project_id: int, *, limit: int = 50, offset: int = 0
     ) -> tuple[Publication, ...]:
         _bounded(limit, offset)
         with self._session_factory() as session:
             rows = (
                 session.execute(
                     text(
-                        """SELECT d.id AS delivery_id,d.package_id,
-                    COALESCE(c.provider,d.channel_snapshot->>'provider') AS provider,
-                    d.status,d.attempt_no,d.message_id,d.failure_code,d.failure_reason,
-                    d.sending_started_at,d.confirmed_at,d.created_at,d.updated_at
-                    FROM deliveries d LEFT JOIN channel_connections c
-                    ON c.id=d.channel_id AND c.project_id=d.project_id
-                    WHERE d.project_id=:project
-                    ORDER BY COALESCE(d.confirmed_at,d.updated_at,d.created_at) DESC,d.id DESC
-                    LIMIT :limit OFFSET :offset"""
+                        """SELECT d.id AS delivery_id,d.post_id,
+                        COALESCE(c.provider,d.channel_snapshot->>'provider') AS provider,
+                        d.status,d.attempt_no,d.message_id,d.failure_code,d.failure_reason,
+                        d.sending_started_at,d.confirmed_at,d.created_at,d.updated_at
+                        FROM deliveries d LEFT JOIN channel_connections c
+                            ON c.id=d.channel_id AND c.project_id=d.project_id
+                        WHERE d.project_id=:project
+                        ORDER BY COALESCE(d.confirmed_at,d.updated_at,d.created_at) DESC,d.id DESC
+                        LIMIT :limit OFFSET :offset"""
                     ),
                     {"project": project_id, "limit": limit, "offset": offset},
                 )
@@ -304,7 +303,7 @@ class SqlAlchemyDashboardRepository:
         return tuple(
             Publication(
                 row.delivery_id,
-                row.package_id,
+                row.post_id,
                 row.provider,
                 row.status,
                 row.attempt_no,
@@ -320,60 +319,19 @@ class SqlAlchemyDashboardRepository:
             for row in rows
         )
 
-    def operations(
-        self, project_id: int, limit: int = 50, offset: int = 0
-    ) -> tuple[Operation, ...]:
-        _bounded(limit, offset)
-        with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    text(
-                        """SELECT id,operation,status,outcome,failure_code,started_at,finished_at,mode,actor,
-                        codex_model,codex_reasoning_effort,materials_taken,packages_created
-                    FROM operation_runs WHERE project_id=:project
-                    ORDER BY COALESCE(finished_at,started_at) DESC,id DESC LIMIT :limit OFFSET :offset"""
-                    ),
-                    {"project": project_id, "limit": limit, "offset": offset},
-                )
-                .mappings()
-                .all()
-            )
-        return tuple(
-            Operation(
-                row.id,
-                row.operation,
-                row.status,
-                row.outcome,
-                row.failure_code,
-                row.started_at,
-                row.finished_at,
-                None if row.finished_at is None else row.finished_at - row.started_at,
-                row.mode,
-                row.actor,
-                row.codex_model,
-                row.codex_reasoning_effort,
-                row.materials_taken,
-                row.packages_created,
-            )
-            for row in rows
-        )
 
-    def operation(self, project_id: int, run_id: int) -> Operation:
-        with self._session_factory() as session:
-            row = session.execute(
-                text(
-                    """SELECT id,operation,status,outcome,failure_code,started_at,finished_at,mode,actor,
-                    codex_model,codex_reasoning_effort,materials_taken,packages_created
-                    FROM operation_runs WHERE project_id=:project AND id=:run"""
-                ),
-                {"project": project_id, "run": run_id},
-            ).mappings().first()
-        if row is None:
-            raise LookupError(run_id)
-        return Operation(
-            row.id, row.operation, row.status, row.outcome, row.failure_code,
-            row.started_at, row.finished_at,
-            None if row.finished_at is None else row.finished_at - row.started_at,
-            row.mode, row.actor, row.codex_model, row.codex_reasoning_effort,
-            row.materials_taken, row.packages_created,
-        )
+def _operation(row) -> Operation:
+    finished_at: datetime | None = row.finished_at
+    return Operation(
+        row.id,
+        row.operation,
+        row.status,
+        row.outcome,
+        row.failure_code,
+        row.mode,
+        row.actor,
+        _mapping(row.result),
+        row.started_at,
+        finished_at,
+        None if finished_at is None else finished_at - row.started_at,
+    )

@@ -28,7 +28,7 @@ def test_delivery_types_preserve_the_complete_public_contract() -> None:
     api = _delivery_api()
     claim = api["DeliveryClaim"](
         delivery_id=11,
-        package_id=41,
+        post_id=41,
         attempt_no=2,
         post_text="Текст поста",
         media_path="/media/41.png",
@@ -48,13 +48,13 @@ def test_delivery_types_preserve_the_complete_public_contract() -> None:
         "uncertain",
     )
     assert claim.delivery_id == 11
-    assert claim.package_id == 41
+    assert claim.post_id == 41
     assert claim.attempt_no == 2
     assert api["TelegramMessage"](message_id=731).message_id == 731
     assert api["PublishContentResult"](
-        "published", package_id=41, message_id=731
+        "published", post_id=41, message_id=731
     ) == api["PublishContentResult"](
-        outcome="published", package_id=41, message_id=731
+        outcome="published", post_id=41, message_id=731
     )
 
 
@@ -71,16 +71,16 @@ def test_publish_error_rejects_empty_operator_safe_fields(code: str, reason: str
         )
 
 
-def test_approved_package_has_only_the_published_terminal_transition() -> None:
-    # Поломка: approved можно вернуть в review/rejected или нельзя подтвердить.
-    from postify.domain.content.models import (
-        ContentValidationError,
-        PackageStatus,
+def test_approved_post_has_only_the_published_terminal_transition() -> None:
+    # Поломка: approved можно вернуть в rejected/generating или нельзя подтвердить.
+    from postify.domain.posts.models import (
+        InvalidPostTransition,
+        PostStatus,
         validate_transition,
     )
 
-    assert PackageStatus.PUBLISHED.value == "published"
+    assert PostStatus.PUBLISHED.value == "published"
     assert validate_transition("approved", "published") is None
-    for forbidden in ("processing", "awaiting_review", "rejected", "failed"):
-        with pytest.raises(ContentValidationError):
+    for forbidden in ("generating", "rejected", "approved"):
+        with pytest.raises(InvalidPostTransition):
             validate_transition("approved", forbidden)

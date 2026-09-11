@@ -37,5 +37,5 @@ def test_clean_wheel_contains_delivery_modules_and_new_alembic_head(tmp_path: Pa
         "postify/application/ports/telegram_publisher.py",
         "postify/adapters/telegram/bot_api.py",
         "postify/infrastructure/repositories/sqlalchemy_delivery.py",
-        "postify/infrastructure/database/migrations/versions/20260809_04_add_telegram_deliveries.py",
+        "postify/infrastructure/database/migrations/versions/20260911_01_baseline.py",
     } <= names

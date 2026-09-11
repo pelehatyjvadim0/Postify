@@ -5,6 +5,7 @@ from threading import Event
 
 from postify.web.app import create_app
 from postify.web.dependencies import WebContainer
+from tests.unit.web.test_api import AuthStub
 
 
 class SchedulerApi:
@@ -26,7 +27,7 @@ def test_lifespan_starts_one_scheduler_task_and_stops_it_on_shutdown() -> None:
     # Поломка: startup создаёт 0/2 pollers или shutdown оставляет task живой.
     async def exercise() -> tuple[int, bool, bool]:
         api = SchedulerApi()
-        app = create_app(WebContainer(api=api))
+        app = create_app(WebContainer(api=api), auth=AuthStub())
         async with app.router.lifespan_context(app):
             await asyncio.wait_for(api.started.wait(), timeout=0.5)
             task = app.state.scheduler_task
@@ -42,6 +43,30 @@ def test_lifespan_starts_one_scheduler_task_and_stops_it_on_shutdown() -> None:
     assert closed is True
 
 
+def test_recovery_finishes_once_before_the_first_scheduler_tick() -> None:
+    class RecoveringApi:
+        def __init__(self):
+            self.events = []
+
+        def recover_interrupted_operations(self):
+            self.events.append("recover")
+
+        def scheduler_tick(self):
+            assert self.events[0] == "recover"
+            self.events.append("tick")
+
+    async def exercise():
+        api = RecoveringApi()
+        app = create_app(WebContainer(api=api), auth=AuthStub())
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0.25)
+        return api.events
+
+    events = asyncio.run(exercise())
+    assert events.count("recover") == 1
+    assert events.count("tick") >= 2
+
+
 def test_lifespan_poll_wait_is_short_and_does_not_swallow_cancellation() -> None:
     # Поломка: polling sleep блокирует shutdown или CancelledError классифицируется как infrastructure failure.
     class FastApi:
@@ -53,7 +78,7 @@ def test_lifespan_poll_wait_is_short_and_does_not_swallow_cancellation() -> None
 
     async def exercise() -> tuple[int, float]:
         api = FastApi()
-        app = create_app(WebContainer(api=api))
+        app = create_app(WebContainer(api=api), auth=AuthStub())
         loop = asyncio.get_running_loop()
         started = loop.time()
         async with app.router.lifespan_context(app):
@@ -79,7 +104,7 @@ def test_polling_continues_after_infrastructure_failure() -> None:
 
     async def exercise() -> int:
         api = FlakyApi()
-        app = create_app(WebContainer(api=api))
+        app = create_app(WebContainer(api=api), auth=AuthStub())
         async with app.router.lifespan_context(app):
             await asyncio.sleep(0.25)
         return api.ticks
@@ -102,7 +127,7 @@ def test_lifespan_waits_for_blocking_sync_tick_without_blocking_loop() -> None:
 
     async def exercise() -> tuple[bool, int, bool, bool]:
         api = BlockingApi()
-        app = create_app(WebContainer(api=api))
+        app = create_app(WebContainer(api=api), auth=AuthStub())
         context = app.router.lifespan_context(app)
         await context.__aenter__()
         for _ in range(50):

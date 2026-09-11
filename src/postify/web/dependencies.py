@@ -1,88 +1,137 @@
+"""Граница веб-слоя: контейнер с фасадом приложения и его протокол.
+
+Роутеры не знают ничего, кроме этого протокола, поэтому тесты подставляют в
+контейнер заглушку вместо настоящего фасада с базой.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Protocol
+from datetime import date, datetime
+from typing import Annotated, Any, Protocol
+
+from fastapi import Depends, Request
 
 
 class WebApi(Protocol):
+    """Действия и выборки, которыми пользуется HTTP-слой."""
+
     def scheduler_tick(self) -> object: ...
 
-    def bootstrap(self) -> dict[str, Any]: ...
+    def close(self) -> None: ...
 
-    def materials(self, project_id: int, **filters: object) -> dict[str, Any]: ...
+    # --- проекты ----------------------------------------------------------
 
-    def packages(self, project_id: int, **filters: object) -> dict[str, Any]: ...
+    def list_projects(self, *, owner_id: int) -> list[dict[str, Any]]: ...
 
-    def package(self, project_id: int, package_id: int) -> dict[str, Any]: ...
-
-    def save_plan(
-        self,
-        project_id: int,
-        package_id: int,
-        *,
-        scheduled_at: datetime,
-        route_id: int,
+    def create_project(
+        self, payload: dict[str, object], *, owner_id: int
     ) -> dict[str, Any]: ...
 
-    def approve(self, project_id: int, package_id: int) -> dict[str, Any]: ...
+    def project(self, project_id: int) -> dict[str, Any]: ...
 
-    def reject(self, project_id: int, package_id: int) -> dict[str, Any]: ...
+    def update_project(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
 
-    def queue(self, project_id: int) -> dict[str, Any]: ...
+    def delete_project(self, project_id: int) -> None: ...
 
-    def publications(self, project_id: int, **filters: object) -> dict[str, Any]: ...
+    # --- канал ------------------------------------------------------------
 
-    def operations(self, project_id: int, **filters: object) -> dict[str, Any]: ...
+    def set_channel(
+        self, project_id: int, *, bot_token: str | None = None, chat_id: str
+    ) -> dict[str, Any]: ...
 
-    def operation(self, project_id: int, operation_run_id: int) -> dict[str, Any]: ...
+    def check_channel(self, project_id: int) -> dict[str, Any]: ...
 
-    def manual_search(self, project_id: int) -> dict[str, Any]: ...
+    def remove_channel(self, project_id: int) -> None: ...
 
-    def retry_analysis(self, project_id: int, attempt_id: int) -> dict[str, Any]: ...
+    # --- рубрики ----------------------------------------------------------
 
-    def return_to_analysis(self, project_id: int, package_id: int) -> dict[str, Any]: ...
+    def rubrics(self, project_id: int) -> list[dict[str, Any]]: ...
 
-    def regenerate_post(self, project_id: int, package_id: int) -> dict[str, Any]: ...
+    def create_rubric(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def update_rubric(
+        self, project_id: int, rubric_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def delete_rubric(self, project_id: int, rubric_id: int) -> None: ...
+
+    # --- контент-план -----------------------------------------------------
+
+    def plan(
+        self, project_id: int, *, date_from: date, date_to: date
+    ) -> list[dict[str, Any]]: ...
+
+    def create_slot(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def update_slot(
+        self, project_id: int, slot_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def delete_slot(self, project_id: int, slot_id: int) -> None: ...
+
+    def generate_slot(self, project_id: int, slot_id: int) -> dict[str, Any]: ...
+
+    def skip_slot(self, project_id: int, slot_id: int) -> dict[str, Any]: ...
+
+    # --- посты ------------------------------------------------------------
+
+    def posts(
+        self,
+        project_id: int,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]: ...
+
+    def post(self, project_id: int, post_id: int) -> dict[str, Any]: ...
+
+    def update_post(
+        self,
+        project_id: int,
+        post_id: int,
+        *,
+        post_text: str | None = None,
+        media_asset_id: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]: ...
+
+    def reject_post(self, project_id: int, post_id: int) -> dict[str, Any]: ...
+
+    def regenerate_post(self, project_id: int, post_id: int) -> dict[str, Any]: ...
+
+    def rules(self, project_id: int) -> object: ...
+    def replace_rules(self, project_id: int, rules: object) -> object: ...
+    def derive_rules(self, project_id: int) -> dict[str, Any]: ...
+
+    def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]: ...
+
+    # --- журнал и публикации ---------------------------------------------
+
+    def operations(
+        self, project_id: int, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]: ...
+
+    def operation(self, project_id: int, operation_id: int) -> dict[str, Any]: ...
+
+    def publications(
+        self, project_id: int, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]: ...
 
     def retry_delivery(self, project_id: int, delivery_id: int) -> dict[str, Any]: ...
-
-    def run_once(self, project_id: int) -> dict[str, Any]: ...
-
-    def settings(self, project_id: int) -> dict[str, Any]: ...
-
-    def update_settings(
-        self, project_id: int, section: str, payload: dict[str, object]
-    ) -> dict[str, Any]: ...
-
-    def resources(self, project_id: int, resource: str) -> dict[str, Any]: ...
-
-    def create_resource(
-        self, project_id: int, resource: str, payload: dict[str, object]
-    ) -> dict[str, Any]: ...
-
-    def update_resource(
-        self,
-        project_id: int,
-        resource: str,
-        resource_id: int,
-        payload: dict[str, object],
-    ) -> dict[str, Any]: ...
-
-    def delete_resource(self, project_id: int, resource: str, resource_id: int) -> None: ...
-
-    def check_channel(self, project_id: int, channel_id: int) -> dict[str, Any]: ...
-
-    def remove_channel_secret(
-        self, project_id: int, channel_id: int
-    ) -> dict[str, Any]: ...
-
-    def package_media(self, project_id: int, package_id: int) -> tuple[bytes, str]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class WebContainer:
-    """Explicit web boundary: tests may inject a complete application facade."""
+    """Явная граница веба: тесты подставляют сюда полный фасад приложения."""
 
     api: WebApi
 
@@ -91,3 +140,10 @@ def build_default_container() -> WebContainer:
     from postify.web.services import build_web_api
 
     return WebContainer(api=build_web_api())
+
+
+def container_for(request: Request) -> WebContainer:
+    return request.app.state.container
+
+
+Container = Annotated[WebContainer, Depends(container_for)]

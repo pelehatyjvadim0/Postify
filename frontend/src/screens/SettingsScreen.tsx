@@ -113,12 +113,12 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
   async function saveSettings() {
     const leadMinutes = Number(lead)
     const reuseDays = Number(reuse)
-    if (!Number.isInteger(leadMinutes) || leadMinutes < 1) {
-      toast.error('Запас на генерацию должен быть целым числом минут больше нуля')
+    if (!Number.isInteger(leadMinutes) || leadMinutes < 1 || leadMinutes > 43200) {
+      toast.error('Запас на генерацию должен быть от 1 до 43200 минут')
       return
     }
-    if (!Number.isInteger(reuseDays) || reuseDays < 0) {
-      toast.error('Повтор изображений должен быть целым числом дней')
+    if (!Number.isInteger(reuseDays) || reuseDays < 1 || reuseDays > 3650) {
+      toast.error('Повтор изображений должен быть от 1 до 3650 дней')
       return
     }
     setSavingSettings(true)
@@ -221,6 +221,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
             <Input
               type="number"
               min={1}
+              max={43200}
               value={lead}
               onChange={(event) => setLead(event.target.value)}
             />
@@ -236,7 +237,8 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           >
             <Input
               type="number"
-              min={0}
+              min={1}
+              max={3650}
               value={reuse}
               onChange={(event) => setReuse(event.target.value)}
             />

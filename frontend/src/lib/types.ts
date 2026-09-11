@@ -116,6 +116,7 @@ export interface Slot {
 }
 
 export interface ValidationItem {
+  severity?: RuleSeverity
   key?: string
   rule_id?: number
   text?: string

@@ -10,11 +10,12 @@ from cryptography.fernet import Fernet
 
 
 def main() -> None:
-    bind = os.environ.get("AUTOPOST_BIND", "127.0.0.1")
-    if bind not in {"127.0.0.1", "::1", "localhost"} and not os.environ.get(
-        "POSTIFY_ACCESS_PASSWORD"
-    ):
-        raise RuntimeError("Внешний доступ требует POSTIFY_ACCESS_PASSWORD")
+    # Единственный способ войти — Telegram-бот авторизации. Без его токена
+    # приложение поднимать бессмысленно: попасть внутрь будет нечем.
+    if not os.environ.get("AUTH_BOT_TOKEN"):
+        raise RuntimeError(
+            "Не задан AUTH_BOT_TOKEN: без бота авторизации вход в приложение невозможен"
+        )
     # Ключ принадлежит этому контуру и переживает перезапуск вместе с volume.
     if not os.environ.get("POSTIFY_SECRET_KEY"):
         key_path = Path("/data/secret.key")
