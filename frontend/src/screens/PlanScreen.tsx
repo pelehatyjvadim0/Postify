@@ -28,7 +28,16 @@ type View = 'list' | 'week' | 'month'
 // Демонстрационный «сегодня»: моки описывают октябрь 2026.
 const TODAY = '2026-10-09'
 
-export function PlanScreen({ project, onProjectChanged }: { project: Project; onProjectChanged: () => void }) {
+export function PlanScreen({
+  project,
+  onProjectChanged,
+  focus,
+}: {
+  project: Project
+  onProjectChanged: () => void
+  /** Слот, на который нужно открыть план — например, при переходе из «Постов». */
+  focus?: { date: string; slotId: number } | null
+}) {
   const [view, setView] = React.useState<View>('list')
   const [anchor, setAnchor] = React.useState(TODAY)
   const [slots, setSlots] = React.useState<Slot[]>([])
@@ -42,6 +51,17 @@ export function PlanScreen({ project, onProjectChanged }: { project: Project; on
   const peek = useSlotPeek()
   const toast = useToast()
   const operation = useOperation(project.id)
+
+  // Переход извне: встаём на нужный месяц и выделяем слот.
+  const focusKey = focus ? `${focus.date}:${focus.slotId}` : null
+  const appliedFocus = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (!focusKey || !focus || appliedFocus.current === focusKey) return
+    appliedFocus.current = focusKey
+    setView('list')
+    setAnchor(focus.date)
+    setSelectedId(focus.slotId)
+  }, [focusKey, focus])
 
   const [year, month] = [Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7))]
   const range = React.useMemo(() => {

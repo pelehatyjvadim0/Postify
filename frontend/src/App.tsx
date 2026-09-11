@@ -22,7 +22,8 @@ export function App() {
 }
 
 function Workspace() {
-  const screen = useRoute()
+  const route = useRoute()
+  const screen = route.screen
   const [projects, setProjects] = React.useState<ProjectSummary[]>([])
   const [project, setProject] = React.useState<Project | null>(null)
   const [projectId, setProjectId] = React.useState<number | null>(null)
@@ -92,7 +93,15 @@ function Workspace() {
           <Skeleton className="h-64 w-full" />
         </div>
       ) : screen === 'plan' ? (
-        <PlanScreen project={project} onProjectChanged={refresh} />
+        <PlanScreen
+          project={project}
+          onProjectChanged={refresh}
+          focus={
+            route.params.length === 2
+              ? { date: route.params[0], slotId: Number(route.params[1]) }
+              : null
+          }
+        />
       ) : screen === 'posts' ? (
         <PostsScreen project={project} onChanged={refresh} />
       ) : screen === 'media' ? (

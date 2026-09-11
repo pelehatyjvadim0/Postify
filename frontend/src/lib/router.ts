@@ -6,21 +6,28 @@ export type Screen = 'plan' | 'posts' | 'media' | 'settings'
 
 const SCREENS: Screen[] = ['plan', 'posts', 'media', 'settings']
 
-function read(): Screen {
-  const value = location.hash.replace(/^#\/?/, '').split('/')[0]
-  return (SCREENS as string[]).includes(value) ? (value as Screen) : 'plan'
+export interface Route {
+  screen: Screen
+  /** Хвост маршрута: для плана это дата и идентификатор слота. */
+  params: string[]
 }
 
-export function navigate(screen: Screen) {
-  location.hash = `#/${screen}`
+function read(): Route {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
+  const screen = (SCREENS as string[]).includes(parts[0]) ? (parts[0] as Screen) : 'plan'
+  return { screen, params: parts.slice(1) }
+}
+
+export function navigate(screen: Screen, ...params: string[]) {
+  location.hash = `#/${[screen, ...params].join('/')}`
 }
 
 export function useRoute() {
-  const [screen, setScreen] = useState<Screen>(read)
+  const [route, setRoute] = useState<Route>(read)
   useEffect(() => {
-    const onChange = () => setScreen(read())
+    const onChange = () => setRoute(read())
     addEventListener('hashchange', onChange)
     return () => removeEventListener('hashchange', onChange)
   }, [])
-  return screen
+  return route
 }

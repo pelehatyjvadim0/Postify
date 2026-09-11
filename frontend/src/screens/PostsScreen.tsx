@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { dateTimeLabel } from '@/lib/dates'
+import { dateTimeLabel, dayKey } from '@/lib/dates'
 import { ApiError } from '@/lib/errors'
 import { navigate } from '@/lib/router'
 import { SLOT_STATUS } from '@/lib/status'
@@ -45,6 +45,11 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
   React.useEffect(() => {
     void load()
   }, [load])
+
+  /** Открывает пост в плане: там полный текст, отчёт проверок и решения. */
+  function open(post: PostSummary) {
+    navigate('plan', dayKey(post.publish_at), String(post.slot_id))
+  }
 
   async function approve(post: PostSummary) {
     setBusyId(post.id)
@@ -96,7 +101,14 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
             posts.map((post) => {
               const status = SLOT_STATUS[post.status]
               return (
-                <div key={post.id} className="rounded-lg border border-border p-3">
+                <div
+                  key={post.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => open(post)}
+                  onKeyDown={(event) => event.key === 'Enter' && open(post)}
+                  className="cursor-pointer rounded-lg border border-border p-3 transition-colors hover:border-foreground/25 hover:bg-accent/40"
+                >
                   <div className="mb-1 flex items-center gap-2">
                     <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -126,8 +138,19 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                       </span>
                     )}
                     <div className="ml-auto flex gap-2">
+                      <Button size="xs" onClick={(event) => { event.stopPropagation(); open(post) }}>
+                        Открыть
+                      </Button>
                       {post.status === 'needs_review' && (
-                        <Button size="xs" disabled={busyId === post.id} onClick={() => approve(post)}>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={busyId === post.id}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void approve(post)
+                          }}
+                        >
                           Одобрить
                         </Button>
                       )}
@@ -136,7 +159,8 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                           size="xs"
                           variant="outline"
                           disabled={operation.running}
-                          onClick={async () => {
+                          onClick={async (event) => {
+                            event.stopPropagation()
                             await operation.run(() => api.regeneratePost(project.id, post.id), {
                               successText: 'Пост переписан',
                             })
@@ -147,9 +171,6 @@ export function PostsScreen({ project, onChanged }: { project: Project; onChange
                           Переписать
                         </Button>
                       )}
-                      <Button size="xs" variant="ghost" onClick={() => navigate('plan')}>
-                        В плане
-                      </Button>
                     </div>
                   </div>
                 </div>
