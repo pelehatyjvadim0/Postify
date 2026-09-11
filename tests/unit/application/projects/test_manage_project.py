@@ -45,7 +45,7 @@ class MemoryProjects:
         self.project = ContentProject(
             1,
             values["name"],
-            values["topic"],
+            values["project_prompt"],
             values["language"],
             values["audience"],
             values["timezone"],

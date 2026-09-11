@@ -253,7 +253,7 @@ def test_project_owner_separates_own_foreign_and_missing(repository, engine) -> 
             connection.execute(
                 text(
                     "INSERT INTO content_projects"
-                    " (id, name, topic, language, audience, timezone, configuration,"
+                    " (id, name, project_prompt, language, audience, timezone, configuration,"
                     "  owner_id, created_at, updated_at)"
                     " VALUES (:id, 'Проект', '', 'ru', '', 'Europe/Moscow', '{}'::jsonb,"
                     "  :owner_id, :now, :now)"

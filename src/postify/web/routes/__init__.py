@@ -5,16 +5,26 @@
 без проверки владения.
 """
 
-from postify.web.routes import media, operations, posts, projects, rubrics
+from postify.web.routes import (
+    media,
+    operations,
+    plan,
+    posts,
+    projects,
+    prompts,
+    rubrics,
+)
 
 
 API_ROUTERS = (
     projects.collection,
     projects.router,
     rubrics.router,
+    plan.router,
     posts.router,
     media.router,
     operations.router,
+    prompts.router,
 )
 
 

@@ -43,7 +43,7 @@ def _seed_project(engine) -> None:
         connection.execute(
             text(
                 "INSERT INTO content_projects"
-                "(id,owner_id,name,topic,language,audience,timezone,configuration,created_at,updated_at)"
+                "(id,owner_id,name,project_prompt,language,audience,timezone,configuration,created_at,updated_at)"
                 " VALUES (:id,:owner,'Проект','Тема','ru','Аудитория','UTC','{}'::jsonb,:now,:now)"
             ),
             {"id": PROJECT_ID, "owner": owner_id, "now": NOW},

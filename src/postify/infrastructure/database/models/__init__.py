@@ -9,11 +9,14 @@ from postify.infrastructure.database.models.delivery import (
     DeliveryAttemptModel,
     DeliveryModel,
 )
+from postify.infrastructure.database.models.media import MediaAssetModel, MediaUsageModel
 from postify.infrastructure.database.models.observability import OperationRunModel
+from postify.infrastructure.database.models.plan import ContentPlanSlotModel
 from postify.infrastructure.database.models.posts import (
     PostModel,
     PostStatusHistoryModel,
 )
+from postify.infrastructure.database.models.prompts import AppSettingsModel
 from postify.infrastructure.database.models.projects import (
     ChannelConnectionModel,
     ContentProjectModel,
@@ -32,12 +35,16 @@ from postify.infrastructure.database.models.users import (
 
 
 __all__ = [
+    "AppSettingsModel",
     "Base",
     "ChannelConnectionModel",
+    "ContentPlanSlotModel",
     "ContentProjectModel",
     "DeliveryAttemptModel",
     "DeliveryModel",
     "LoginRequestModel",
+    "MediaAssetModel",
+    "MediaUsageModel",
     "OperationRunModel",
     "PostModel",
     "PostStatusHistoryModel",

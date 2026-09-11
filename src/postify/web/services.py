@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -25,6 +25,7 @@ from postify.application.projects.manage_channel import (
     SetProjectChannel,
     channel_view,
 )
+from postify.application.plan.service import PlanService
 from postify.application.projects.manage_project import ManageProject
 from postify.application.projects.manage_rubrics import ManageRubrics
 from postify.application.scheduling.project_scheduler import (
@@ -42,6 +43,7 @@ from postify.infrastructure.repositories.sqlalchemy_dashboard import (
 from postify.infrastructure.repositories.sqlalchemy_observability import (
     SqlAlchemyOperationRunRepository,
 )
+from postify.infrastructure.repositories.sqlalchemy_plan import SqlAlchemyPlanRepository
 from postify.infrastructure.repositories.sqlalchemy_posts import SqlAlchemyPostRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
@@ -51,16 +53,11 @@ from postify.infrastructure.repositories.sqlalchemy_schedule import (
 )
 from postify.infrastructure.security.secrets import SecretCipher
 from postify.web.errors import ConflictError, message_for
+from postify.web.media_api import MediaApi
 
 
-# Поля контракта, за которыми ещё нет хранения: режим публикации, запас
-# времени на генерацию, политика повторов изображений и промпт проекта.
-# Значения совпадают с умолчаниями контракта, редактирование принесут треки
-# публикации, контент-плана, медиа и промптов.
-DEFAULT_PUBLICATION_MODE = "review"
-DEFAULT_GENERATION_LEAD_MINUTES = 1440
+# Политика повторов изображений ещё без хранения: её принесёт трек пула.
 DEFAULT_MEDIA_REUSE_DAYS = 30
-DEFAULT_PROJECT_PROMPT = ""
 
 # Операции, которые веб-слой умеет выполнять сам. Генерация и перегенерация
 # появятся вместе со шлюзом вызовов модели.
@@ -118,6 +115,9 @@ class WebApplication:
             self._schedule_repository, self._submit_scheduled
         )
         self._operations = BoundedOperations()
+        self._media = MediaApi(
+            self._sessions, settings, operations=self._operations, clock=self._now
+        )
         self._cipher = (
             SecretCipher(settings.postify_secret_key.get_secret_value())
             if settings.postify_secret_key is not None
@@ -125,6 +125,11 @@ class WebApplication:
         )
         self._manage_projects = ManageProject(self._projects, clock=self._now)
         self._manage_rubrics = ManageRubrics(self._projects, clock=self._now)
+        self._plan = PlanService(
+            lambda project_id: SqlAlchemyPlanRepository(self._sessions, project_id),
+            clock=self._now,
+            submit_generation=self._start_generation,
+        )
 
     # --- жизненный цикл ---------------------------------------------------
 
@@ -149,7 +154,7 @@ class WebApplication:
                 "id": project.id,
                 "name": project.name,
                 "channel_title": self._channel_view(project.id)["chat_id"] or None,
-                "publication_mode": DEFAULT_PUBLICATION_MODE,
+                "publication_mode": project.publication_mode,
                 "counts": self._projects.post_counts(project.id),
             }
             for project in self._manage_projects.list(owner_id=owner_id)
@@ -173,6 +178,76 @@ class WebApplication:
 
     def delete_project(self, project_id: int) -> None:
         self._manage_projects.delete(project_id)
+
+    # --- пул изображений --------------------------------------------------
+
+    def media_upload_limit(self) -> int:
+        return self._media.media_upload_limit()
+
+    def media_assets(
+        self,
+        project_id: int,
+        *,
+        available: bool | None = None,
+        query: str | None = None,
+        limit: int = 60,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return self._media.media_assets(
+            project_id, available=available, query=query, limit=limit, cursor=cursor
+        )
+
+    def upload_media(
+        self, project_id: int, payloads: Sequence[bytes]
+    ) -> dict[str, Any]:
+        return self._media.upload_media(project_id, payloads)
+
+    def media_file(
+        self, project_id: int, asset_id: int, *, size: str = "full"
+    ) -> tuple[bytes, str]:
+        return self._media.media_file(project_id, asset_id, size=size)
+
+    def update_media(
+        self,
+        project_id: int,
+        asset_id: int,
+        *,
+        caption: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        return self._media.update_media(
+            project_id, asset_id, caption=caption, enabled=enabled
+        )
+
+    def delete_media(self, project_id: int, asset_id: int) -> None:
+        self._media.delete_media(project_id, asset_id)
+
+    def recaption_media(self, project_id: int, asset_id: int) -> dict[str, Any]:
+        return self._media.recaption_media(project_id, asset_id)
+
+    # --- контент-план -----------------------------------------------------
+
+    def plan(
+        self, project_id: int, *, date_from: date, date_to: date
+    ) -> list[dict[str, Any]]:
+        return self._plan.list(project_id, date_from=date_from, date_to=date_to)
+
+    def create_slot(self, project_id: int, payload: dict[str, object]) -> dict[str, Any]:
+        return self._plan.create(project_id, payload)
+
+    def update_slot(
+        self, project_id: int, slot_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]:
+        return self._plan.update(project_id, slot_id, payload)
+
+    def delete_slot(self, project_id: int, slot_id: int) -> None:
+        self._plan.delete(project_id, slot_id)
+
+    def skip_slot(self, project_id: int, slot_id: int) -> dict[str, Any]:
+        return self._plan.skip(project_id, slot_id)
+
+    def generate_slot(self, project_id: int, slot_id: int) -> dict[str, Any]:
+        return self._plan.generate(project_id, slot_id)
 
     # --- канал ------------------------------------------------------------
 
@@ -346,12 +421,12 @@ class WebApplication:
             "language": project.language,
             "audience": project.audience,
             "tone": project.configuration.tone,
-            "project_prompt": DEFAULT_PROJECT_PROMPT,
-            "publication_mode": DEFAULT_PUBLICATION_MODE,
-            "generation_lead_minutes": DEFAULT_GENERATION_LEAD_MINUTES,
-            "media_reuse_days": DEFAULT_MEDIA_REUSE_DAYS,
+            "project_prompt": project.project_prompt,
+            "publication_mode": project.publication_mode,
+            "generation_lead_minutes": project.generation_lead_minutes,
+            "media_reuse_days": project.media_reuse_days,
             "channel": self._channel_view(project.id),
-            "media": {"total": 0, "available": 0},
+            "media": self._media.media_counts(project.id),
         }
 
     def _submit_scheduled(self, command: ScheduledCommand) -> None:
@@ -362,6 +437,16 @@ class WebApplication:
             accepted_run_id=command.operation_run_id,
             scheduled_job_id=command.job_id,
             post_id=command.post_id,
+        )
+
+    def _start_generation(self, project_id: int, slot_id: int) -> int:
+        """Генерация по кнопке.
+
+        Обработчика ещё нет: операция честно падает с generate_post_failed,
+        а не висит в running. Его приносит трек агента генерации.
+        """
+        return self._submit_operation(
+            project_id, OperationKind.GENERATE_POST, mode="manual", actor="user"
         )
 
     def _submit_operation(

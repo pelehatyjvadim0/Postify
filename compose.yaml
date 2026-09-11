@@ -24,6 +24,7 @@ services:
       DATABASE_URL: postgresql+psycopg://autopost:autopost-local@db:5432/autoposttg
       CONTENT_MEDIA_DIR: /data/media
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_MEDIA_PROVIDER: ${AI_MEDIA_PROVIDER:-auto}
       CONTENT_ANALYZER: ${CONTENT_ANALYZER:-codex}
       CONTENT_MODEL: ${CONTENT_MODEL:-gpt-5.6-terra}
       CODEX_HOME: /data/codex

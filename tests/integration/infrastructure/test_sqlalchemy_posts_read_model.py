@@ -35,7 +35,7 @@ def _project(connection, project_id: int, name: str) -> None:
     connection.execute(
         text(
             "INSERT INTO content_projects"
-            " (id,owner_id,name,topic,language,audience,timezone,configuration,"
+            " (id,owner_id,name,project_prompt,language,audience,timezone,configuration,"
             "created_at,updated_at)"
             " VALUES (:id,:id,:name,'Тема','ru','Аудитория','UTC','{}'::jsonb,:now,:now)"
         ),

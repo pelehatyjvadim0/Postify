@@ -232,7 +232,7 @@ def test_project_requires_an_owner(
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO content_projects(id,name,topic,language,audience,"
+                    "INSERT INTO content_projects(id,name,project_prompt,language,audience,"
                     "timezone,configuration,created_at,updated_at)"
                     " VALUES (1,'Проект','Тема','ru','Все','UTC','{}'::jsonb,:now,:now)"
                 ),
@@ -256,7 +256,7 @@ def _seed_project(connection) -> None:
     )
     connection.execute(
         text(
-            "INSERT INTO content_projects(id,owner_id,name,topic,language,audience,"
+            "INSERT INTO content_projects(id,owner_id,name,project_prompt,language,audience,"
             "timezone,configuration,created_at,updated_at)"
             " VALUES (1,1,'Проект','Тема','ru','Все','UTC','{}'::jsonb,:now,:now)"
         ),

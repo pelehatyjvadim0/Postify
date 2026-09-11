@@ -69,15 +69,15 @@ def _seed(engine) -> None:
         ):
             connection.execute(
                 text(
-                    "INSERT INTO content_projects(id,name,topic,language,audience,"
+                    "INSERT INTO content_projects(id,name,project_prompt,language,audience,"
                     "timezone,configuration,created_at,updated_at,owner_id)"
-                    " VALUES (:id,:name,:topic,'ru','Фермеры','Europe/Moscow',"
+                    " VALUES (:id,:name,:prompt,'ru','Фермеры','Europe/Moscow',"
                     "CAST(:configuration AS jsonb),:now,:now,:owner)"
                 ),
                 {
                     "id": project_id,
                     "name": name,
-                    "topic": name,
+                    "prompt": name,
                     "configuration": CONFIGURATION,
                     "now": NOW,
                     "owner": owner_id,

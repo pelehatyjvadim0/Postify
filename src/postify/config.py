@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     content_model: str = Field(default="gpt-5.6-terra", min_length=1)
     content_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     gemini_api_key: SecretStr | None = None
+    # Провайдер vision и эмбеддингов. ``auto`` — Gemini при заданном
+    # GEMINI_API_KEY, иначе заглушка; так мок отключается появлением ключа,
+    # а не правкой кода. ``mock`` и ``gemini`` — принудительный выбор.
+    ai_media_provider: Literal["auto", "mock", "gemini"] = "auto"
     postify_secret_key: SecretStr | None = None
     # Вход в приложение идёт через отдельного Telegram-бота: у него собственный
     # токен и собственный цикл getUpdates, не пересекающийся с доставкой в каналы.

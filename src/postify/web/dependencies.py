@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Protocol
 
 from fastapi import Depends, Request
@@ -59,6 +59,26 @@ class WebApi(Protocol):
     ) -> dict[str, Any]: ...
 
     def delete_rubric(self, project_id: int, rubric_id: int) -> None: ...
+
+    # --- контент-план -----------------------------------------------------
+
+    def plan(
+        self, project_id: int, *, date_from: date, date_to: date
+    ) -> list[dict[str, Any]]: ...
+
+    def create_slot(
+        self, project_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def update_slot(
+        self, project_id: int, slot_id: int, payload: dict[str, object]
+    ) -> dict[str, Any]: ...
+
+    def delete_slot(self, project_id: int, slot_id: int) -> None: ...
+
+    def generate_slot(self, project_id: int, slot_id: int) -> dict[str, Any]: ...
+
+    def skip_slot(self, project_id: int, slot_id: int) -> dict[str, Any]: ...
 
     # --- посты ------------------------------------------------------------
 

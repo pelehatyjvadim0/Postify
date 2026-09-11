@@ -11,8 +11,11 @@ from sqlalchemy import create_engine, text
 
 
 def _schema_url(database_url: str, schema_name: str) -> str:
+    # public в пути обязателен: расширение vector живёт там, а тип и операторы
+    # pgvector видны только по search_path. Таблицы всё равно создаются в
+    # первой схеме пути, то есть в изолированной.
     separator = "&" if "?" in database_url else "?"
-    return f"{database_url}{separator}options=-csearch_path%3D{schema_name}"
+    return f"{database_url}{separator}options=-csearch_path%3D{schema_name}%2Cpublic"
 
 
 @pytest.fixture(scope="session")

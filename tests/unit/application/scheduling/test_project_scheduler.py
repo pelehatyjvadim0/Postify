@@ -8,8 +8,13 @@ from postify.application.scheduling.project_scheduler import (
 
 
 class Repository:
-    def __init__(self, publications: tuple[ScheduledCommand, ...] = ()) -> None:
+    def __init__(
+        self,
+        publications: tuple[ScheduledCommand, ...] = (),
+        generations: tuple[ScheduledCommand, ...] = (),
+    ) -> None:
         self.publications = publications
+        self.generations = generations
         self.recovered_at = None
         self.pending: tuple[ScheduledCommand, ...] = ()
 
@@ -26,12 +31,20 @@ class Repository:
     def due_publications(self, *, project_id, now):
         return self.publications
 
+    def due_generations(self, *, project_id, now):
+        return self.generations
+
     def accept(self, command):
         return command
 
     def claim_job(self, job_id, *, now):
         return next(
-            (item for item in self.publications if item.job_id == job_id), None
+            (
+                item
+                for item in (*self.generations, *self.publications)
+                if item.job_id == job_id
+            ),
+            None,
         )
 
 
@@ -109,3 +122,21 @@ def test_naive_now_is_rejected() -> None:
         assert "timezone" in str(error)
     else:
         raise AssertionError("Планировщик обязан требовать таймзону")
+
+
+def test_slot_due_for_generation_is_queued_as_a_generate_command() -> None:
+    # Само выполнение приносит трек агента: планировщик обязан только поставить
+    # задачу и не перепутать её цель — у генерации это слот, а не пост.
+    planned = ScheduledCommand(
+        1, "generate_post", datetime(2026, 9, 5, 9, tzinfo=UTC), slot_id=41, job_id=8
+    )
+    repository = Repository(generations=(planned,))
+    submitted = []
+
+    commands = ProjectScheduler(repository, submitted.append).tick(
+        datetime(2026, 9, 5, 10, tzinfo=UTC)
+    )
+
+    assert commands == (planned,)
+    assert submitted == [planned]
+    assert planned.post_id is None

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+PUBLICATION_MODES = frozenset({"review", "auto"})
 
 
 class UnsupportedProvider(ValueError):
@@ -25,6 +26,18 @@ def _positive(value: int, field: str) -> None:
     """Проверяет, что идентификатор или лимит — целое положительное число."""
     if type(value) is not int or value <= 0:
         raise ValueError(f"{field} должен быть положительным")
+
+
+def _free_text(value: str, field: str) -> str:
+    """Многострочный текст: обрезается только по краям.
+
+    Промпт проекта уезжает в контекст генерации как есть, поэтому схлопывать
+    в нём переводы строк нельзя. Пустое значение допустимо: уровень промптов
+    может быть не заполнен, тогда сборка контекста его пропускает.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"{field} должен быть строкой")
+    return value.strip()
 
 
 def _normalise_text(value: str, field: str) -> str:
@@ -87,13 +100,14 @@ class ContentProject:
     """
     Корневая сущность независимого контентного контура.
 
-    Проект задаёт тему, язык, аудиторию и часовой пояс. Рубрики, слоты плана,
+    Проект задаёт промпт канала, язык, аудиторию и часовой пояс. Рубрики, слоты плана,
     посты, изображения, канал и операции в хранилище привязываются к его
     ``id``. ``configuration`` определяет, как этот проект генерирует контент.
     """
     id: int
     name: str
-    topic: str
+    # Третий уровень промптов: специфика этого канала (раздел 7 трейса).
+    project_prompt: str
     language: str
     audience: str
     timezone: str
@@ -102,18 +116,27 @@ class ContentProject:
     updated_at: datetime
     # Владелец приходит из базы; черновики до вставки его ещё не знают.
     owner_id: int | None = None
+    # Запас времени на генерацию: слот считает generate_at как publish_at минус это.
+    generation_lead_minutes: int = 1440
+    # review — каждый пост ждёт одобрения, auto — зелёный пост уходит сам.
+    publication_mode: str = "review"
+    # Сколько дней изображение не предлагается повторно.
+    media_reuse_days: int = 30
 
     def __post_init__(self) -> None:
         """
         Проверяет идентичность и базовые атрибуты проекта.
 
-        Пустые название, тема, язык или аудитория недопустимы. Часовой пояс
+        Пустые название, язык или аудитория недопустимы. Часовой пояс
         должен быть известен ``zoneinfo``, а даты создания и обновления обязаны
         содержать timezone.
         """
         _positive(self.id, "id")
-        for field in ("name", "topic", "language", "audience"):
+        for field in ("name", "language", "audience"):
             object.__setattr__(self, field, _normalise_text(getattr(self, field), field))
+        object.__setattr__(
+            self, "project_prompt", _free_text(self.project_prompt, "project_prompt")
+        )
         try:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError, TypeError):
@@ -122,6 +145,10 @@ class ContentProject:
         _aware(self.updated_at, "updated_at")
         if self.owner_id is not None:
             _positive(self.owner_id, "owner_id")
+        _positive(self.generation_lead_minutes, "generation_lead_minutes")
+        _positive(self.media_reuse_days, "media_reuse_days")
+        if self.publication_mode not in PUBLICATION_MODES:
+            raise ValueError("Неизвестный режим публикации")
 
 
 @dataclass(frozen=True, slots=True)

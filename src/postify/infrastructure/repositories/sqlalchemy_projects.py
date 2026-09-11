@@ -53,7 +53,7 @@ class SqlAlchemyProjectRepository:
         *,
         owner_id: int,
         name: str,
-        topic: str,
+        project_prompt: str,
         language: str,
         audience: str,
         timezone: str,
@@ -65,7 +65,7 @@ class SqlAlchemyProjectRepository:
                 model = ContentProjectModel(
                     owner_id=owner_id,
                     name=name,
-                    topic=topic,
+                    project_prompt=project_prompt,
                     language=language,
                     audience=audience,
                     timezone=timezone,
@@ -87,7 +87,17 @@ class SqlAlchemyProjectRepository:
                 model = session.get(ContentProjectModel, project.id)
                 if model is None:
                     raise LookupError(project.id)
-                for name in ("name", "topic", "language", "audience", "timezone"):
+                fields = (
+                    "name",
+                    "project_prompt",
+                    "language",
+                    "audience",
+                    "timezone",
+                    "generation_lead_minutes",
+                    "publication_mode",
+                    "media_reuse_days",
+                )
+                for name in fields:
                     setattr(model, name, getattr(project, name))
                 model.configuration = asdict(project.configuration)
                 model.updated_at = project.updated_at
@@ -219,6 +229,23 @@ class SqlAlchemyProjectRepository:
                 session.rollback()
                 raise
 
+    def count_rubric_slots(self, project_id: int, rubric_id: int) -> int:
+        """Сколько слотов плана ссылается на рубрику.
+
+        Удаление рубрики осиротило бы эти слоты, поэтому проверка удаления
+        спрашивает именно об этом.
+        """
+        with self._session_factory() as session:
+            return int(
+                session.execute(
+                    text(
+                        "SELECT count(*) FROM content_plan_slots"
+                        " WHERE project_id=:project AND rubric_id=:rubric"
+                    ),
+                    {"project": project_id, "rubric": rubric_id},
+                ).scalar_one()
+            )
+
     # --- канал ------------------------------------------------------------
 
     def get_channel(self, project_id: int) -> tuple[ChannelConnection, str | None] | None:
@@ -342,7 +369,7 @@ def _project(model: ContentProjectModel) -> ContentProject:
     return ContentProject(
         model.id,
         model.name,
-        model.topic,
+        model.project_prompt,
         model.language,
         model.audience,
         model.timezone,
@@ -350,6 +377,9 @@ def _project(model: ContentProjectModel) -> ContentProject:
         model.created_at,
         model.updated_at,
         model.owner_id,
+        model.generation_lead_minutes,
+        model.publication_mode,
+        model.media_reuse_days,
     )
 
 

@@ -33,24 +33,33 @@ class ScheduleSlotClaimModel(Base):
             ["posts.project_id", "posts.id"],
             name="fk_schedule_slot_claims_project_post",
         ),
+        ForeignKeyConstraint(
+            ["project_id", "slot_id"],
+            ["content_plan_slots.project_id", "content_plan_slots.id"],
+            name="fk_schedule_slot_claims_project_slot",
+        ),
         Index(
             "uq_schedule_slot_claims_slot",
             "project_id",
             "kind",
             "scheduled_for",
             text("COALESCE(post_id, 0)"),
+            text("COALESCE(slot_id, 0)"),
             unique=True,
         ),
     )
 
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     project_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("content_projects.id"), primary_key=True
+        BigInteger, ForeignKey("content_projects.id"), nullable=False
     )
-    kind: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
     scheduled_for: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
+        DateTime(timezone=True), nullable=False
     )
     post_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Цель задачи генерации: поста в этот момент ещё нет, есть слот плана.
+    slot_id: Mapped[int | None] = mapped_column(BigInteger)
     claimed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -71,6 +80,11 @@ class ScheduledJobModel(Base):
             ["posts.project_id", "posts.id"],
             name="fk_scheduled_jobs_project_post",
         ),
+        ForeignKeyConstraint(
+            ["project_id", "slot_id"],
+            ["content_plan_slots.project_id", "content_plan_slots.id"],
+            name="fk_scheduled_jobs_project_slot",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -79,6 +93,7 @@ class ScheduledJobModel(Base):
     )
     kind: Mapped[str] = mapped_column(String, nullable=False)
     post_id: Mapped[int | None] = mapped_column(BigInteger)
+    slot_id: Mapped[int | None] = mapped_column(BigInteger)
     scheduled_for: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

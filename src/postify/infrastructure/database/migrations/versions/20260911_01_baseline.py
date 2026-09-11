@@ -25,7 +25,13 @@ depends_on = None
 def upgrade() -> None:
     # Расширение нужно треку пула изображений; включаем сразу, чтобы образ БД
     # и права проверялись один раз, а не в середине работ.
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    #
+    # Явная схема ``public``: расширение глобально на базу, а тип и операторы
+    # видны только по search_path. Без указания схемы оно осело бы в первой
+    # схеме пути — например в тестовой, — и следующий накат в другую схему
+    # получил бы «type vector does not exist», потому что IF NOT EXISTS уже
+    # ничего не создаёт.
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
 
     op.create_table(
         "content_projects",
@@ -306,16 +312,21 @@ def upgrade() -> None:
         ),
     )
 
+    # Ключ суррогатный: идемпотентность обеспечивает уникальный индекс ниже,
+    # который учитывает ещё и цель заявки. Составной первичный ключ по
+    # (project_id, kind, scheduled_for) был бы строже индекса и молча запрещал
+    # вторую задачу того же вида на ту же секунду.
     op.create_table(
         "schedule_slot_claims",
+        sa.Column("id", sa.BigInteger(), primary_key=True),
         sa.Column(
             "project_id",
             sa.BigInteger(),
             sa.ForeignKey("content_projects.id"),
-            primary_key=True,
+            nullable=False,
         ),
-        sa.Column("kind", sa.String(), primary_key=True),
-        sa.Column("scheduled_for", sa.DateTime(timezone=True), primary_key=True),
+        sa.Column("kind", sa.String(), nullable=False),
+        sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=False),
         sa.Column("post_id", sa.BigInteger()),
         sa.Column(
             "claimed_at",

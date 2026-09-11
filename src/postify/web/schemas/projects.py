@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
@@ -17,19 +18,17 @@ class ProjectCreateRequest(RequestSchema):
 
 
 class ProjectUpdateRequest(RequestSchema):
-    """Частичная правка: в действие уходят только переданные поля.
-
-    ``project_prompt``, ``publication_mode``, ``generation_lead_minutes`` и
-    ``media_reuse_days`` из контракта появятся вместе с хранением этих полей
-    (треки промптов, контент-плана и пула изображений). Сейчас они отвергаются
-    как неизвестные, чтобы правка не выглядела принятой.
-    """
+    """Частичная правка: в действие уходят только переданные поля."""
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = Field(default=None, min_length=1, max_length=100)
     language: str | None = Field(default=None, min_length=1, max_length=100)
     audience: str | None = Field(default=None, min_length=1, max_length=500)
     tone: str | None = Field(default=None, min_length=1, max_length=500)
+    project_prompt: str | None = Field(default=None, max_length=20_000)
+    generation_lead_minutes: int | None = Field(default=None, gt=0, le=43_200)
+    publication_mode: Literal["review", "auto"] | None = None
+    media_reuse_days: int | None = Field(default=None, gt=0, le=3650)
 
 
 class ChannelRequest(RequestSchema):

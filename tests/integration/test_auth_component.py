@@ -242,7 +242,7 @@ def test_ownership_and_logout_are_enforced_end_to_end(context) -> None:
             for identifier, owner in ((7, user_id), (8, 999)):
                 connection.execute(
                     text(
-                        "INSERT INTO content_projects (id, name, topic, language,"
+                        "INSERT INTO content_projects (id, name, project_prompt, language,"
                         " audience, timezone, configuration, owner_id, created_at,"
                         " updated_at)"
                         " VALUES (:id, 'Проект', '', 'ru', '', 'Europe/Moscow',"

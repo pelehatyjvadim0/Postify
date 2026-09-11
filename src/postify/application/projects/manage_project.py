@@ -22,7 +22,9 @@ DEFAULT_MEDIA_MAX_BYTES = 10_000_000
 DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 60
 
 CREATE_FIELDS = frozenset({"name", "timezone"})
-EDITABLE_FIELDS = frozenset({"name", "timezone", "language", "audience", "tone"})
+EDITABLE_FIELDS = frozenset(
+    {"name", "timezone", "language", "audience", "tone", "project_prompt"}
+)
 
 # Идентификатор черновика: проверить инварианты домена надо до вставки, а
 # настоящий id выдаёт база.
@@ -57,7 +59,9 @@ class ManageProject:
         draft = ContentProject(
             _DRAFT_ID,
             payload["name"],
-            payload["name"],  # тема остаётся от старой модели и в API её нет
+            # Промпт проекта при создании — название канала: форма создания
+            # больше ничего не спрашивает, дальше его правят в настройках.
+            payload["name"],
             DEFAULT_LANGUAGE,
             DEFAULT_AUDIENCE,
             payload["timezone"],
@@ -71,7 +75,7 @@ class ManageProject:
         return self._repository.create(
             owner_id=owner_id,
             name=draft.name,
-            topic=draft.topic,
+            project_prompt=draft.project_prompt,
             language=draft.language,
             audience=draft.audience,
             timezone=draft.timezone,

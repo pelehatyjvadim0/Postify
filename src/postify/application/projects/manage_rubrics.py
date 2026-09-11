@@ -76,10 +76,10 @@ class ManageRubrics:
     def _ensure_not_in_use(self, project_id: int, rubric_id: int) -> None:
         """Единственная точка проверки ссылок на рубрику.
 
-        Таблицы слотов плана пока нет, проверять нечего. Трек контент-плана
-        добавит в репозиторий ``count_rubric_slots`` — и отсюда начнёт
-        подниматься ``RubricInUse``, которому контракт сопоставляет 409
-        ``rubric_in_use``.
+        Считает слоты плана: удаление рубрики их осиротило бы, поэтому
+        контракт отвечает 409 ``rubric_in_use``. Через ``getattr``, потому что
+        сценарий работает и с репозиторием без плана — так его подменяют тесты
+        соседних сценариев.
         """
         count = getattr(self._repository, "count_rubric_slots", None)
         if count is not None and count(project_id, rubric_id):

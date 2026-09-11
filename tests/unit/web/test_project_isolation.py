@@ -48,7 +48,7 @@ def _guarded(route: APIRoute) -> bool:
 
 def _path(template: str, project_id: int) -> str:
     path = template.replace("{project_id}", str(project_id))
-    for name in ("post_id", "rubric_id", "delivery_id", "operation_id"):
+    for name in ("post_id", "rubric_id", "slot_id", "delivery_id", "operation_id"):
         path = path.replace("{" + name + "}", "7")
     return path
 

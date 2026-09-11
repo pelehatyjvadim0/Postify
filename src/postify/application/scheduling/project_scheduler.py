@@ -18,6 +18,8 @@ class ScheduledCommand:
     kind: Literal["generate_post", "publish_once"]
     scheduled_for: datetime
     post_id: int | None = None
+    # Генерация привязана к слоту плана: поста в этот момент ещё нет.
+    slot_id: int | None = None
     operation_run_id: int | None = None
     job_id: int | None = None
 
@@ -25,6 +27,9 @@ class ScheduledCommand:
 class ScheduleRepository(Protocol):
     def list_schedules(self) -> tuple[ProjectSchedule, ...]: ...
     def due_publications(
+        self, *, project_id: int, now: datetime
+    ) -> tuple[ScheduledCommand, ...]: ...
+    def due_generations(
         self, *, project_id: int, now: datetime
     ) -> tuple[ScheduledCommand, ...]: ...
     def recover_stale_deliveries(self, *, now: datetime) -> int: ...
@@ -36,10 +41,11 @@ class ScheduleRepository(Protocol):
 
 
 class ProjectScheduler:
-    """Один тик: восстановление, отложенные задачи, публикации по плану.
+    """Один тик: восстановление, отложенные задачи, генерации и публикации.
 
-    Постановка генерации по ``generate_at`` добавляется треком контент-плана —
-    для неё достаточно вернуть команды ``generate_post`` из репозитория.
+    Генерация и публикация проходят один и тот же путь «занять слот — взять
+    аренду — выполнить»: разница только в том, что генерация опирается на
+    ``generate_at`` слота плана, а публикация — на время одобренного поста.
     """
 
     def __init__(
@@ -60,9 +66,15 @@ class ProjectScheduler:
             self._run_command(command)
             claimed.append(command)
         for schedule in self._repository.list_schedules():
-            for command in self._repository.due_publications(
-                project_id=schedule.project_id, now=utc_now
-            ):
+            due = (
+                *self._repository.due_generations(
+                    project_id=schedule.project_id, now=utc_now
+                ),
+                *self._repository.due_publications(
+                    project_id=schedule.project_id, now=utc_now
+                ),
+            )
+            for command in due:
                 accepted = self._repository.accept(command)
                 if accepted is None:
                     continue

@@ -25,7 +25,7 @@ def _seed(engine, *, status: str, scheduled_at: datetime | None, channel: bool =
         )
         connection.execute(
             text(
-                "INSERT INTO content_projects(id,owner_id,name,topic,language,audience,"
+                "INSERT INTO content_projects(id,owner_id,name,project_prompt,language,audience,"
                 "timezone,configuration,created_at,updated_at)"
                 " VALUES (1,1,'Агротех','Тема','ru','Все','Europe/Moscow','{}'::jsonb,"
                 ":now,:now)"

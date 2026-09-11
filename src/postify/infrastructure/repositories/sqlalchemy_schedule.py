@@ -71,9 +71,31 @@ class SqlAlchemyScheduleRepository:
                 for row in rows
             )
 
+    def due_generations(self, *, project_id, now) -> tuple[ScheduledCommand, ...]:
+        """Слоты плана, которым пора генерировать.
+
+        Выборка живёт в репозитории плана: условие «пора генерировать» одно на
+        весь проект, и раздваивать его между двумя SQL нельзя.
+        """
+        from postify.infrastructure.repositories.sqlalchemy_plan import (
+            SqlAlchemyPlanRepository,
+        )
+
+        slots = SqlAlchemyPlanRepository(
+            self._session_factory, project_id
+        ).due_generations(now=now)
+        return tuple(
+            ScheduledCommand(
+                project_id, "generate_post", slot.generate_at, slot_id=slot.id
+            )
+            for slot in slots
+        )
+
     def accept(self, command: ScheduledCommand) -> ScheduledCommand | None:
         """Atomically own a route slot, operation run, and recoverable queued job."""
         if command.kind == "publish_once" and command.post_id is None:
+            return None
+        if command.kind == "generate_post" and command.slot_id is None:
             return None
         with self._session_factory() as session:
             try:
@@ -86,8 +108,8 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO schedule_slot_claims
-                            (project_id, kind, scheduled_for, post_id)
-                        VALUES (:project_id, :kind, :scheduled_for, :post_id)
+                            (project_id, kind, scheduled_for, post_id, slot_id)
+                        VALUES (:project_id, :kind, :scheduled_for, :post_id, :slot_id)
                         ON CONFLICT DO NOTHING
                         RETURNING true
                         """
@@ -97,6 +119,7 @@ class SqlAlchemyScheduleRepository:
                         "kind": command.kind,
                         "scheduled_for": command.scheduled_for,
                         "post_id": command.post_id,
+                        "slot_id": command.slot_id,
                     },
                 ).scalar_one_or_none()
                 if claimed is not True:
@@ -121,10 +144,10 @@ class SqlAlchemyScheduleRepository:
                     text(
                         """
                         INSERT INTO scheduled_jobs
-                            (project_id,kind,post_id,scheduled_for,operation_run_id,
-                             status,attempt_count,created_at,updated_at)
-                        VALUES (:project_id,:kind,:post_id,:scheduled_for,:run_id,
-                                'queued',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                            (project_id,kind,post_id,slot_id,scheduled_for,
+                             operation_run_id,status,attempt_count,created_at,updated_at)
+                        VALUES (:project_id,:kind,:post_id,:slot_id,:scheduled_for,
+                                :run_id,'queued',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
                         RETURNING id
                         """
                     ),
@@ -132,6 +155,7 @@ class SqlAlchemyScheduleRepository:
                         "project_id": command.project_id,
                         "kind": command.kind,
                         "post_id": command.post_id,
+                        "slot_id": command.slot_id,
                         "scheduled_for": command.scheduled_for,
                         "run_id": run_id,
                     },
@@ -142,6 +166,7 @@ class SqlAlchemyScheduleRepository:
                     command.kind,
                     command.scheduled_for,
                     post_id=command.post_id,
+                    slot_id=command.slot_id,
                     operation_run_id=run_id,
                     job_id=job_id,
                 )
@@ -168,7 +193,8 @@ class SqlAlchemyScheduleRepository:
                 rows = session.execute(
                     text(
                         f"""
-                        SELECT id,project_id,kind,post_id,scheduled_for,operation_run_id,status
+                        SELECT id,project_id,kind,post_id,slot_id,scheduled_for,
+                               operation_run_id,status
                         FROM scheduled_jobs
                         WHERE true {job_filter}
                           AND (status='queued' OR
@@ -193,9 +219,13 @@ class SqlAlchemyScheduleRepository:
                 ).mappings().all()
                 commands = []
                 for row in rows:
-                    if row.kind == "publish_once" and row.post_id is None:
+                    # Задача без цели невыполнима: гасим её вместе с операцией,
+                    # иначе UI будет вечно опрашивать running.
+                    if (row.kind == "publish_once" and row.post_id is None) or (
+                        row.kind == "generate_post" and row.slot_id is None
+                    ):
                         session.execute(text("UPDATE scheduled_jobs SET status='failed',lease_expires_at=NULL,updated_at=:now WHERE id=:id"), {"id": row.id, "now": now})
-                        session.execute(text("UPDATE operation_runs SET status='failed',failure_code='publish_once_failed',finished_at=:now WHERE id=:id AND status='running'"), {"id": row.operation_run_id, "now": now})
+                        session.execute(text("UPDATE operation_runs SET status='failed',failure_code=:code,finished_at=:now WHERE id=:id AND status='running'"), {"id": row.operation_run_id, "code": f"{row.kind}_failed", "now": now})
                         continue
                     operation_run_id = row.operation_run_id
                     if row.status == "failed":
@@ -246,6 +276,7 @@ class SqlAlchemyScheduleRepository:
                             row.kind,
                             row.scheduled_for,
                             post_id=row.post_id,
+                            slot_id=row.slot_id,
                             operation_run_id=operation_run_id,
                             job_id=row.id,
                         )
