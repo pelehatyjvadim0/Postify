@@ -18,6 +18,11 @@ import httpx
 from sqlalchemy.orm import sessionmaker
 
 from postify.application.delivery.manual_operations import DeliveryNotRetryable
+from postify.application.ai.factory import build_model_gateway
+from postify.application.generation.service import GeneratePost
+from postify.application.media.shortlist import MediaShortlist
+from postify.application.validation.service import ValidationService
+from postify.application.validation.rules import ManageRules, DeriveRules
 from postify.application.projects.check_channel import CheckChannel
 from postify.application.projects.manage_channel import (
     RemoveProjectChannel,
@@ -49,6 +54,9 @@ from postify.infrastructure.repositories.sqlalchemy_projects import (
 from postify.infrastructure.repositories.sqlalchemy_schedule import (
     SqlAlchemyScheduleRepository,
 )
+from postify.infrastructure.repositories.sqlalchemy_generation import SqlAlchemyGenerationRepository
+from postify.infrastructure.repositories.sqlalchemy_media import SqlAlchemyMediaRepository
+from postify.infrastructure.repositories.sqlalchemy_validation import SqlAlchemyRulesRepository, SqlAlchemyValidationJournal
 from postify.infrastructure.security.secrets import SecretCipher
 from postify.web.errors import ConflictError, message_for
 from postify.web.media_api import MediaApi
@@ -62,7 +70,7 @@ DEFAULT_MEDIA_REUSE_DAYS = 30
 # Операции, которые веб-слой умеет выполнять сам. Генерация и перегенерация
 # появятся вместе со шлюзом вызовов модели.
 SUPPORTED_OPERATIONS = frozenset(
-    {OperationKind.PUBLISH_ONCE, OperationKind.RETRY_DELIVERY}
+    {OperationKind.PUBLISH_ONCE, OperationKind.RETRY_DELIVERY, OperationKind.GENERATE_POST, OperationKind.REGENERATE_POST, OperationKind.DERIVE_RULES}
 )
 
 
@@ -115,6 +123,7 @@ class WebApplication:
             self._schedule_repository, self._submit_scheduled
         )
         self._operations = BoundedOperations()
+        self._gateway = build_model_gateway(settings)
         self._media = MediaApi(
             self._sessions, settings, operations=self._operations, clock=self._now
         )
@@ -330,6 +339,19 @@ class WebApplication:
     def reject_post(self, project_id: int, post_id: int) -> dict[str, Any]:
         return self._posts.reject_post(project_id, post_id)
 
+    def regenerate_post(self, project_id: int, post_id: int) -> dict[str, Any]:
+        return {"operation_id": self._submit_operation(project_id, OperationKind.REGENERATE_POST, post_id=post_id, mode="manual", actor="user"), "status": "running"}
+
+    def rules(self, project_id: int):
+        return ManageRules(SqlAlchemyRulesRepository(self._sessions)).list(project_id)
+
+    def replace_rules(self, project_id: int, rules):
+        return ManageRules(SqlAlchemyRulesRepository(self._sessions)).replace(project_id, rules)
+
+    def derive_rules(self, project_id: int) -> dict[str, Any]:
+        run_id = self._submit_operation(project_id, OperationKind.DERIVE_RULES, mode="manual", actor="user")
+        return {"operation_id": run_id, "status": "running"}
+
     def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]:
         return self._posts.post_media(project_id, post_id)
 
@@ -422,6 +444,7 @@ class WebApplication:
             accepted_run_id=command.operation_run_id,
             scheduled_job_id=command.job_id,
             post_id=command.post_id,
+            slot_id=command.slot_id,
         )
 
     def _start_generation(self, project_id: int, slot_id: int) -> int:
@@ -430,9 +453,7 @@ class WebApplication:
         Обработчика ещё нет: операция честно падает с generate_post_failed,
         а не висит в running. Его приносит трек агента генерации.
         """
-        return self._submit_operation(
-            project_id, OperationKind.GENERATE_POST, mode="manual", actor="user"
-        )
+        return self._submit_operation(project_id, OperationKind.GENERATE_POST, slot_id=slot_id, mode="manual", actor="user")
 
     def _submit_operation(
         self,
@@ -442,6 +463,7 @@ class WebApplication:
         accepted_run_id: int | None = None,
         scheduled_job_id: int | None = None,
         post_id: int | None = None,
+        slot_id: int | None = None,
         delivery_id: int | None = None,
         mode: str = "automatic",
         actor: str = "scheduler",
@@ -458,6 +480,21 @@ class WebApplication:
             try:
                 if operation not in SUPPORTED_OPERATIONS:
                     raise RuntimeError("unsupported_operation")
+                if operation in {OperationKind.GENERATE_POST, OperationKind.REGENERATE_POST}:
+                    repository = SqlAlchemyGenerationRepository(self._sessions, project_id)
+                    rules = SqlAlchemyRulesRepository(self._sessions)
+                    validator = ValidationService(self._gateway, rules)
+                    journal_validation = SqlAlchemyValidationJournal(self._sessions)
+                    shortlist = MediaShortlist(SqlAlchemyMediaRepository(self._sessions, project_id), self._gateway, project_id=project_id, clock=self._now)
+                    action = GeneratePost(repository, self._gateway, shortlist, validator, journal_validation, clock=self._now)
+                    result = action.generate(slot_id) if operation == OperationKind.GENERATE_POST else action.regenerate(post_id)
+                    self._finish(journal, run_id, scheduled_job_id, outcome="completed", result={"post_id": result.post_id})
+                    return
+                if operation == OperationKind.DERIVE_RULES:
+                    project = self._projects.get(project_id)
+                    proposed = DeriveRules(self._gateway).execute(project_id=project_id, project_prompt=project.project_prompt, user_id=project.owner_id)
+                    self._finish(journal, run_id, scheduled_job_id, outcome="completed", result={"rules": [{"text": r.text, "severity": r.severity} for r in proposed]})
+                    return
                 with open_project_publish_once(
                     self._settings,
                     project_id=project_id,
@@ -489,12 +526,13 @@ class WebApplication:
         *,
         outcome: str | None = None,
         code: str | None = None,
+        result: dict[str, object] | None = None,
     ) -> None:
         """Закрывает строку журнала и снимает аренду задачи планировщика."""
         now = self._now()
         try:
             if outcome is not None:
-                journal.succeed(run_id, outcome=outcome, now=now)
+                journal.succeed(run_id, outcome=outcome, now=now, result=result)
             else:
                 journal.fail(run_id, failure_code=code, now=now)
         except BaseException:
@@ -569,4 +607,3 @@ def _publication(item, zone: ZoneInfo) -> dict[str, Any]:
             for attempt in item.attempts
         ],
     }
-

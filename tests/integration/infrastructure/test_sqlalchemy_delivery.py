@@ -69,7 +69,7 @@ def _seed_post(
     marker = marker or uuid4().hex
     _seed_project(engine)
     with engine.begin() as connection:
-        return connection.execute(
+        post_id = connection.execute(
             text(
                 "INSERT INTO posts"
                 "(project_id,post_text,media_path,media_mime,status,scheduled_at,created_at,updated_at)"
@@ -86,6 +86,31 @@ def _seed_post(
                 "now": NOW,
             },
         ).scalar_one()
+        if scheduled_at is not None:
+            # Доставка третьей волны адресуется через слот контент-плана.
+            # Микросекунды сохраняют уникальность времени в старых тестах,
+            # где несколько постов раньше делили одну scheduled_at.
+            existing_slots = connection.execute(
+                text("SELECT count(*) FROM content_plan_slots WHERE project_id=:project"),
+                {"project": PROJECT_ID},
+            ).scalar_one()
+            slot_at = scheduled_at - timedelta(
+                microseconds=max(1, 1_000_000 - existing_slots)
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO content_plan_slots"
+                    "(project_id,publish_at,generate_at,topic,status,post_id,created_at,updated_at)"
+                    " VALUES (:project,:at,:at,'Тема','planned',:post,:now,:now)"
+                ),
+                {
+                    "project": PROJECT_ID,
+                    "post": post_id,
+                    "at": slot_at,
+                    "now": NOW,
+                },
+            )
+        return post_id
 
 
 def _repository(engine, **kwargs):
@@ -125,6 +150,23 @@ def test_unplanned_and_future_posts_are_never_reserved(
     engine = create_engine(migrated_database_url)
     _seed_post(engine, marker="no-plan", scheduled_at=None)
     _seed_post(engine, marker="future", scheduled_at=NOW + timedelta(minutes=5))
+    repository = _repository(engine)
+    try:
+        assert repository.reserve_next(now=NOW) is None
+    finally:
+        engine.dispose()
+
+
+def test_approved_post_without_content_plan_slot_is_never_reserved(
+    migrated_database_url: str,
+) -> None:
+    engine = create_engine(migrated_database_url)
+    post_id = _seed_post(engine, marker="orphan", scheduled_at=None)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE posts SET scheduled_at=:at WHERE id=:post"),
+            {"at": NOW - timedelta(minutes=1), "post": post_id},
+        )
     repository = _repository(engine)
     try:
         assert repository.reserve_next(now=NOW) is None

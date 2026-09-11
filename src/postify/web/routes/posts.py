@@ -16,6 +16,7 @@ from postify.web.schemas.posts import (
     PostResponse,
     PostSummaryResponse,
 )
+from postify.web.schemas.operations import AcceptedOperationResponse
 
 
 router = APIRouter(
@@ -66,3 +67,8 @@ def approve_post(project_id: int, post_id: int, container: Container):
 @router.post("/{post_id}/reject", response_model=PostResponse)
 def reject_post(project_id: int, post_id: int, container: Container):
     return container.api.reject_post(project_id, post_id)
+
+
+@router.post("/{post_id}/regenerate", response_model=AcceptedOperationResponse, status_code=202)
+def regenerate_post(project_id: int, post_id: int, container: Container):
+    return container.api.regenerate_post(project_id, post_id)

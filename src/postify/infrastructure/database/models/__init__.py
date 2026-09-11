@@ -32,6 +32,10 @@ from postify.infrastructure.database.models.users import (
     UserSessionModel,
     UserSettingsModel,
 )
+from postify.infrastructure.database.models.validation import (
+    ProjectRuleModel,
+    ValidationReportModel,
+)
 
 
 __all__ = [
@@ -54,4 +58,6 @@ __all__ = [
     "UserModel",
     "UserSessionModel",
     "UserSettingsModel",
+    "ProjectRuleModel",
+    "ValidationReportModel",
 ]

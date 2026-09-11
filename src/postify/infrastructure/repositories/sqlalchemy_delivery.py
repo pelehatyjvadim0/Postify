@@ -58,9 +58,11 @@ class SqlAlchemyDeliveryRepository:
                     SELECT p.id, p.post_text, p.media_path, p.media_mime,
                            d.id AS delivery_id, d.status, d.attempt_no
                     FROM posts p
+                    JOIN content_plan_slots s ON s.project_id=p.project_id
+                                             AND s.post_id=p.id
                     LEFT JOIN deliveries d ON d.post_id = p.id AND d.project_id = p.project_id
                     WHERE p.project_id=:project AND p.status='approved'
-                      AND p.scheduled_at IS NOT NULL AND p.scheduled_at <= :now
+                      AND s.status<>'skipped' AND s.publish_at <= :now
                       AND EXISTS (
                           SELECT 1 FROM channel_connections c
                           WHERE c.project_id=p.project_id AND c.id=:channel_id AND c.enabled
@@ -68,7 +70,7 @@ class SqlAlchemyDeliveryRepository:
                       AND (:post_id < 1 OR p.id=:post_id)
                       AND (:delivery_id < 1 OR d.id=:delivery_id)
                       AND (d.id IS NULL OR d.status='retryable')
-                    ORDER BY p.scheduled_at, p.id
+                    ORDER BY s.publish_at, p.id
                     FOR UPDATE OF p SKIP LOCKED LIMIT 1
                 """), {
                     "project": self.project_id,

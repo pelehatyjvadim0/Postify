@@ -58,16 +58,18 @@ class SqlAlchemyScheduleRepository:
         with self._session_factory() as session:
             self._set_timeouts(session)
             rows = session.execute(text("""
-                SELECT p.id,p.scheduled_at FROM posts p
+                SELECT p.id,s.publish_at FROM posts p
+                JOIN content_plan_slots s ON s.project_id=p.project_id
+                                         AND s.post_id=p.id
                 JOIN channel_connections c ON c.project_id=p.project_id
                 WHERE p.project_id=:project AND p.status='approved'
-                  AND p.scheduled_at<=:now AND c.enabled
+                  AND s.status<>'skipped' AND s.publish_at<=:now AND c.enabled
                     AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.project_id=p.project_id
                     AND d.post_id=p.id AND d.status IN ('sending','published','uncertain','failed'))
-                ORDER BY p.scheduled_at,p.id
+                ORDER BY s.publish_at,p.id
             """), {"project": project_id, "now": now}).all()
             return tuple(
-                ScheduledCommand(project_id, "publish_once", row.scheduled_at, post_id=row.id)
+                ScheduledCommand(project_id, "publish_once", row.publish_at, post_id=row.id)
                 for row in rows
             )
 

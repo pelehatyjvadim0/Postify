@@ -13,6 +13,7 @@ from postify.web.routes import (
     projects,
     prompts,
     rubrics,
+    rules,
 )
 
 
@@ -25,6 +26,7 @@ API_ROUTERS = (
     media.router,
     operations.router,
     prompts.router,
+    rules.router,
 )
 
 

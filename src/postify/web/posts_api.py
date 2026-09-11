@@ -25,6 +25,7 @@ from postify.infrastructure.repositories.sqlalchemy_posts import SqlAlchemyPostR
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
 )
+from postify.infrastructure.repositories.sqlalchemy_validation import SqlAlchemyValidationJournal
 from postify.web.views import at, plain
 
 
@@ -45,6 +46,7 @@ class PostsApi:
         self._dashboard = SqlAlchemyDashboardRepository(session_factory)
         self._projects = SqlAlchemyProjectRepository(session_factory)
         self._now = clock
+        self._validation = SqlAlchemyValidationJournal(session_factory)
 
     # --- чтение -----------------------------------------------------------
 
@@ -64,7 +66,7 @@ class PostsApi:
 
     def post(self, project_id: int, post_id: int) -> dict[str, Any]:
         detail = self._dashboard.post(project_id, post_id)
-        return _post(detail, self._zone(project_id), project_id=project_id)
+        return _post(detail, self._zone(project_id), project_id=project_id, validation=self._validation.report(post_id))
 
     def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]:
         media_path, media_mime = self._dashboard.post_media_path(project_id, post_id)
@@ -127,7 +129,7 @@ def _post_summary(item, zone: ZoneInfo) -> dict[str, Any]:
     }
 
 
-def _post(item, zone: ZoneInfo, *, project_id: int) -> dict[str, Any]:
+def _post(item, zone: ZoneInfo, *, project_id: int, validation: dict[str, Any] | None = None) -> dict[str, Any]:
     delivery = (
         None
         if item.delivery_status is None
@@ -157,7 +159,7 @@ def _post(item, zone: ZoneInfo, *, project_id: int) -> dict[str, Any]:
         ),
         "generation": plain(item.generation),
         # Отчёт слоёв проверок принесёт свой трек.
-        "validation": None,
+        "validation": validation,
         "delivery": delivery,
         "published": at(item.published_at, zone),
         "history": [

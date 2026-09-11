@@ -41,7 +41,7 @@ def _seed(engine, *, status: str, scheduled_at: datetime | None, channel: bool =
                 ),
                 {"now": NOW},
             )
-        return connection.execute(
+        post_id = connection.execute(
             text(
                 "INSERT INTO posts(project_id,post_text,status,scheduled_at,"
                 "created_at,updated_at)"
@@ -49,6 +49,16 @@ def _seed(engine, *, status: str, scheduled_at: datetime | None, channel: bool =
             ),
             {"status": status, "scheduled_at": scheduled_at, "now": NOW},
         ).scalar_one()
+        if scheduled_at is not None:
+            connection.execute(
+                text(
+                    "INSERT INTO content_plan_slots"
+                    "(project_id,publish_at,generate_at,topic,status,post_id,created_at,updated_at)"
+                    " VALUES (1,:at,:at,'Тема','planned',:post,:now,:now)"
+                ),
+                {"post": post_id, "at": scheduled_at, "now": NOW},
+            )
+        return post_id
 
 
 def _repository(engine) -> SqlAlchemyScheduleRepository:
@@ -79,6 +89,50 @@ def test_due_approved_post_becomes_a_publish_command(migrated_database_url: str)
         engine.dispose()
 
     assert [(item.kind, item.post_id) for item in commands] == [("publish_once", post_id)]
+
+
+def test_publication_time_comes_from_linked_plan_slot(
+    migrated_database_url: str,
+) -> None:
+    engine = create_engine(migrated_database_url)
+    slot_time = NOW - timedelta(minutes=1)
+    try:
+        post_id = _seed(
+            engine, status="approved", scheduled_at=NOW + timedelta(hours=1)
+        )
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE content_plan_slots SET publish_at=:at,generate_at=:at "
+                    "WHERE post_id=:post"
+                ),
+                {"at": slot_time, "post": post_id},
+            )
+
+        commands = _repository(engine).due_publications(project_id=1, now=NOW)
+    finally:
+        engine.dispose()
+
+    assert len(commands) == 1
+    assert commands[0].post_id == post_id
+    assert commands[0].scheduled_for == slot_time
+
+
+def test_approved_post_without_plan_slot_is_not_scheduled(
+    migrated_database_url: str,
+) -> None:
+    engine = create_engine(migrated_database_url)
+    try:
+        post_id = _seed(engine, status="approved", scheduled_at=None)
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE posts SET scheduled_at=:at WHERE id=:post"),
+                {"at": NOW - timedelta(minutes=1), "post": post_id},
+            )
+
+        assert _repository(engine).due_publications(project_id=1, now=NOW) == ()
+    finally:
+        engine.dispose()
 
 
 def test_post_without_channel_or_time_is_not_due(migrated_database_url: str) -> None:
