@@ -1,6 +1,5 @@
 import { ApiError } from './errors'
 import { supportLog } from './support'
-import { mockRequest } from '@/mock/server'
 import type {
   LoginRequest,
   LoginStatusResponse,
@@ -67,9 +66,12 @@ function withQuery(path: string, query?: RequestOptions['query']) {
 async function request<T>(method: Method, path: string, options: RequestOptions = {}): Promise<T> {
   const url = withQuery(path, options.query)
 
-  if (USE_MOCKS) {
+  // Условие — литерал сборки, поэтому в прод-бандл мок-модуль не попадает вовсе.
+  if (import.meta.env.VITE_USE_MOCKS === 'true') {
+    const { mockRequest } = await import('@/mock/server')
     return mockRequest<T>(method, url, options.body, options.form).catch((error: unknown) => {
-      if (error instanceof ApiError) supportLog('api_error', { method, url, status: error.status, code: error.code })
+      if (error instanceof ApiError)
+        supportLog('api_error', { method, url, status: error.status, code: error.code })
       throw error
     })
   }
@@ -107,17 +109,24 @@ async function request<T>(method: Method, path: string, options: RequestOptions 
   return payload as T
 }
 
-/** Поллинг длительной операции. Контракт рекомендует интервал 2 секунды. */
+/**
+ * Поллинг длительной операции. Контракт рекомендует интервал 2 секунды.
+ * Опрос прекращается по отмене или по истечении предельного времени, иначе
+ * зависшая на сервере операция опрашивалась бы бесконечно.
+ */
 export async function pollOperation(
   projectId: number,
   operationId: number,
-  options: { signal?: AbortSignal; intervalMs?: number } = {},
+  options: { signal?: AbortSignal; intervalMs?: number; timeoutMs?: number } = {},
 ): Promise<Operation> {
   const interval = options.intervalMs ?? 2000
+  const deadline = Date.now() + (options.timeoutMs ?? 5 * 60 * 1000)
   for (;;) {
     if (options.signal?.aborted) throw new DOMException('aborted', 'AbortError')
     const operation = await api.operation(projectId, operationId)
     if (operation.status !== 'running') return operation
+    if (Date.now() >= deadline)
+      throw new ApiError(504, 'operation_timeout', 'Операция не завершилась за отведённое время')
     await new Promise((resolve) => setTimeout(resolve, interval))
   }
 }
@@ -144,7 +153,8 @@ export const api = {
   updateProject: (id: number, body: Partial<Project>) =>
     request<Project>('PUT', p(id), { body }),
   deleteProject: (id: number) => request<void>('DELETE', p(id)),
-  saveChannel: (id: number, body: { bot_token: string; chat_id: string }) =>
+  // bot_token не передаётся, когда его не меняют: пустая строка стёрла бы токен.
+  saveChannel: (id: number, body: { bot_token?: string; chat_id: string }) =>
     request<ProjectChannel>('PUT', `${p(id)}/channel`, { body }),
   checkChannel: (id: number) => request<ProjectChannel>('POST', `${p(id)}/channel/check`),
   deleteChannel: (id: number) => request<void>('DELETE', `${p(id)}/channel`),

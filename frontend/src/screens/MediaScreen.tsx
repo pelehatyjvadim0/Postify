@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
+import { useAction } from '@/lib/action'
 import { useOperation } from '@/lib/operation'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
@@ -26,27 +27,38 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   const [items, setItems] = React.useState<MediaAsset[]>([])
   const [loading, setLoading] = React.useState(true)
   const [query, setQuery] = React.useState('')
+  // Запрос уходит не на каждый символ, и поздний ответ не перетирает свежий.
+  const [search, setSearch] = React.useState('')
+  const requestId = React.useRef(0)
   const [availableOnly, setAvailableOnly] = React.useState(false)
   const [uploadError, setUploadError] = React.useState<string | null>(null)
   const fileInput = React.useRef<HTMLInputElement>(null)
   const toast = useToast()
   const operation = useOperation(project.id)
 
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(query), 300)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
   const load = React.useCallback(async () => {
+    const id = ++requestId.current
     setLoading(true)
     try {
       const page = await api.media(project.id, {
         available: availableOnly || undefined,
-        q: query || undefined,
+        q: search || undefined,
         limit: 60,
       })
+      if (id !== requestId.current) return
       setItems(page.items)
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пул')
+      if (id === requestId.current)
+        toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пул')
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
-  }, [project.id, availableOnly, query, toast])
+  }, [project.id, availableOnly, search, toast])
 
   React.useEffect(() => {
     void load()
@@ -104,7 +116,11 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
           />
         </div>
         <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
-          <Switch checked={availableOnly} onCheckedChange={setAvailableOnly} />
+          <Switch
+            checked={availableOnly}
+            aria-label="Показывать только доступные изображения"
+            onCheckedChange={setAvailableOnly}
+          />
           только доступные
         </label>
       </AppHeader>
@@ -192,7 +208,7 @@ function AssetCard({
   operation: ReturnType<typeof useOperation>
 }) {
   const caption = CAPTION_LABEL[asset.caption_status]
-  const toast = useToast()
+  const act = useAction()
 
   return (
     <div
@@ -223,9 +239,10 @@ function AssetCard({
         <div className="flex items-center gap-2 pt-0.5">
           <Switch
             checked={asset.enabled}
+            aria-label={asset.enabled ? 'Вывести картинку из подбора' : 'Вернуть картинку в подбор'}
             onCheckedChange={async (enabled) => {
-              await api.updateAsset(projectId, asset.id, { enabled })
-              await onChanged()
+              const { ok } = await act(() => api.updateAsset(projectId, asset.id, { enabled }))
+              if (ok) await onChanged()
             }}
           />
           <span className="text-[11px] leading-tight text-muted-foreground">
@@ -253,13 +270,12 @@ function AssetCard({
             variant="ghost"
             className="ml-auto"
             title="Удалить из пула"
+            aria-label="Удалить изображение из пула"
             onClick={async () => {
-              try {
-                await api.deleteAsset(projectId, asset.id)
-                await onChanged()
-              } catch (error) {
-                toast.error(error instanceof ApiError ? error.message : 'Не удалось удалить')
-              }
+              const { ok } = await act(() => api.deleteAsset(projectId, asset.id), {
+                ok: 'Изображение удалено',
+              })
+              if (ok) await onChanged()
             }}
           >
             <Trash2 className="h-3.5 w-3.5" />

@@ -63,8 +63,36 @@ export function ymd(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
-export function isoWithZone(date: string, time: string, zoneOffset = '+03:00') {
+export function isoWithZone(date: string, time: string, zoneOffset: string) {
   return `${date}T${time}:00${zoneOffset}`
+}
+
+/**
+ * Смещение таймзоны проекта на конкретную дату — с учётом перехода на летнее
+ * время. Контракт требует отдавать publish_at в зоне проекта.
+ */
+export function offsetFor(timeZone: string, date: string, time: string) {
+  try {
+    const instant = new Date(`${date}T${time}:00Z`)
+    const name = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(instant)
+      .find((part) => part.type === 'timeZoneName')?.value
+    const parsed = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name ?? '')
+    if (!parsed) return '+00:00'
+    return `${parsed[1]}${parsed[2].padStart(2, '0')}:${parsed[3] ?? '00'}`
+  } catch {
+    // Неизвестная зона — не выдумываем смещение.
+    return '+00:00'
+  }
+}
+
+/** Сегодняшняя дата в таймзоне проекта. */
+export function todayIn(timeZone: string) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date())
+  } catch {
+    return new Intl.DateTimeFormat('en-CA').format(new Date())
+  }
 }
 
 export function shiftDays(date: string, delta: number) {

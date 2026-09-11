@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
-import { ApiError } from '@/lib/errors'
+import { useAction } from '@/lib/action'
 import { useOperation } from '@/lib/operation'
 import { useSession } from '@/lib/session'
 import { supportLog } from '@/lib/support'
@@ -90,37 +90,51 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
   const [saving, setSaving] = React.useState(false)
   const [chatId, setChatId] = React.useState(project.channel.chat_id ?? '')
   const [botToken, setBotToken] = React.useState('')
+  // Числовые поля держим строкой: иначе очистка поля молча сохраняла бы 0.
+  const [lead, setLead] = React.useState(String(project.generation_lead_minutes))
+  const [reuse, setReuse] = React.useState(String(project.media_reuse_days))
   const toast = useToast()
+  const act = useAction()
 
   React.useEffect(() => {
     setDraft(project)
     setChatId(project.channel.chat_id ?? '')
+    setLead(String(project.generation_lead_minutes))
+    setReuse(String(project.media_reuse_days))
   }, [project])
 
   const set = <K extends keyof Project>(key: K, value: Project[K]) =>
     setDraft((current) => ({ ...current, [key]: value }))
 
   async function save() {
-    setSaving(true)
-    try {
-      await api.updateProject(project.id, {
-        name: draft.name,
-        timezone: draft.timezone,
-        language: draft.language,
-        audience: draft.audience,
-        tone: draft.tone,
-        project_prompt: draft.project_prompt,
-        publication_mode: draft.publication_mode,
-        generation_lead_minutes: draft.generation_lead_minutes,
-        media_reuse_days: draft.media_reuse_days,
-      })
-      toast.ok('Настройки проекта сохранены')
-      onChanged()
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось сохранить')
-    } finally {
-      setSaving(false)
+    const leadMinutes = Number(lead)
+    const reuseDays = Number(reuse)
+    if (!Number.isInteger(leadMinutes) || leadMinutes < 1) {
+      toast.error('Запас на генерацию должен быть целым числом минут больше нуля')
+      return
     }
+    if (!Number.isInteger(reuseDays) || reuseDays < 0) {
+      toast.error('Повтор изображений должен быть целым числом дней')
+      return
+    }
+    setSaving(true)
+    const { ok } = await act(
+      () =>
+        api.updateProject(project.id, {
+          name: draft.name,
+          timezone: draft.timezone,
+          language: draft.language,
+          audience: draft.audience,
+          tone: draft.tone,
+          project_prompt: draft.project_prompt,
+          publication_mode: draft.publication_mode,
+          generation_lead_minutes: leadMinutes,
+          media_reuse_days: reuseDays,
+        }),
+      { ok: 'Настройки проекта сохранены' },
+    )
+    setSaving(false)
+    if (ok) onChanged()
   }
 
   return (
@@ -229,8 +243,9 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           >
             <Input
               type="number"
-              value={draft.generation_lead_minutes}
-              onChange={(event) => set('generation_lead_minutes', Number(event.target.value))}
+              min={1}
+              value={lead}
+              onChange={(event) => setLead(event.target.value)}
             />
           </Field>
           <Field
@@ -244,8 +259,9 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           >
             <Input
               type="number"
-              value={draft.media_reuse_days}
-              onChange={(event) => set('media_reuse_days', Number(event.target.value))}
+              min={0}
+              value={reuse}
+              onChange={(event) => setReuse(event.target.value)}
             />
           </Field>
         </div>
@@ -299,10 +315,19 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           <Button
             size="sm"
             variant="outline"
+            disabled={!chatId || (!project.channel.configured && !botToken)}
             onClick={async () => {
-              await api.saveChannel(project.id, { bot_token: botToken, chat_id: chatId })
+              // Пустой токен не отправляем: сервер не отличит «не менять» от «стереть».
+              const { ok } = await act(
+                () =>
+                  api.saveChannel(project.id, {
+                    chat_id: chatId,
+                    ...(botToken ? { bot_token: botToken } : {}),
+                  }),
+                { ok: 'Канал сохранён' },
+              )
+              if (!ok) return
               setBotToken('')
-              toast.ok('Канал сохранён')
               onChanged()
             }}
           >
@@ -311,8 +336,10 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           <Button
             size="sm"
             variant="outline"
+            disabled={!project.channel.configured}
             onClick={async () => {
-              const channel = await api.checkChannel(project.id)
+              const { value: channel } = await act(() => api.checkChannel(project.id))
+              if (!channel) return
               supportLog('channel_checked', { project_id: project.id, status: channel.status })
               if (channel.status === 'ok') toast.ok('Канал отвечает')
               else toast.error('Канал не отвечает')
@@ -344,15 +371,32 @@ function RubricsForm({ project }: { project: Project }) {
   const [rubrics, setRubrics] = React.useState<Rubric[]>([])
   const [name, setName] = React.useState('')
   const [instructions, setInstructions] = React.useState('')
-  const toast = useToast()
+  const act = useAction()
 
   const load = React.useCallback(async () => {
-    setRubrics(await api.rubrics(project.id))
-  }, [project.id])
+    const { value } = await act(() => api.rubrics(project.id), { fail: 'Не удалось загрузить рубрики' })
+    if (value) setRubrics(value)
+  }, [project.id, act])
 
   React.useEffect(() => {
     void load()
   }, [load])
+
+  const patch = (id: number, changes: Partial<Rubric>) =>
+    setRubrics((list) => list.map((item) => (item.id === id ? { ...item, ...changes } : item)))
+
+  /** Сохраняем ровно ту рубрику, которую правили, не перезагружая список:
+   *  перезагрузка стирала бы несохранённые правки соседних полей. */
+  async function persist(rubric: Rubric) {
+    const { value } = await act(() =>
+      api.updateRubric(project.id, rubric.id, {
+        name: rubric.name,
+        instructions: rubric.instructions,
+        enabled: rubric.enabled,
+      }),
+    )
+    if (value) patch(rubric.id, value)
+  }
 
   return (
     <>
@@ -373,20 +417,17 @@ function RubricsForm({ project }: { project: Project }) {
               <div className="flex items-center gap-2">
                 <Input
                   value={rubric.name}
+                  aria-label="Название рубрики"
                   className="h-8 max-w-[220px] text-[13px]"
-                  onChange={(event) =>
-                    setRubrics((list) =>
-                      list.map((item) =>
-                        item.id === rubric.id ? { ...item, name: event.target.value } : item,
-                      ),
-                    )
-                  }
+                  onChange={(event) => patch(rubric.id, { name: event.target.value })}
+                  onBlur={() => persist(rubric)}
                 />
                 <Switch
                   checked={rubric.enabled}
-                  onCheckedChange={async (enabled) => {
-                    await api.updateRubric(project.id, rubric.id, { enabled })
-                    await load()
+                  aria-label={rubric.enabled ? 'Выключить рубрику' : 'Включить рубрику'}
+                  onCheckedChange={(enabled) => {
+                    patch(rubric.id, { enabled })
+                    void persist({ ...rubric, enabled })
                   }}
                 />
                 <span className="text-[11px] text-muted-foreground">
@@ -396,16 +437,14 @@ function RubricsForm({ project }: { project: Project }) {
                   size="icon-sm"
                   variant="ghost"
                   className="ml-auto"
+                  title="Удалить рубрику"
+                  aria-label="Удалить рубрику"
                   onClick={async () => {
-                    try {
-                      await api.deleteRubric(project.id, rubric.id)
-                      await load()
-                    } catch (error) {
-                      // 409 rubric_in_use: рубрику держат слоты плана.
-                      toast.error(
-                        error instanceof ApiError ? error.message : 'Не удалось удалить рубрику',
-                      )
-                    }
+                    // 409 rubric_in_use: рубрику держат слоты плана.
+                    const { ok } = await act(() => api.deleteRubric(project.id, rubric.id), {
+                      ok: 'Рубрика удалена',
+                    })
+                    if (ok) await load()
                   }}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -413,16 +452,11 @@ function RubricsForm({ project }: { project: Project }) {
               </div>
               <Textarea
                 rows={2}
+                aria-label="Инструкция рубрики"
                 className="mt-2 text-[13px]"
                 value={rubric.instructions}
-                onChange={(event) =>
-                  setRubrics((list) =>
-                    list.map((item) =>
-                      item.id === rubric.id ? { ...item, instructions: event.target.value } : item,
-                    ),
-                  )
-                }
-                onBlur={() => api.updateRubric(project.id, rubric.id, rubric)}
+                onChange={(event) => patch(rubric.id, { instructions: event.target.value })}
+                onBlur={() => persist(rubric)}
               />
             </div>
           ))}
@@ -439,7 +473,11 @@ function RubricsForm({ project }: { project: Project }) {
         }
       >
         <div className="space-y-2">
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Название" />
+          <Input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Название"
+          />
           <Textarea
             rows={2}
             value={instructions}
@@ -450,7 +488,10 @@ function RubricsForm({ project }: { project: Project }) {
             size="sm"
             disabled={!name}
             onClick={async () => {
-              await api.createRubric(project.id, { name, instructions })
+              const { ok } = await act(() => api.createRubric(project.id, { name, instructions }), {
+                ok: 'Рубрика добавлена',
+              })
+              if (!ok) return
               setName('')
               setInstructions('')
               await load()
@@ -469,11 +510,12 @@ function RulesForm({ project }: { project: Project }) {
   const [rules, setRules] = React.useState<Rule[]>([])
   const [proposal, setProposal] = React.useState<Rule[] | null>(null)
   const operation = useOperation(project.id)
-  const toast = useToast()
+  const act = useAction()
 
   const load = React.useCallback(async () => {
-    setRules(await api.rules(project.id))
-  }, [project.id])
+    const { value } = await act(() => api.rules(project.id), { fail: 'Не удалось загрузить правила' })
+    if (value) setRules(value)
+  }, [project.id, act])
 
   React.useEffect(() => {
     void load()
@@ -500,6 +542,7 @@ function RulesForm({ project }: { project: Project }) {
             <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-border p-2.5">
               <Input
                 value={rule.text}
+                aria-label="Текст правила"
                 className="h-8 flex-1 text-[13px]"
                 onChange={(event) => update(rule.id, { text: event.target.value })}
               />
@@ -507,7 +550,7 @@ function RulesForm({ project }: { project: Project }) {
                 value={rule.severity}
                 onValueChange={(value) => update(rule.id, { severity: value as Rule['severity'] })}
               >
-                <SelectTrigger className="h-8 w-[110px] text-[13px]">
+                <SelectTrigger aria-label="Строгость правила" className="h-8 w-[150px] text-[13px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -518,11 +561,14 @@ function RulesForm({ project }: { project: Project }) {
               <Badge tone="muted">{rule.origin === 'derived' ? 'из промпта' : 'вручную'}</Badge>
               <Switch
                 checked={rule.enabled}
+                aria-label={rule.enabled ? 'Выключить правило' : 'Включить правило'}
                 onCheckedChange={(enabled) => update(rule.id, { enabled })}
               />
               <Button
                 size="icon-sm"
                 variant="ghost"
+                title="Убрать правило из списка"
+                aria-label="Убрать правило из списка"
                 onClick={() => setRules((list) => list.filter((item) => item.id !== rule.id))}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -534,9 +580,10 @@ function RulesForm({ project }: { project: Project }) {
           <Button
             size="sm"
             onClick={async () => {
-              await api.saveRules(project.id, rules)
-              toast.ok('Правила сохранены')
-              await load()
+              const { value } = await act(() => api.saveRules(project.id, rules), {
+                ok: 'Правила сохранены',
+              })
+              if (value) setRules(value)
             }}
           >
             Сохранить правила
@@ -619,7 +666,7 @@ function RulesForm({ project }: { project: Project }) {
 function AccountForm() {
   const { user, setUser, logout } = useSession()
   const [prompt, setPrompt] = React.useState(user?.common_prompt ?? '')
-  const toast = useToast()
+  const act = useAction()
 
   if (!user) return null
 
@@ -657,9 +704,10 @@ function AccountForm() {
         <Button
           size="sm"
           onClick={async () => {
-            const saved = await api.saveCommonPrompt(prompt)
-            setUser({ ...user, common_prompt: saved.common_prompt })
-            toast.ok('Общий промпт сохранён')
+            const { value } = await act(() => api.saveCommonPrompt(prompt), {
+              ok: 'Общий промпт сохранён',
+            })
+            if (value) setUser({ ...user, common_prompt: value.common_prompt })
           }}
         >
           Сохранить
@@ -674,7 +722,11 @@ function AccountForm() {
           </FieldHelp>
         }
       >
-        <Button size="sm" variant="outline" onClick={() => void logout()}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void act(() => logout(), { fail: 'Не удалось выйти' })}
+        >
           Выйти
         </Button>
       </Section>

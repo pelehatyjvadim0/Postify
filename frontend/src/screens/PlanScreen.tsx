@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { AppHeader } from '@/components/AppHeader'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { PostPanel } from '@/components/plan/PostPanel'
 import { SlotDialog, type SlotDraft } from '@/components/plan/SlotDialog'
 import { SlotPeek, useSlotPeek } from '@/components/plan/SlotPeek'
@@ -14,19 +15,18 @@ import {
   daysInMonth,
   monthTitle,
   shiftDays,
+  todayIn,
   weekRangeLabel,
   weekStart,
   ymd,
 } from '@/lib/dates'
+import { useAction } from '@/lib/action'
 import { useOperation } from '@/lib/operation'
 import { useToast } from '@/lib/toast'
 import type { Project, Rubric, Slot } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 type View = 'list' | 'week' | 'month'
-
-// Демонстрационный «сегодня»: моки описывают октябрь 2026.
-const TODAY = '2026-10-09'
 
 export function PlanScreen({
   project,
@@ -38,8 +38,10 @@ export function PlanScreen({
   /** Слот, на который нужно открыть план — например, при переходе из «Постов». */
   focus?: { date: string; slotId: number } | null
 }) {
+  // «Сегодня» считается в таймзоне проекта, а не браузера.
+  const today = React.useMemo(() => todayIn(project.timezone), [project.timezone])
   const [view, setView] = React.useState<View>('list')
-  const [anchor, setAnchor] = React.useState(TODAY)
+  const [anchor, setAnchor] = React.useState(today)
   const [slots, setSlots] = React.useState<Slot[]>([])
   const [rubrics, setRubrics] = React.useState<Rubric[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -48,7 +50,9 @@ export function PlanScreen({
   const [wideWeekend, setWideWeekend] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [draft, setDraft] = React.useState<SlotDraft | null>(null)
+  const [pendingDelete, setPendingDelete] = React.useState<Slot | null>(null)
   const peek = useSlotPeek()
+  const act = useAction()
   const toast = useToast()
   const operation = useOperation(project.id)
 
@@ -62,6 +66,14 @@ export function PlanScreen({
     setAnchor(focus.date)
     setSelectedId(focus.slotId)
   }, [focusKey, focus])
+
+  const appliedProject = React.useRef(project.id)
+  React.useEffect(() => {
+    if (appliedProject.current === project.id) return
+    appliedProject.current = project.id
+    setAnchor(today)
+    setSelectedId(null)
+  }, [project.id, today])
 
   const [year, month] = [Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7))]
   const range = React.useMemo(() => {
@@ -130,21 +142,37 @@ export function PlanScreen({
   async function approve(slot: Slot) {
     peek.close()
     if (!slot.post) return
-    try {
-      await api.approvePost(project.id, slot.post.id)
-      toast.ok('Пост одобрен')
-      await load()
-      onProjectChanged()
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось одобрить пост')
-    }
+    const { ok } = await act(() => api.approvePost(project.id, slot.post!.id), { ok: 'Пост одобрен' })
+    if (!ok) return
+    await load()
+    onProjectChanged()
+  }
+
+  async function skip(slot: Slot) {
+    peek.close()
+    const { ok } = await act(() => api.skipSlot(project.id, slot.id), { ok: 'Слот пропущен' })
+    if (!ok) return
+    await load()
+    onProjectChanged()
+  }
+
+  async function removeSlot(slot: Slot) {
+    const { ok } = await act(() => api.deleteSlot(project.id, slot.id), { ok: 'Слот удалён' })
+    if (!ok) return
+    setSelectedId(null)
+    await load()
+    onProjectChanged()
   }
 
   const viewProps = {
     slots,
     selectedId,
-    today: TODAY,
-    onSelect: (slot: Slot) => setSelectedId(slot.id),
+    today,
+    onSelect: (slot: Slot) => {
+      // Предпросмотр висит справа и перекрывал бы панель поста.
+      peek.close()
+      setSelectedId(slot.id)
+    },
     onAdd: (date: string) => setDraft({ slot: null, date }),
     bindPeek: peek.bind,
   }
@@ -195,11 +223,23 @@ export function PlanScreen({
           ))}
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" onClick={() => shiftPeriod(-1)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Предыдущий период"
+            aria-label="Предыдущий период"
+            onClick={() => shiftPeriod(-1)}
+          >
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="px-1 text-sm font-medium tabular-nums">{periodLabel}</span>
-          <Button variant="ghost" size="icon-sm" onClick={() => shiftPeriod(1)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Следующий период"
+            aria-label="Следующий период"
+            onClick={() => shiftPeriod(1)}
+          >
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
@@ -250,6 +290,8 @@ export function PlanScreen({
           onEditTopic={(slot) => setDraft({ slot, date: slot.publish_at.slice(0, 10) })}
           onGenerate={generate}
           onRegenerate={regenerate}
+          onSkip={skip}
+          onDelete={(slot) => setPendingDelete(slot)}
           onChanged={() => {
             void load()
             onProjectChanged()
@@ -268,19 +310,25 @@ export function PlanScreen({
           onGenerate: generate,
           onApprove: approve,
           onRegenerate: regenerate,
+          onSkip: skip,
           onOpen: (slot) => {
-            peek.close()
-            setSelectedId(slot.id)
-          },
-          onUnskip: (slot) => {
             peek.close()
             setSelectedId(slot.id)
           },
         }}
       />
 
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Удалить слот из плана?"
+        description="Слот и связанный с ним пост исчезнут из плана. Действие необратимо."
+        onConfirm={() => pendingDelete && void removeSlot(pendingDelete)}
+        onClose={() => setPendingDelete(null)}
+      />
+
       <SlotDialog
         projectId={project.id}
+        timezone={project.timezone}
         draft={draft}
         rubrics={rubrics}
         onClose={() => setDraft(null)}
@@ -289,11 +337,7 @@ export function PlanScreen({
           void load()
           onProjectChanged()
         }}
-        onDeleted={() => {
-          setSelectedId(null)
-          void load()
-          onProjectChanged()
-        }}
+        onDeleteRequest={(slot) => setPendingDelete(slot)}
       />
     </div>
   )

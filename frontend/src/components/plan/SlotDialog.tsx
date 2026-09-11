@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
-import { dayKey, isoWithZone, timeOf } from '@/lib/dates'
+import { dayKey, isoWithZone, offsetFor, timeOf } from '@/lib/dates'
 import { TOPIC_SPECIFICS_HINT } from '@/lib/status'
 import type { Rubric, Slot } from '@/lib/types'
 
@@ -19,18 +19,21 @@ export interface SlotDraft {
 
 export function SlotDialog({
   projectId,
+  timezone,
   draft,
   rubrics,
   onClose,
   onSaved,
-  onDeleted,
+  onDeleteRequest,
 }: {
   projectId: number
+  /** Таймзона проекта: publish_at обязан нести именно её смещение. */
+  timezone: string
   draft: SlotDraft | null
   rubrics: Rubric[]
   onClose: () => void
   onSaved: (slot: Slot) => void
-  onDeleted: (slot: Slot) => void
+  onDeleteRequest: (slot: Slot) => void
 }) {
   const slot = draft?.slot ?? null
   const [date, setDate] = React.useState('')
@@ -57,7 +60,7 @@ export function SlotDialog({
     setSaving(true)
     setError(null)
     try {
-      const publishAt = isoWithZone(date, time)
+      const publishAt = isoWithZone(date, time, offsetFor(timezone, date, time))
       const rubric = rubricId === 'none' ? null : Number(rubricId)
       const saved = slot
         ? await api.updateSlot(projectId, slot.id, {
@@ -155,10 +158,9 @@ export function SlotDialog({
               <Button
                 variant="ghost"
                 className="ml-auto text-muted-foreground"
-                onClick={async () => {
-                  await api.deleteSlot(projectId, slot.id)
-                  onDeleted(slot)
+                onClick={() => {
                   onClose()
+                  onDeleteRequest(slot)
                 }}
               >
                 Удалить слот

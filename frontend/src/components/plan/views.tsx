@@ -217,6 +217,8 @@ export function WeekView({
                 })}
                 <button
                   onClick={() => onAdd(date)}
+                  title="Добавить пост на этот день"
+                  aria-label="Добавить пост на этот день"
                   className="flex h-7 w-full items-center justify-center rounded-md border border-dashed border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -309,6 +311,8 @@ export function MonthView({
                 {inMonth && (
                   <button
                     onClick={() => onAdd(date)}
+                    title="Добавить пост на этот день"
+                    aria-label="Добавить пост на этот день"
                     className="grid h-5 w-5 place-items-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
                   >
                     <Plus className="h-3.5 w-3.5" />

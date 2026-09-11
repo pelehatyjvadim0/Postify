@@ -49,6 +49,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <p className="min-w-0 flex-1 text-[13px] leading-relaxed">{item.text}</p>
             <button
               onClick={() => setItems((list) => list.filter((x) => x.id !== item.id))}
+              title="Закрыть уведомление"
+              aria-label="Закрыть уведомление"
               className="grid h-5 w-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" />

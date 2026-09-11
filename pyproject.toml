@@ -35,12 +35,8 @@ postify = [
     "infrastructure/database/migrations/*.py",
     "infrastructure/database/migrations/versions/*.py",
     "web/static/index.html",
-    "web/static/styles.css",
-    "web/static/app.js",
-    "web/static/api.js",
-    "web/static/screens.js",
-    "web/static/settings.js",
-    "web/static/workspace.js",
+    "web/static/assets/*.js",
+    "web/static/assets/*.css",
 ]
 
 [tool.pytest.ini_options]

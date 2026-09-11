@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, pollOperation } from './api'
+import { pollOperation } from './api'
 import { ApiError } from './errors'
 import type { Operation } from './types'
 import { supportLog } from './support'
@@ -13,10 +13,17 @@ export function useOperation(projectId: number | null) {
   const [running, setRunning] = useState(false)
   const [lastError, setLastError] = useState<string | null>(null)
   const aborted = useRef(false)
+  const controller = useRef<AbortController | null>(null)
   const toast = useToast()
 
-  useEffect(() => () => {
-    aborted.current = true
+  useEffect(() => {
+    // Флаг сбрасывается при каждом монтировании: в StrictMode эффект
+    // выполняется дважды, иначе после первой размонтировки он залипал.
+    aborted.current = false
+    return () => {
+      aborted.current = true
+      controller.current?.abort()
+    }
   }, [])
 
   const run = useCallback(
@@ -36,7 +43,10 @@ export function useOperation(projectId: number | null) {
         const { operation_id } = await start()
         supportLog('operation_started', { project_id: projectId, operation_id })
         await options.onStarted?.()
-        const operation = await pollOperation(projectId, operation_id)
+        controller.current = new AbortController()
+        const operation = await pollOperation(projectId, operation_id, {
+          signal: controller.current.signal,
+        })
         if (aborted.current) return operation
         supportLog('operation_finished', {
           operation_id,
@@ -54,6 +64,7 @@ export function useOperation(projectId: number | null) {
         }
         return operation
       } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return null
         const message =
           error instanceof ApiError ? error.message : 'Не удалось выполнить операцию'
         if (!aborted.current) {
@@ -69,9 +80,4 @@ export function useOperation(projectId: number | null) {
   )
 
   return { run, running, lastError }
-}
-
-/** Список последних операций проекта — для экрана истории. */
-export async function recentOperations(projectId: number) {
-  return api.operations(projectId, 20)
 }

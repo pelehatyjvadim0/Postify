@@ -86,7 +86,14 @@ export function AuthScreen() {
 
   return (
     <div className="grid min-h-screen place-items-center px-4">
-      <Button variant="outline" size="icon" onClick={toggle} className="absolute right-4 top-4">
+      <Button
+        variant="outline"
+        size="icon"
+        onClick={toggle}
+        title="Сменить тему"
+        aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
+        className="absolute right-4 top-4"
+      >
         {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
       </Button>
 

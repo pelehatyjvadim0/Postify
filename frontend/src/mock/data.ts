@@ -10,11 +10,21 @@ import type {
   ValidationReport,
 } from '@/lib/types'
 
-// Демонстрационные данные на октябрь 2026 в таймзоне проекта (+03:00).
+// Демонстрационные данные строятся вокруг текущего месяца, чтобы план не
+// открывался пустым. Время — в таймзоне проекта (+03:00).
 export const TZ = '+03:00'
 
+const NOW = new Date()
+const YEAR = NOW.getFullYear()
+const MONTH = NOW.getMonth() + 1
+const DAYS_IN_MONTH = new Date(YEAR, MONTH, 0).getDate()
+/** Сдвиг заготовок: день 9 в наборе означает «сегодня». */
+const SHIFT = NOW.getDate() - 9
+
+const clampDay = (day: number) => Math.min(Math.max(day + SHIFT, 1), DAYS_IN_MONTH)
+
 export function iso(day: number, time: string) {
-  return `2026-10-${String(day).padStart(2, '0')}T${time}:00${TZ}`
+  return `${YEAR}-${String(MONTH).padStart(2, '0')}-${String(clampDay(day)).padStart(2, '0')}T${time}:00${TZ}`
 }
 
 /** Сдвиг времени с сохранением смещения проекта: сервер отдаёт его зону. */

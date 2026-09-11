@@ -20,6 +20,8 @@ interface Props {
   onEditTopic: (slot: Slot) => void
   onGenerate: (slot: Slot) => void
   onRegenerate: (slot: Slot) => void
+  onSkip: (slot: Slot) => void
+  onDelete: (slot: Slot) => void
   onChanged: () => void
   operationRunning: boolean
 }
@@ -30,6 +32,8 @@ export function PostPanel({
   onEditTopic,
   onGenerate,
   onRegenerate,
+  onSkip,
+  onDelete,
   onChanged,
   operationRunning,
 }: Props) {
@@ -152,6 +156,28 @@ export function PostPanel({
               Сгенерировать сейчас
             </Button>
           )}
+          <div className="ml-auto flex items-center gap-1">
+            {slot.status !== 'skipped' && slot.status !== 'published' && (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={() => onSkip(slot)}
+              >
+                Пропустить
+              </Button>
+            )}
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              title="Удалить слот из плана"
+              aria-label="Удалить слот из плана"
+              onClick={() => onDelete(slot)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -266,17 +292,6 @@ export function PostPanel({
               >
                 {operationRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Переписать
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                title="Удалить слот"
-                onClick={async () => {
-                  await api.deleteSlot(projectId, slot.id)
-                  onChanged()
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
               </Button>
             </div>
           )}

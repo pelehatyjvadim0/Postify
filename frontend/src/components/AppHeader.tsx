@@ -19,7 +19,13 @@ export function AppHeader({
       {children}
       <div className="ml-auto flex items-center gap-2">
         {actions}
-        <Button variant="outline" size="icon" title="Сменить тему" onClick={toggle}>
+        <Button
+          variant="outline"
+          size="icon"
+          title="Сменить тему"
+          aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
+          onClick={toggle}
+        >
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </Button>
       </div>

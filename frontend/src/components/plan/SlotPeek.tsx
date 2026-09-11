@@ -8,6 +8,8 @@ import type { Slot } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const WIDTH = 320
+/** Ширина правой панели поста: предпросмотр не должен её перекрывать. */
+const PANEL_WIDTH = 400
 
 export interface PeekActions {
   onEditTopic: (slot: Slot) => void
@@ -15,7 +17,7 @@ export interface PeekActions {
   onApprove: (slot: Slot) => void
   onRegenerate: (slot: Slot) => void
   onOpen: (slot: Slot) => void
-  onUnskip: (slot: Slot) => void
+  onSkip: (slot: Slot) => void
 }
 
 interface PeekState {
@@ -44,9 +46,11 @@ export function useSlotPeek() {
     showTimer.current = window.setTimeout(() => {
       const rect = element.getBoundingClientRect()
       const gap = 10
+      // Справа заканчиваем до панели поста, иначе карточка накрывает её кнопки.
+      const limit = innerWidth - PANEL_WIDTH - 8
       let left = rect.right + gap
-      if (left + WIDTH > innerWidth - 8) left = rect.left - WIDTH - gap
-      if (left < 8) left = 8
+      if (left + WIDTH > limit) left = rect.left - WIDTH - gap
+      if (left < 8) left = Math.max(8, Math.min(rect.right + gap, limit - WIDTH))
       let top = rect.top - 8
       if (top + height.current > innerHeight - 8) top = innerHeight - height.current - 8
       if (top < 8) top = 8
@@ -59,7 +63,11 @@ export function useSlotPeek() {
       if (event.key === 'Escape') setState(null)
     }
     addEventListener('keydown', onKey)
-    return () => removeEventListener('keydown', onKey)
+    return () => {
+      removeEventListener('keydown', onKey)
+      window.clearTimeout(showTimer.current)
+      window.clearTimeout(hideTimer.current)
+    }
   }, [])
 
   const bind = React.useCallback(
@@ -131,6 +139,9 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
           <Button size="sm" className="flex-1" onClick={() => actions.onEditTopic(slot)}>
             Заполнить тему
           </Button>
+          <Button size="sm" variant="outline" onClick={() => actions.onSkip(slot)}>
+            Пропустить
+          </Button>
         </div>
       </div>
     )
@@ -171,8 +182,8 @@ function PeekBody({ slot, actions }: { slot: Slot; actions: PeekActions }) {
           Слот пропущен вручную. Агент его не возьмёт, публикации не будет.
         </p>
         <div className="mt-3 flex gap-2">
-          <Button size="sm" className="flex-1" onClick={() => actions.onEditTopic(slot)}>
-            Вернуть в план
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => actions.onOpen(slot)}>
+            Открыть слот
           </Button>
         </div>
       </div>
