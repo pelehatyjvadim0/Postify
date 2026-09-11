@@ -7,10 +7,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
-from pathlib import Path
 from threading import Lock
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -44,7 +43,6 @@ from postify.infrastructure.repositories.sqlalchemy_observability import (
     SqlAlchemyOperationRunRepository,
 )
 from postify.infrastructure.repositories.sqlalchemy_plan import SqlAlchemyPlanRepository
-from postify.infrastructure.repositories.sqlalchemy_posts import SqlAlchemyPostRepository
 from postify.infrastructure.repositories.sqlalchemy_projects import (
     SqlAlchemyProjectRepository,
 )
@@ -54,6 +52,8 @@ from postify.infrastructure.repositories.sqlalchemy_schedule import (
 from postify.infrastructure.security.secrets import SecretCipher
 from postify.web.errors import ConflictError, message_for
 from postify.web.media_api import MediaApi
+from postify.web.posts_api import PostsApi
+from postify.web.views import at, plain
 
 
 # Политика повторов изображений ещё без хранения: её принесёт трек пула.
@@ -116,6 +116,9 @@ class WebApplication:
         )
         self._operations = BoundedOperations()
         self._media = MediaApi(
+            self._sessions, settings, operations=self._operations, clock=self._now
+        )
+        self._posts = PostsApi(
             self._sessions, settings, operations=self._operations, clock=self._now
         )
         self._cipher = (
@@ -302,15 +305,12 @@ class WebApplication:
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        zone = self._zone(project_id)
-        items = self._dashboard.posts(
+        return self._posts.posts(
             project_id, status=status, limit=limit, offset=offset
         )
-        return [_post_summary(item, zone) for item in items]
 
     def post(self, project_id: int, post_id: int) -> dict[str, Any]:
-        detail = self._dashboard.post(project_id, post_id)
-        return _post(detail, self._zone(project_id), project_id=project_id)
+        return self._posts.post(project_id, post_id)
 
     def update_post(
         self,
@@ -320,33 +320,18 @@ class WebApplication:
         post_text: str | None = None,
         scheduled_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Правка редактора: время публикации и текст поста.
-
-        ``scheduled_at`` здесь временно — до появления слотов контент-плана,
-        которые станут единственным местом планирования.
-        """
-        posts = self._posts_for(project_id)
-        if scheduled_at is not None:
-            posts.save_plan(post_id, scheduled_at=scheduled_at, now=self._now())
-        if post_text is not None:
-            posts.save_text(post_id, post_text=post_text, now=self._now())
-        return self.post(project_id, post_id)
+        return self._posts.update_post(
+            project_id, post_id, post_text=post_text, scheduled_at=scheduled_at
+        )
 
     def approve_post(self, project_id: int, post_id: int) -> dict[str, Any]:
-        self._posts_for(project_id).approve(post_id, now=self._now())
-        return self.post(project_id, post_id)
+        return self._posts.approve_post(project_id, post_id)
 
     def reject_post(self, project_id: int, post_id: int) -> dict[str, Any]:
-        self._posts_for(project_id).reject(post_id, now=self._now())
-        return self.post(project_id, post_id)
+        return self._posts.reject_post(project_id, post_id)
 
     def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]:
-        media_path, media_mime = self._dashboard.post_media_path(project_id, post_id)
-        try:
-            return Path(media_path).read_bytes(), media_mime
-        except OSError:
-            # Файл удалён уборкой после публикации: для клиента это 404.
-            raise LookupError(post_id) from None
+        return self._posts.post_media(project_id, post_id)
 
     # --- журнал и публикации ---------------------------------------------
 
@@ -533,68 +518,6 @@ def _rubric(item) -> dict[str, Any]:
     }
 
 
-def _at(value: datetime | None, zone: ZoneInfo) -> datetime | None:
-    return None if value is None else value.astimezone(zone)
-
-
-def _post_summary(item, zone: ZoneInfo) -> dict[str, Any]:
-    return {
-        "id": item.id,
-        "status": item.status,
-        "excerpt": item.excerpt,
-        "char_count": item.char_count,
-        "media_available": item.media_available,
-        "scheduled_at": _at(item.scheduled_at, zone),
-        "delivery_status": item.delivery_status,
-        "created_at": _at(item.created_at, zone),
-        "updated_at": _at(item.updated_at, zone),
-    }
-
-
-def _post(item, zone: ZoneInfo, *, project_id: int) -> dict[str, Any]:
-    delivery = (
-        None
-        if item.delivery_status is None
-        else {
-            "status": item.delivery_status,
-            "message_id": item.delivery_message_id,
-            "failure_code": item.failure_code,
-            "failure_reason": item.failure_reason,
-            "published_at": _at(item.published_at, zone),
-        }
-    )
-    return {
-        "id": item.id,
-        # Слот контент-плана появится вместе со своим треком.
-        "slot_id": None,
-        "status": item.status,
-        "post_text": item.post_text,
-        "char_count": item.char_count,
-        "scheduled_at": _at(item.scheduled_at, zone),
-        "media": (
-            {
-                "url": f"/api/projects/{project_id}/posts/{item.id}/media",
-                "mime": item.media_mime,
-            }
-            if item.media_available
-            else None
-        ),
-        "generation": _plain(item.generation),
-        # Отчёт слоёв проверок принесёт свой трек.
-        "validation": None,
-        "delivery": delivery,
-        "published": _at(item.published_at, zone),
-        "history": [
-            {
-                "status": entry.status,
-                "reason": entry.reason,
-                "created_at": _at(entry.created_at, zone),
-            }
-            for entry in item.history
-        ],
-        "created_at": _at(item.created_at, zone),
-        "updated_at": _at(item.updated_at, zone),
-    }
 
 
 def _operation(item, zone: ZoneInfo) -> dict[str, Any]:
@@ -605,7 +528,7 @@ def _operation(item, zone: ZoneInfo) -> dict[str, Any]:
         "actor": item.actor,
         "mode": item.mode,
         "outcome": item.outcome,
-        "result": _plain(item.result),
+        "result": plain(item.result),
         "error": (
             None
             if item.failure_code is None
@@ -614,8 +537,8 @@ def _operation(item, zone: ZoneInfo) -> dict[str, Any]:
                 "message": message_for(item.failure_code),
             }
         ),
-        "started_at": _at(item.started_at, zone),
-        "finished_at": _at(item.finished_at, zone),
+        "started_at": at(item.started_at, zone),
+        "finished_at": at(item.finished_at, zone),
     }
 
 
@@ -629,10 +552,10 @@ def _publication(item, zone: ZoneInfo) -> dict[str, Any]:
         "message_id": item.message_id,
         "failure_code": item.failure_code,
         "failure_reason": item.failure_reason,
-        "sending_started_at": _at(item.sending_started_at, zone),
-        "confirmed_at": _at(item.confirmed_at, zone),
-        "created_at": _at(item.created_at, zone),
-        "updated_at": _at(item.updated_at, zone),
+        "sending_started_at": at(item.sending_started_at, zone),
+        "confirmed_at": at(item.confirmed_at, zone),
+        "created_at": at(item.created_at, zone),
+        "updated_at": at(item.updated_at, zone),
         "attempts": [
             {
                 "attempt_no": attempt.attempt_no,
@@ -640,24 +563,10 @@ def _publication(item, zone: ZoneInfo) -> dict[str, Any]:
                 "code": attempt.code,
                 "reason": attempt.reason,
                 "message_id": attempt.message_id,
-                "started_at": _at(attempt.started_at, zone),
-                "finished_at": _at(attempt.finished_at, zone),
+                "started_at": at(attempt.started_at, zone),
+                "finished_at": at(attempt.finished_at, zone),
             }
             for attempt in item.attempts
         ],
     }
 
-
-def _plain(value: object) -> dict[str, Any]:
-    """Снимает MappingProxyType, который не переживает сериализацию JSON."""
-    if isinstance(value, Mapping):
-        return {str(key): _plain_value(item) for key, item in value.items()}
-    return {}
-
-
-def _plain_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        return _plain(value)
-    if isinstance(value, (tuple, list)):
-        return [_plain_value(item) for item in value]
-    return value
