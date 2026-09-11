@@ -60,11 +60,24 @@ export function SettingsScreen({ project, onChanged }: { project: Project; onCha
   )
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+function Section({
+  title,
+  hint,
+  help,
+  children,
+}: {
+  title: string
+  hint?: string
+  help?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+          {help}
+        </div>
         {hint && <p className="mt-0.5 text-[12px] text-muted-foreground">{hint}</p>}
       </div>
       {children}
@@ -112,22 +125,67 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
 
   return (
     <>
-      <Section title="Проект">
+      <Section
+        title="Проект"
+        help={
+          <FieldHelp title="Проект">
+            Проект — это один Telegram-канал: свой контент-план, свои рубрики, правила и пул
+              изображений. Настройки ниже агент учитывает при написании каждого поста.
+          </FieldHelp>
+        }
+      >
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Название">
+          <Field
+            label="Название"
+            help={
+              <FieldHelp title="Название">
+                Как проект подписан у вас в списке слева. На текст постов не влияет.
+              </FieldHelp>
+            }
+          >
             <Input value={draft.name} onChange={(event) => set('name', event.target.value)} />
           </Field>
-          <Field label="Таймзона">
+          <Field
+            label="Таймзона"
+            help={
+              <FieldHelp title="Таймзона">
+                В этой зоне показываются даты плана и назначается время публикации.
+              </FieldHelp>
+            }
+          >
             <Input value={draft.timezone} onChange={(event) => set('timezone', event.target.value)} />
           </Field>
-          <Field label="Аудитория">
+          <Field
+            label="Аудитория"
+            help={
+              <FieldHelp title="Аудитория">
+                Для кого канал. Агент подбирает под это глубину объяснений и примеры.
+              </FieldHelp>
+            }
+          >
             <Input value={draft.audience} onChange={(event) => set('audience', event.target.value)} />
           </Field>
-          <Field label="Тон">
+          <Field
+            label="Тон"
+            help={
+              <FieldHelp title="Тон">
+                Манера речи: сухо и по делу, дружелюбно, с примерами. Проверяется слоем правил.
+              </FieldHelp>
+            }
+          >
             <Input value={draft.tone} onChange={(event) => set('tone', event.target.value)} />
           </Field>
         </div>
-        <Field label="Промпт проекта" hint="Специфика этого канала. Общий промпт задаётся в аккаунте.">
+        <Field
+          label="Промпт проекта"
+          hint="Специфика этого канала. Общий промпт задаётся в аккаунте."
+          help={
+            <FieldHelp title="Промпт проекта">
+              Указания именно для этого канала: что писать, чего избегать, как оформлять. Идут в
+            каждую генерацию вместе с общим промптом и темой слота.
+            </FieldHelp>
+          }
+        >
           <Textarea
             rows={5}
             value={draft.project_prompt}
@@ -199,12 +257,36 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
         )}
       </Section>
 
-      <Section title="Канал" hint="Токен бота принимается, но никогда не возвращается обратно.">
+      <Section
+        title="Канал"
+        hint="Токен бота принимается, но никогда не возвращается обратно."
+        help={
+          <FieldHelp title="Канал">
+            Куда уходят одобренные посты. Без настроенного канала план работает, но публикации
+            не будет.
+          </FieldHelp>
+        }
+      >
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Идентификатор канала">
+          <Field
+            label="Идентификатор канала"
+            help={
+              <FieldHelp title="Идентификатор канала">
+                Имя канала вида @channel или его числовой id. Бот должен быть админом канала.
+              </FieldHelp>
+            }
+          >
             <Input value={chatId} onChange={(event) => setChatId(event.target.value)} placeholder="@channel" />
           </Field>
-          <Field label="Токен бота">
+          <Field
+            label="Токен бота"
+            help={
+              <FieldHelp title="Токен бота">
+                Токен бота, от имени которого выходят посты. Хранится зашифрованным и обратно не
+              отдаётся — при замене введите новый.
+              </FieldHelp>
+            }
+          >
             <Input
               type="password"
               value={botToken}
@@ -274,7 +356,17 @@ function RubricsForm({ project }: { project: Project }) {
 
   return (
     <>
-      <Section title="Рубрики" hint="Инструкции формата, которые агент применяет к слоту.">
+      <Section
+        title="Рубрики"
+        hint="Инструкции формата, которые агент применяет к слоту."
+        help={
+          <FieldHelp title="Рубрики">
+            Рубрика — формат поста: кейс, новость, подборка. У слота плана выбирается рубрика, и
+            агент пишет по её инструкции. Выключенная рубрика не предлагается в новых слотах,
+            а занятую слотами удалить нельзя.
+          </FieldHelp>
+        }
+      >
         <div className="space-y-2">
           {rubrics.map((rubric) => (
             <div key={rubric.id} className="rounded-lg border border-border p-3">
@@ -337,7 +429,15 @@ function RubricsForm({ project }: { project: Project }) {
         </div>
       </Section>
 
-      <Section title="Новая рубрика">
+      <Section
+        title="Новая рубрика"
+        help={
+          <FieldHelp title="Новая рубрика">
+            Название видно при выборе рубрики в слоте, инструкция целиком уходит агенту.
+            Пишите её как указание: «История хозяйства: задача, что сделали, что получилось».
+          </FieldHelp>
+        }
+      >
         <div className="space-y-2">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Название" />
           <Textarea
@@ -387,6 +487,13 @@ function RulesForm({ project }: { project: Project }) {
       <Section
         title="Правила проверки"
         hint="Пост сверяется с этим чеклистом: «блокирует» отправляет на доработку, «предупреждает» только помечает для редактора."
+        help={
+          <FieldHelp title="Правила проверки">
+            Готовый пост сверяется с этим списком построчно. Нарушение правила «блокирует»
+            отправляет пост на доработку, «предупреждает» — только помечается для вас. Правила
+            можно написать руками или попросить агента разобрать промпт проекта на пункты.
+          </FieldHelp>
+        }
       >
         <div className="space-y-2">
           {rules.map((rule) => (
@@ -518,7 +625,16 @@ function AccountForm() {
 
   return (
     <>
-      <Section title="Аккаунт" hint="Вход выполняется через Telegram-бота, паролей нет.">
+      <Section
+        title="Аккаунт"
+        hint="Вход выполняется через Telegram-бота, паролей нет."
+        help={
+          <FieldHelp title="Аккаунт">
+            Ваш Telegram-аккаунт. Проекты принадлежат только вам: совместной работы, ролей и
+            приглашений нет.
+          </FieldHelp>
+        }
+      >
         <div className="rounded-lg border border-border p-3 text-[13px]">
           <p className="font-medium">{user.display_name}</p>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
@@ -527,7 +643,16 @@ function AccountForm() {
         </div>
       </Section>
 
-      <Section title="Общий промпт" hint="Один на все проекты. Системный промпт сервера не редактируется.">
+      <Section
+        title="Общий промпт"
+        hint="Один на все проекты. Системный промпт сервера не редактируется."
+        help={
+          <FieldHelp title="Общий промпт">
+            Указания, общие для всех ваших проектов: язык, запреты, манера. Чтобы не повторять
+            одно и то же в промпте каждого канала.
+          </FieldHelp>
+        }
+      >
         <Textarea rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
         <Button
           size="sm"
@@ -541,7 +666,14 @@ function AccountForm() {
         </Button>
       </Section>
 
-      <Section title="Сессия">
+      <Section
+        title="Сессия"
+        help={
+          <FieldHelp title="Сессия">
+            Выход завершает сессию в этом браузере. Вернуться можно повторным входом через бота.
+          </FieldHelp>
+        }
+      >
         <Button size="sm" variant="outline" onClick={() => void logout()}>
           Выйти
         </Button>
