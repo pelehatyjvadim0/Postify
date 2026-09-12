@@ -5,6 +5,7 @@ import json
 from sqlalchemy import text
 
 from postify.application.validation.models import ProjectRule
+from postify.domain.posts.models import InvalidPostTransition
 
 
 class SqlAlchemyRulesRepository:
@@ -29,9 +30,15 @@ class SqlAlchemyValidationJournal:
     def __init__(self, session_factory):
         self.sf = session_factory
 
-    def save(self, post_id: int, *, iteration: int, report, now) -> None:
+    def save(self, post_id: int, *, iteration: int, report, now, expected_draft=None) -> None:
         with self.sf() as session:
             with session.begin():
+                if expected_draft is not None:
+                    current = session.execute(text(
+                        "SELECT post_text,media_path,updated_at,status FROM posts WHERE id=:p FOR UPDATE"
+                    ), {"p": post_id}).one_or_none()
+                    if current is None or current.status != "needs_review" or tuple(current[:3]) != expected_draft:
+                        raise InvalidPostTransition("Пост изменился во время проверки. Обновите страницу")
                 if iteration == 0:
                     # Новая генерация того же поста начинает новый прогон и не
                     # должна показывать последнюю итерацию прежнего прогона.

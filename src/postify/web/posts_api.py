@@ -33,6 +33,7 @@ from postify.infrastructure.repositories.sqlalchemy_projects import (
 )
 from postify.infrastructure.repositories.sqlalchemy_validation import (
     SqlAlchemyValidationJournal,
+    SqlAlchemyRulesRepository,
 )
 from postify.web.views import at, checks_summary, plain
 
@@ -46,8 +47,10 @@ class PostsApi:
         settings,
         *,
         operations,
+        gateway,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        self._gateway = gateway
         self._sessions = session_factory
         self._settings = settings
         self._operations = operations
@@ -128,10 +131,11 @@ class PostsApi:
         if detail.media_asset_id is not None:
             asset = SqlAlchemyMediaRepository(self._sessions, project_id).get(detail.media_asset_id, now=self._now())
             media = DraftMedia(asset.id, asset.file_path, asset.mime, asset.caption)
-        report = ValidationService().validate_edit(
+        report = ValidationService(self._gateway, SqlAlchemyRulesRepository(self._sessions)).validate(
             PostDraft(project_id, detail.post_text, brief.slot, media, brief.user_id)
         )
-        self._validation.save(post_id, iteration=0, report=report, now=self._now())
+        self._validation.save(post_id, iteration=0, report=report, now=self._now(),
+                              expected_draft=(detail.post_text, media.file_path if media else None, detail.updated_at))
 
 
 def _post_summary(item, zone: ZoneInfo, validation=None) -> dict[str, Any]:

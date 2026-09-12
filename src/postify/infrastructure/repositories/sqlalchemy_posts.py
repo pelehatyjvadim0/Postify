@@ -264,7 +264,7 @@ class SqlAlchemyPostRepository:
                         "SELECT layer,passed FROM validation_reports WHERE post_id=:id"
                         " AND iteration=(SELECT max(iteration) FROM validation_reports WHERE post_id=:id)"
                     ), {"id": post_id}).all()
-                    if not {"format", "grounding"}.issubset({row.layer for row in reports}) or not all(row.passed for row in reports):
+                    if not {"format", "rules", "grounding", "image"}.issubset({row.layer for row in reports}) or not all(row.passed for row in reports):
                         raise InvalidPostTransition("Пост не прошёл обязательные проверки")
                 session.execute(
                     text(

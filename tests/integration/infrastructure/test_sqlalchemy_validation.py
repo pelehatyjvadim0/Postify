@@ -48,3 +48,17 @@ def test_journal_returns_latest_iteration(engine):
     journal.save(1, iteration=0, report=ValidationReport(False, layers=({"layer": "format", "passed": False, "items": []},)), now=NOW)
     journal.save(1, iteration=1, report=ValidationReport(True, layers=({"layer": "format", "passed": True, "items": []},)), now=NOW)
     assert journal.report(1) == {"passed": True, "iterations": 1, "layers": [{"layer": "format", "passed": True, "items": []}]}
+
+
+def test_stale_editor_validation_cannot_replace_current_report(engine):
+    from postify.domain.posts.models import InvalidPostTransition
+    seed(engine)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE posts SET status='needs_review',post_text='new text' WHERE id=1"))
+    journal = SqlAlchemyValidationJournal(sessionmaker(engine))
+    report = ValidationReport(True, layers=({"layer": "format", "passed": True},))
+    with pytest.raises(InvalidPostTransition):
+        journal.save(1, iteration=0, report=report, now=NOW, expected_draft=("old text", None, NOW))
+    assert journal.report(1) is None
+    journal.save(1, iteration=0, report=report, now=NOW, expected_draft=("new text", None, NOW))
+    assert journal.report(1)["passed"] is True

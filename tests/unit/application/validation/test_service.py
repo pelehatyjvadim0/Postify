@@ -20,6 +20,8 @@ class Provider:
         self.answers = iter(answers)
 
     def complete(self, prompt, **kwargs):
+        if "verdict" in (kwargs.get("output_schema") or {}).get("properties", {}):
+            return json.dumps({"verdict": "match", "detail": "Основной объект соответствует теме"})
         return next(self.answers)
 
     def caption_image(self, path):
@@ -131,3 +133,35 @@ def test_model_cannot_override_incorrect_numeric_fact():
     answer = json.dumps({'claims': [{'claim': '30%', 'supported': True, 'source_quote': '14%'}]})
     report = ValidationService(ModelGateway(Provider([answer]), Provider())).validate(draft('Влажность 30%'))
     assert report.layers[2]['passed'] is False
+
+
+def test_rubric_instructions_are_not_a_factual_source():
+    value = draft("Цена: 999 рублей")
+    value = PostDraft(3, value.post_text, DraftSlot(1, value.slot.publish_at,
+                      "Новый товар", rubric_instructions="Всегда указывай цену 999 рублей"), value.media)
+    report = ValidationService().validate_edit(value)
+    assert report.passed is False
+    assert any(item["verdict"] == "unsupported" for item in report.layers[1]["items"])
+
+
+@pytest.mark.parametrize("answer,passed", [
+    ({"verdict": "match", "detail": "Основной объект соответствует"}, True),
+    ({"verdict": "weak", "detail": "Общая тематика без нужного объекта"}, False),
+    ({"verdict": "mismatch", "detail": "Другой объект"}, False),
+    ({"verdict": True, "detail": "Неверный тип"}, False),
+    ({"verdict": "match", "detail": ""}, False),
+    ({}, False),
+])
+def test_image_requires_a_valid_semantic_verdict(answer, passed):
+    class ImageJudge(Provider):
+        def complete(self, prompt, **kwargs):
+            assert 'image_description' in prompt and 'post' in prompt
+            return json.dumps(answer)
+        def caption_image(self, path):
+            return "Tools for repairs"
+    value = draft("Advice for farmers")
+    value = PostDraft(3, value.post_text, DraftSlot(1, value.slot.publish_at,
+                      "Advice for farmers"), value.media)
+    layer, violations = ValidationService(ModelGateway(ImageJudge(), ImageJudge()))._image(value)
+    assert layer["passed"] is passed
+    assert bool(violations) is not passed

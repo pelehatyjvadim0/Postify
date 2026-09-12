@@ -37,6 +37,8 @@ class WorkflowProvider:
                 "media_asset_id": self.media_asset_id,
                 "media_rationale": "Силосы для хранения зерна",
             })
+        if "verdict" in (output_schema or {}).get("properties", {}):
+            return '{"verdict":"match","detail":"Силосы соответствуют хранению зерна"}'
         return '{"claims":[]}'
 
     def caption_image(self, path):
@@ -291,3 +293,53 @@ def test_retryable_delivery_is_retried_through_http_once(workflow):
     assert [attempt["outcome"] for attempt in delivery["attempts"]] == ["retryable", "published"]
     assert api.scheduler_tick() == ()
     assert len(requests) == 2
+
+
+@pytest.mark.parametrize("failed_layer", ["rules", "image"])
+def test_manual_changes_preserve_all_guardrails_and_block_approval(workflow, monkeypatch, failed_layer):
+    client, _, _, provider, _, _ = workflow
+    _upload_image(client, provider)
+    slot = _create_slot(client)
+    generated = client.post(f"/api/projects/1/plan/{slot}/generate")
+    post_id = _wait_operation(client, generated.json()["operation_id"])["result"]["post_id"]
+    path = f"/api/projects/1/posts/{post_id}"
+    original = provider.complete
+    if failed_layer == "rules":
+        saved = client.put('/api/projects/1/rules', json={"rules": [{
+            "text": "Без скидок", "severity": "block", "enabled": True, "origin": "manual",
+        }]})
+        assert saved.status_code == 200, saved.text
+        rule_id = saved.json()[0]['id']
+        change = {"post_text": "Скидка на хранение зерна."}
+    else:
+        replacement = _upload_image(client, provider, color="blue")
+        change = {"media_asset_id": replacement}
+
+    def complete(prompt, **kwargs):
+        properties = (kwargs.get("output_schema") or {}).get("properties", {})
+        if failed_layer == "rules" and "items" in properties:
+            return json.dumps({"items": [{"rule_id": rule_id, "passed": False, "evidence": "Упомянута скидка"}]})
+        if failed_layer == "image" and "verdict" in properties:
+            return json.dumps({"verdict": "mismatch", "detail": "Другой объект"})
+        return original(prompt, **kwargs)
+
+    monkeypatch.setattr(provider, "complete", complete)
+    changed = client.patch(path, json=change)
+    assert changed.status_code == 200, changed.text
+    report = changed.json()["validation"]
+    assert {layer['layer'] for layer in report['layers']} == {"format", "rules", "grounding", "image"}
+    assert report['passed'] is False
+    assert next(layer for layer in report['layers'] if layer['layer'] == failed_layer)['passed'] is False
+    assert client.post(path + '/approve').status_code == 409
+    assert client.get('/api/projects/1/publications').json() == []
+
+
+def test_approval_rejects_partial_validation_report(workflow):
+    client, _, engine, provider, _, _ = workflow
+    _upload_image(client, provider)
+    slot = _create_slot(client)
+    generated = client.post(f"/api/projects/1/plan/{slot}/generate")
+    post_id = _wait_operation(client, generated.json()["operation_id"])["result"]["post_id"]
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM validation_reports WHERE post_id=:id AND layer='image'"), {"id": post_id})
+    assert client.post(f'/api/projects/1/posts/{post_id}/approve').status_code == 409

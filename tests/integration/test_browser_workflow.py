@@ -38,6 +38,8 @@ def browser_application(migrated_database_url, tmp_path, monkeypatch):
 
     def complete(self, prompt, **kwargs):
         calls.append(prompt)
+        if "verdict" in (kwargs.get("output_schema") or {}).get("properties", {}):
+            return '{"verdict":"match","detail":"The green field matches the farming post"}'
         if "claims:[" in prompt:
             return json.dumps({"claims": []})
         if '"items":' in prompt:

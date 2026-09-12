@@ -128,7 +128,7 @@ class WebApplication:
             self._sessions, settings, operations=self._operations, clock=self._now
         )
         self._posts = PostsApi(
-            self._sessions, settings, operations=self._operations, clock=self._now
+            self._sessions, settings, operations=self._operations, gateway=self._gateway, clock=self._now
         )
         self._cipher = (
             SecretCipher(settings.postify_secret_key.get_secret_value())
