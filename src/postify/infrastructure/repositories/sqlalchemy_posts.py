@@ -137,6 +137,7 @@ class SqlAlchemyPostRepository:
                         "now": now,
                     },
                 )
+                session.execute(text("DELETE FROM validation_reports WHERE post_id=:id"), {"id": post_id})
                 self._history(session, post_id, "needs_review", "edited", now)
         return self.get_post(post_id)
 
@@ -209,6 +210,7 @@ class SqlAlchemyPostRepository:
                     "INSERT INTO media_usages(project_id,asset_id,post_id,used_at)"
                     " VALUES (:project,:asset,:post,:now)"
                 ), {"project": self.project_id, "asset": asset_id, "post": post_id, "now": now})
+                session.execute(text("DELETE FROM validation_reports WHERE post_id=:id"), {"id": post_id})
                 self._history(session, post_id, "needs_review", "media_changed", now)
         return self.get_post(post_id)
 
@@ -258,6 +260,12 @@ class SqlAlchemyPostRepository:
                             " прежде чем одобрить пост"
                         )
                     self._require_channel(session)
+                    reports = session.execute(text(
+                        "SELECT layer,passed FROM validation_reports WHERE post_id=:id"
+                        " AND iteration=(SELECT max(iteration) FROM validation_reports WHERE post_id=:id)"
+                    ), {"id": post_id}).all()
+                    if not {"format", "grounding"}.issubset({row.layer for row in reports}) or not all(row.passed for row in reports):
+                        raise InvalidPostTransition("Пост не прошёл обязательные проверки")
                 session.execute(
                     text(
                         "UPDATE posts SET status=:status,updated_at=:now"

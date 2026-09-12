@@ -98,3 +98,36 @@ def test_manage_rules_validates_and_replaces_whole_list():
     repository = Rules()
     result = ManageRules(repository).replace(3, [{"text": "Без канцелярита", "severity": "block", "enabled": True, "origin": "manual"}])
     assert result[0].text == "Без канцелярита"
+
+
+@pytest.mark.parametrize('source,post,passed', [
+    ('Цена: 130 рублей.', 'Цена: 30 рублей.', False),
+    ('Цена: 30 рублей.', 'Цена: 30 рублей.', True),
+    ('Показатель: 30.', 'Показатель: 30%.', False),
+    ('Показатель: 130%.', 'Показатель: 30%.', False),
+    ('Показатель: 30,5%.', 'Показатель: 30%.', False),
+    ('Источник https://example.org.evil', 'Источник https://example.org', False),
+])
+def test_grounding_requires_complete_fact(source, post, passed):
+    value = draft(post)
+    value = PostDraft(value.project_id, post, DraftSlot(1, value.slot.publish_at, source), value.media, value.user_id)
+    assert ValidationService().validate_edit(value).passed is passed
+
+
+@pytest.mark.parametrize('supported,quote,expected', [
+    (True, 'Хранение зерна', True),
+    (True, 'Несуществующая цитата', False),
+    (True, '', False),
+    (False, 'Хранение зерна', False),
+    ('true', 'Хранение зерна', False),
+])
+def test_semantic_claim_requires_verdict_and_real_source_quote(supported, quote, expected):
+    answer = json.dumps({'claims': [{'claim': 'Зерно хранится.', 'supported': supported, 'source_quote': quote}]})
+    report = ValidationService(ModelGateway(Provider([answer]), Provider())).validate(draft('Зерно хранится.'))
+    assert report.layers[2]['passed'] is expected
+
+
+def test_model_cannot_override_incorrect_numeric_fact():
+    answer = json.dumps({'claims': [{'claim': '30%', 'supported': True, 'source_quote': '14%'}]})
+    report = ValidationService(ModelGateway(Provider([answer]), Provider())).validate(draft('Влажность 30%'))
+    assert report.layers[2]['passed'] is False

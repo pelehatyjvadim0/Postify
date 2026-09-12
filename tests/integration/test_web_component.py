@@ -312,6 +312,7 @@ def test_editor_cannot_change_a_post_after_delivery_started(component, delivery_
         f"/api/projects/{OWN_PROJECT}/channel",
         json={"bot_token": "123:secret", "chat_id": "@agrotech"},
     )
+    assert client.patch(f"/api/projects/{OWN_PROJECT}/posts/79", json={"post_text": "Тестовая тема"}).status_code == 200
     assert client.post(f"/api/projects/{OWN_PROJECT}/posts/79/approve").status_code == 200
     with engine.begin() as connection:
         connection.execute(text(

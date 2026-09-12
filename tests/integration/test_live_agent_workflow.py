@@ -110,6 +110,7 @@ def live_app(migrated_database_url, tmp_path, monkeypatch, request):
         created = client.post("/api/projects", json={"name": "E2E AutoPostTelegram", "timezone": "UTC"})
         assert created.status_code == 201, created.text
         assert created.json()["id"] == 1
+        assert client.put("/api/projects/1/channel", json={"chat_id": "@e2e_not_published", "bot_token": "123:e2e-placeholder"}).status_code == 200
         yield client, api, settings, sessions, now
     engine.dispose()
 

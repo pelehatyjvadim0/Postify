@@ -98,7 +98,6 @@ def test_common_prompt_and_operation_journals(workflow):
     assert client.get("/api/projects/1/operations", params={"limit": 101}).status_code == 422
 
 
-@pytest.mark.xfail(strict=True, reason="Известный обход grounding: 30 считается подстрокой 130; docs/e2e-2026-09-12.md")
 def test_manual_edit_does_not_accept_a_number_inside_another_number(workflow):
     client, _, _, provider, *_ = workflow
     _upload_image(client, provider)
@@ -113,3 +112,16 @@ def test_manual_edit_does_not_accept_a_number_inside_another_number(workflow):
     assert (edited.json()["validation"]["passed"], approval.status_code) == (False, 409), {
         "validation": edited.json()["validation"], "approval_status": approval.status_code,
     }
+
+
+def test_approval_requires_current_validation(workflow):
+    client, _, engine, provider, *_ = workflow
+    _upload_image(client, provider)
+    slot = client.post('/api/projects/1/plan', json={'topic': 'Хранение зерна',
+        'publish_at': (NOW + timedelta(days=2)).isoformat()}).json()['id']
+    generated = client.post(f'/api/projects/1/plan/{slot}/generate')
+    post = _wait_operation(client, generated.json()['operation_id'])['result']['post_id']
+    from sqlalchemy import text
+    with engine.begin() as connection:
+        connection.execute(text('DELETE FROM validation_reports WHERE post_id=:id'), {'id': post})
+    assert client.post(f'/api/projects/1/posts/{post}/approve').status_code == 409
