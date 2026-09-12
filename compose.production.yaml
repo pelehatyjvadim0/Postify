@@ -1,0 +1,16 @@
+# Linux: общий auth relay слушает loopback хоста на 8080.
+# Отдельный Compose project сохраняет прежние volumes для отката.
+services:
+  db:
+    ports:
+      - "127.0.0.1:55433:5432"
+  app:
+    network_mode: host
+    ports: !reset []
+    environment:
+      DATABASE_URL: postgresql+psycopg://autopost:autopost-local@127.0.0.1:55433/autoposttg
+      AUTH_BOT_RELAY_URL: http://127.0.0.1:8080/_auth/autoposttg/updates
+      CONTENT_ANALYZER: openrouter
+      AI_MEDIA_PROVIDER: openrouter
+      AUTOPOST_RELOAD: "0"
+      POSTIFY_SECRET_KEY: ${POSTIFY_SECRET_KEY:?Required for production}
