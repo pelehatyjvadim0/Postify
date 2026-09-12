@@ -1,0 +1,125 @@
+{
+  "id": 1,
+  "slot_id": 1,
+  "status": "needs_review",
+  "post_text": "Зелёный квадрат на белом фоне — простая идея для графического дизайна. Такая лаконичная композиция позволяет создать выразительный визуальный образ. Часто ли вы используете простые геометрические фигуры в своих проектах?",
+  "char_count": 220,
+  "media": {
+    "asset_id": 2,
+    "caption": "На белом фоне изображен один темно-зеленый квадрат.",
+    "url": "/api/projects/1/media/2/file",
+    "rationale": "Изображение наглядно демонстрирует зелёный квадрат на белом фоне, что полностью соответствует заявленной теме.",
+    "last_used_at": "2026-09-12T06:50:57.807455Z"
+  },
+  "generation": {
+    "model": "google/gemini-3.1-flash-lite",
+    "provider": "openrouter",
+    "iterations": 1,
+    "generated_at": "2026-09-12T06:50:57.807455+00:00",
+    "media_asset_id": 2,
+    "media_rationale": "Изображение наглядно демонстрирует зелёный квадрат на белом фоне, что полностью соответствует заявленной теме.",
+    "publication_mode": "review",
+    "reasoning_effort": "medium",
+    "validation_passed": true
+  },
+  "validation": {
+    "passed": true,
+    "iterations": 1,
+    "layers": [
+      {
+        "items": [
+          {
+            "key": "length",
+            "detail": "220 из 1024",
+            "passed": true
+          },
+          {
+            "key": "non_empty",
+            "detail": "Текст заполнен",
+            "passed": true
+          },
+          {
+            "key": "utf8",
+            "detail": "Допустимый текст",
+            "passed": true
+          }
+        ],
+        "layer": "format",
+        "score": "3/3",
+        "passed": true
+      },
+      {
+        "items": [
+          {
+            "text": "Не употреблять слово скидка",
+            "passed": true,
+            "rule_id": 1,
+            "evidence": "В тексте отсутствуют слова, связанные с понятием скидка.",
+            "severity": "block"
+          }
+        ],
+        "layer": "rules",
+        "score": "1/1",
+        "passed": true
+      },
+      {
+        "items": [
+          {
+            "claim": "Зелёный квадрат на белом фоне — это простая идея для графического дизайна.",
+            "detail": "Есть в теме слота",
+            "verdict": "supported"
+          }
+        ],
+        "layer": "grounding",
+        "passed": true
+      },
+      {
+        "items": [
+          {
+            "detail": "На белом фоне изображен один зеленый квадрат.",
+            "verdict": "match",
+            "asset_id": 2
+          }
+        ],
+        "layer": "image",
+        "passed": true
+      }
+    ]
+  },
+  "delivery": null,
+  "published": null,
+  "history": [
+    {
+      "status": "generating",
+      "reason": "generation",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "generated",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    },
+    {
+      "status": "approved",
+      "reason": "review",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "review",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    },
+    {
+      "status": "generating",
+      "reason": "regeneration",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "generated",
+      "created_at": "2026-09-12T06:50:57.807455Z"
+    }
+  ],
+  "created_at": "2026-09-12T06:50:57.807455Z",
+  "updated_at": "2026-09-12T06:50:57.807455Z"
+}

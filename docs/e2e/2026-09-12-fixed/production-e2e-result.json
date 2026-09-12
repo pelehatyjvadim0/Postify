@@ -1,0 +1,265 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "started_at": "2026-09-12T07:04:55.085847+00:00",
+  "generated": {
+    "id": 3,
+    "slot_id": 3,
+    "status": "approved",
+    "post_text": "Тестовый пост AutoPostTelegram. На изображении представлен ярко-зеленый квадрат на белом фоне. Эта тестовая публикация будет удалена после проверки.",
+    "char_count": 148,
+    "media": {
+      "asset_id": 3,
+      "caption": "На белом фоне изображен ярко-зеленый квадрат.",
+      "url": "/api/projects/4/media/3/file",
+      "rationale": "Изображение в точности соответствует заявленной теме поста — зелёный квадрат на белом фоне.",
+      "last_used_at": "2026-09-12T07:05:04.991462Z"
+    },
+    "generation": {
+      "model": "google/gemini-3.1-flash-lite",
+      "provider": "openrouter",
+      "iterations": 0,
+      "generated_at": "2026-09-12T07:05:04.991462+00:00",
+      "media_asset_id": 3,
+      "media_rationale": "Изображение в точности соответствует заявленной теме поста — зелёный квадрат на белом фоне.",
+      "publication_mode": "auto",
+      "reasoning_effort": "medium",
+      "validation_passed": true
+    },
+    "validation": {
+      "passed": true,
+      "iterations": 0,
+      "layers": [
+        {
+          "items": [
+            {
+              "key": "length",
+              "detail": "148 из 1024",
+              "passed": true
+            },
+            {
+              "key": "non_empty",
+              "detail": "Текст заполнен",
+              "passed": true
+            },
+            {
+              "key": "utf8",
+              "detail": "Допустимый текст",
+              "passed": true
+            }
+          ],
+          "layer": "format",
+          "score": "3/3",
+          "passed": true
+        },
+        {
+          "items": [],
+          "layer": "rules",
+          "score": "0/0",
+          "passed": true
+        },
+        {
+          "items": [
+            {
+              "claim": "Пост является тестовой публикацией AutoPostTelegram",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            },
+            {
+              "claim": "На изображении представлен зеленый квадрат на белом фоне",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            },
+            {
+              "claim": "Публикация будет удалена после проверки",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            }
+          ],
+          "layer": "grounding",
+          "passed": true
+        },
+        {
+          "items": [
+            {
+              "detail": "На изображении представлен зеленый квадрат на белом фоне.",
+              "verdict": "match",
+              "asset_id": 3
+            }
+          ],
+          "layer": "image",
+          "passed": true
+        }
+      ]
+    },
+    "delivery": null,
+    "published": null,
+    "history": [
+      {
+        "status": "generating",
+        "reason": "generation",
+        "created_at": "2026-09-12T07:05:00.695286Z"
+      },
+      {
+        "status": "approved",
+        "reason": "generated",
+        "created_at": "2026-09-12T07:05:04.991462Z"
+      }
+    ],
+    "created_at": "2026-09-12T07:05:00.695286Z",
+    "updated_at": "2026-09-12T07:05:04.991462Z"
+  },
+  "published": {
+    "id": 3,
+    "slot_id": 3,
+    "status": "published",
+    "post_text": "Тестовый пост AutoPostTelegram. На изображении представлен ярко-зеленый квадрат на белом фоне. Эта тестовая публикация будет удалена после проверки.",
+    "char_count": 148,
+    "media": {
+      "asset_id": 3,
+      "caption": "На белом фоне изображен ярко-зеленый квадрат.",
+      "url": "/api/projects/4/media/3/file",
+      "rationale": "Изображение в точности соответствует заявленной теме поста — зелёный квадрат на белом фоне.",
+      "last_used_at": "2026-09-12T07:05:04.991462Z"
+    },
+    "generation": {
+      "model": "google/gemini-3.1-flash-lite",
+      "provider": "openrouter",
+      "iterations": 0,
+      "generated_at": "2026-09-12T07:05:04.991462+00:00",
+      "media_asset_id": 3,
+      "media_rationale": "Изображение в точности соответствует заявленной теме поста — зелёный квадрат на белом фоне.",
+      "publication_mode": "auto",
+      "reasoning_effort": "medium",
+      "validation_passed": true
+    },
+    "validation": {
+      "passed": true,
+      "iterations": 0,
+      "layers": [
+        {
+          "items": [
+            {
+              "key": "length",
+              "detail": "148 из 1024",
+              "passed": true
+            },
+            {
+              "key": "non_empty",
+              "detail": "Текст заполнен",
+              "passed": true
+            },
+            {
+              "key": "utf8",
+              "detail": "Допустимый текст",
+              "passed": true
+            }
+          ],
+          "layer": "format",
+          "score": "3/3",
+          "passed": true
+        },
+        {
+          "items": [],
+          "layer": "rules",
+          "score": "0/0",
+          "passed": true
+        },
+        {
+          "items": [
+            {
+              "claim": "Пост является тестовой публикацией AutoPostTelegram",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            },
+            {
+              "claim": "На изображении представлен зеленый квадрат на белом фоне",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            },
+            {
+              "claim": "Публикация будет удалена после проверки",
+              "detail": "Есть в теме слота",
+              "verdict": "supported"
+            }
+          ],
+          "layer": "grounding",
+          "passed": true
+        },
+        {
+          "items": [
+            {
+              "detail": "На изображении представлен зеленый квадрат на белом фоне.",
+              "verdict": "match",
+              "asset_id": 3
+            }
+          ],
+          "layer": "image",
+          "passed": true
+        }
+      ]
+    },
+    "delivery": {
+      "status": "published",
+      "message_id": 15,
+      "failure_code": null,
+      "failure_reason": null,
+      "published_at": "2026-09-12T07:07:00.809531Z"
+    },
+    "published": {
+      "published_at": "2026-09-12T07:07:00.809531Z",
+      "message_url": "https://t.me/c/4364928780/15"
+    },
+    "history": [
+      {
+        "status": "generating",
+        "reason": "generation",
+        "created_at": "2026-09-12T07:05:00.695286Z"
+      },
+      {
+        "status": "approved",
+        "reason": "generated",
+        "created_at": "2026-09-12T07:05:04.991462Z"
+      },
+      {
+        "status": "published",
+        "reason": "channel_confirmed",
+        "created_at": "2026-09-12T07:07:00.809531Z"
+      }
+    ],
+    "created_at": "2026-09-12T07:05:00.695286Z",
+    "updated_at": "2026-09-12T07:07:00.809531Z"
+  },
+  "deliveries": [
+    {
+      "delivery_id": 2,
+      "post_id": 3,
+      "provider": "telegram",
+      "status": "published",
+      "attempt_count": 1,
+      "message_id": 15,
+      "failure_code": null,
+      "failure_reason": null,
+      "sending_started_at": "2026-09-12T07:07:00.809531Z",
+      "confirmed_at": "2026-09-12T07:07:00.809531Z",
+      "created_at": "2026-09-12T07:07:00.809531Z",
+      "updated_at": "2026-09-12T07:07:00.809531Z",
+      "attempts": [
+        {
+          "attempt_no": 1,
+          "outcome": "published",
+          "code": null,
+          "reason": null,
+          "message_id": 15,
+          "started_at": "2026-09-12T07:07:00.809531Z",
+          "finished_at": "2026-09-12T07:07:00.809531Z"
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "cleanup": {
+    "message_id": 15,
+    "deleted": true
+  },
+  "finished_at": "2026-09-12T07:07:02.091600+00:00"
+}

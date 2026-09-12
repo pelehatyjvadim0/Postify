@@ -1,0 +1,66 @@
+{
+  "text": "Цена зелёного квадрата: 30 рублей.",
+  "topic": "Зелёный квадрат на белом фоне: простая идея для графического дизайна. Цена: 130 рублей.",
+  "passed": false,
+  "layers": [
+    {
+      "layer": "format",
+      "passed": true,
+      "score": "3/3",
+      "items": [
+        {
+          "key": "length",
+          "passed": true,
+          "detail": "34 из 1024"
+        },
+        {
+          "key": "non_empty",
+          "passed": true,
+          "detail": "Текст заполнен"
+        },
+        {
+          "key": "utf8",
+          "passed": true,
+          "detail": "Допустимый текст"
+        }
+      ]
+    },
+    {
+      "layer": "rules",
+      "passed": true,
+      "score": "0/0",
+      "items": []
+    },
+    {
+      "layer": "grounding",
+      "passed": false,
+      "items": [
+        {
+          "claim": "30 рублей",
+          "verdict": "unsupported",
+          "detail": "Отсутствует в теме слота",
+          "span": [
+            24,
+            33
+          ]
+        },
+        {
+          "claim": "Цена зелёного квадрата составляет 30 рублей.",
+          "verdict": "unsupported",
+          "detail": "Отсутствует в теме слота"
+        }
+      ]
+    },
+    {
+      "layer": "image",
+      "passed": true,
+      "items": [
+        {
+          "asset_id": 1,
+          "verdict": "match",
+          "detail": "На белом фоне изображен зеленый квадрат."
+        }
+      ]
+    }
+  ]
+}

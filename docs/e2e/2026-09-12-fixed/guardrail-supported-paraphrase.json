@@ -1,0 +1,55 @@
+{
+  "passed": true,
+  "layers": [
+    {
+      "layer": "format",
+      "passed": true,
+      "score": "3/3",
+      "items": [
+        {
+          "key": "length",
+          "passed": true,
+          "detail": "40 из 1024"
+        },
+        {
+          "key": "non_empty",
+          "passed": true,
+          "detail": "Текст заполнен"
+        },
+        {
+          "key": "utf8",
+          "passed": true,
+          "detail": "Допустимый текст"
+        }
+      ]
+    },
+    {
+      "layer": "rules",
+      "passed": true,
+      "score": "0/0",
+      "items": []
+    },
+    {
+      "layer": "grounding",
+      "passed": true,
+      "items": [
+        {
+          "claim": "На белом фоне изображён зелёный квадрат.",
+          "verdict": "supported",
+          "detail": "Есть в теме слота"
+        }
+      ]
+    },
+    {
+      "layer": "image",
+      "passed": true,
+      "items": [
+        {
+          "asset_id": 1,
+          "verdict": "match",
+          "detail": "На белом фоне изображен зеленый квадрат."
+        }
+      ]
+    }
+  ]
+}
