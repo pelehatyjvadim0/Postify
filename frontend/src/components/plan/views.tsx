@@ -1,4 +1,4 @@
-import { ChevronRight, Columns3, Plus } from 'lucide-react'
+import { ChevronRight, Plus } from 'lucide-react'
 import type * as React from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -242,38 +242,24 @@ export function MonthView({
   bindPeek,
   year,
   month,
-  wideWeekend,
-  onToggleWeekend,
   expanded,
   onToggleDay,
 }: ViewProps & {
   year: number
   month: number
-  wideWeekend: boolean
-  onToggleWeekend: () => void
   expanded: Set<string>
   onToggleDay: (date: string) => void
 }) {
   const groups = groupByDay(slots)
-  // Узкие колонки выходных: будни делят место поровну, суббота и воскресенье ужимаются.
-  const columns = wideWeekend
-    ? 'repeat(7,minmax(0,1fr))'
-    : 'repeat(5,minmax(0,1fr)) repeat(2,minmax(0,0.52fr))'
   const lead = weekdayIndex(year, month, 1)
   const total = daysInMonth(year, month)
   const cells = Math.ceil((lead + total) / 7) * 7
 
   return (
     <div className="overflow-x-auto p-4 md:p-6">
-      <div className="mb-3 flex items-center justify-end max-md:justify-start">
-        <Button variant="outline" size="sm" onClick={onToggleWeekend} className="text-muted-foreground">
-          <Columns3 className="h-3.5 w-3.5" />
-          Выходные: {wideWeekend ? 'обычные' : 'узкие'}
-        </Button>
-      </div>
       <div
         className="grid gap-px overflow-hidden rounded-lg border border-border bg-border max-md:w-[860px]"
-        style={{ gridTemplateColumns: columns }}
+        style={{ gridTemplateColumns: 'repeat(7,minmax(0,1fr))' }}
       >
         {DOW.map((name, index) => (
           <div

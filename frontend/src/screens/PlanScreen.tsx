@@ -46,7 +46,6 @@ export function PlanScreen({
   const [loading, setLoading] = React.useState(true)
   const [notFound, setNotFound] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
-  const [wideWeekend, setWideWeekend] = React.useState(false)
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
   const [draft, setDraft] = React.useState<SlotDraft | null>(null)
   const [pendingDelete, setPendingDelete] = React.useState<Slot | null>(null)
@@ -270,8 +269,6 @@ export function PlanScreen({
               {...viewProps}
               year={year}
               month={month}
-              wideWeekend={wideWeekend}
-              onToggleWeekend={() => setWideWeekend((value) => !value)}
               expanded={expanded}
               onToggleDay={(date) =>
                 setExpanded((current) => {
