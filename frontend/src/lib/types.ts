@@ -163,6 +163,7 @@ export interface Post {
     reasoning_effort: string
     iterations: number
     generated_at: string
+    repair_error?: string
   } | null
   validation: ValidationReport
   published: { published_at: string; message_url: string } | null

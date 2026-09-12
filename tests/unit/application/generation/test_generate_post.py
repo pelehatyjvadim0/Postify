@@ -344,3 +344,34 @@ def test_run_requires_exactly_one_target() -> None:
         service.run()
     with pytest.raises(ValueError):
         service.run(slot_id=41, post_id=77)
+
+
+@pytest.mark.parametrize('bad_output', ['not JSON', _json('Чужое изображение', 999)])
+def test_invalid_repair_keeps_last_validated_draft(bad_output):
+    blocked = ValidationReport(False, (Violation('grounding', 'block', 'Не подтверждено'),))
+    service, repository, _, _, _, journal = _service([_json('Сохранить черновик'), bad_output], [blocked])
+    result = service.generate(41)
+    assert result.content.post_text == 'Сохранить черновик'
+    assert result.validation is blocked
+    assert result.repair_iterations == 0
+    assert repository.completed['status'] == 'needs_review'
+    assert repository.completed['generation']['repair_error'] in {'invalid_generation_output', 'media_not_in_shortlist'}
+    assert ('fail', 77) not in repository.events
+    assert [event[2] for event in journal.events if event[0] == 'save'] == [0]
+
+
+def test_provider_failure_during_second_repair_keeps_first_repair():
+    from postify.application.ports.model_provider import ModelCallError
+    blocked = ValidationReport(False, (Violation('grounding', 'block', 'Не подтверждено'),))
+    service, repository, gateway, *_ = _service([_json('v0'), _json('v1')], [blocked, blocked])
+    complete = gateway.complete
+    def failing(prompt, **kwargs):
+        if len(gateway.calls) == 2:
+            raise ModelCallError('provider_unavailable', 'private provider detail')
+        return complete(prompt, **kwargs)
+    gateway.complete = failing
+    result = service.generate(41)
+    assert result.content.post_text == 'v1'
+    assert result.repair_iterations == 1
+    assert repository.completed['generation']['repair_error'] == 'provider_unavailable'
+    assert 'private provider detail' not in str(repository.completed)

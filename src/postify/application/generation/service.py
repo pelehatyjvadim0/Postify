@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
@@ -17,6 +18,7 @@ from postify.application.generation.models import (
     GenerationResult,
 )
 from postify.application.media.models import MediaCandidate
+from postify.application.ports.model_provider import ModelCallError
 from postify.application.ports.validation import (
     DraftMedia,
     PostDraft,
@@ -28,6 +30,9 @@ from postify.application.prompts.compose_context import (
     PlanSlot,
     compose_generation_context,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GenerationRepository(Protocol):
@@ -130,13 +135,22 @@ class GeneratePost:
             report, media = self._validate(post_id, brief, content, by_id, iteration=0)
 
             repairs = 0
+            repair_error = None
             while not report.passed and repairs < MAX_REPAIR_ITERATIONS:
+                try:
+                    next_content, next_call = self._complete(
+                        brief,
+                        _repair_prompt(brief, candidates, content, report, repairs + 1),
+                        by_id,
+                    )
+                except (ModelCallError, GenerationError) as error:
+                    # Последний проверенный черновик остаётся на ревью вместе
+                    # с блокирующим отчётом. Сбой модели не должен стирать текст.
+                    repair_error = error.code
+                    LOGGER.warning("Post repair failed: post_id=%s code=%s", post_id, error.code)
+                    break
                 repairs += 1
-                content, call = self._complete(
-                    brief,
-                    _repair_prompt(brief, candidates, content, report, repairs),
-                    by_id,
-                )
+                content, call = next_content, next_call
                 report, media = self._validate(
                     post_id, brief, content, by_id, iteration=repairs
                 )
@@ -153,18 +167,21 @@ class GeneratePost:
                 generated_at=generated_at.isoformat(),
                 publication_mode=brief.publication_mode,
             )
+            metadata = result.metadata(reasoning_effort=brief.reasoning_effort)
+            if repair_error is not None:
+                metadata["repair_error"] = repair_error
             self._repository.complete(
                 post_id,
                 content=content,
                 media=media,
-                generation=result.metadata(
-                    reasoning_effort=brief.reasoning_effort
-                ),
+                generation=metadata,
                 status=("approved" if brief.publication_mode == "auto" and report.passed else "needs_review"),
                 now=generated_at,
             )
             return result
-        except Exception:
+        except Exception as error:
+            LOGGER.warning("Post generation failed: post_id=%s type=%s code=%s",
+                           post_id, type(error).__name__, getattr(error, "code", "internal_error"))
             # Не маскируем исходную ошибку, если фиксация failed сама не удалась.
             try:
                 self._repository.fail(post_id, now=self._clock())

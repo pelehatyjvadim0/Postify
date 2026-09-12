@@ -237,6 +237,12 @@ export function PostPanel({
 
           {post && !loading && (
             <>
+              {post.generation?.repair_error && (
+                <Alert tone="warning" title="Не удалось исправить черновик">
+                  Сервис генерации прервал исправление текста. Черновик сохранён с результатами
+                  проверки. Можно отредактировать его или повторить генерацию.
+                </Alert>
+              )}
               <div className="overflow-hidden rounded-lg border border-border bg-card">
                 {post.media ? (
                   <img
