@@ -1,9 +1,8 @@
 """Бот входа: HTTP-адаптер Telegram Bot API и цикл опроса.
 
-Токен и жизненный цикл у него собственные, с доставкой постов в каналы он не
-пересекается. ``getUpdates`` на одном токене допускает ровно один опрашивающий
-процесс, поэтому цикл поднимается один раз в жизненном цикле приложения;
-вебхук на этом токене не используется.
+``getUpdates`` на одном токене допускает ровно один опрашивающий процесс.
+При общем боте обновления AutoPostTelegram поступают из очереди FakeTG;
+напрямую в Telegram уходят только ответы пользователю и запрос имени бота.
 
 Ошибки Telegram логируются и не валят процесс: как в образце — пауза и повтор.
 """
@@ -12,13 +11,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import hashlib
+import hmac
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from postify.domain.auth.models import (
+    APPROVED,
+    CONFIRMATION,
+    DENIED,
     AuthError,
     LoginRequestExpired,
     TelegramIdentity,
@@ -29,18 +34,22 @@ from postify.domain.auth.models import (
 LOGGER = logging.getLogger(__name__)
 
 # Токен в диплинке ровно 43 символа base64url — как выдаёт token_urlsafe(32).
-START_PATTERN = re.compile(r"^/start(?:@[A-Za-z0-9_]+)?\s+login_([A-Za-z0-9_-]{43})$")
-CALLBACK_PATTERN = re.compile(r"^login_(yes|no)_([A-Za-z0-9_-]{43})$")
+START_PATTERN = re.compile(r"^/start(?:@[A-Za-z0-9_]+)?\s+autopost_login_([A-Za-z0-9_-]{43})$")
+CALLBACK_PATTERN = re.compile(r"^autopost_login_(yes|no)_([A-Za-z0-9_-]{43})$")
 
 CONFIRM_TEXT = (
-    "Подтвердите вход\n\n"
-    "Кто-то пытается войти в AutoPostTG через ваш Telegram-аккаунт. Это вы?"
+    "Вход AutoPostTelegram\n\n"
+    "Кто-то пытается войти в AutoPostTelegram через ваш Telegram-аккаунт. Это вы?"
 )
-EXPIRED_TEXT = "Запрос на вход истёк. Вернитесь на сайт и начните вход заново."
+EXPIRED_TEXT = (
+    "Вход AutoPostTelegram\n\n"
+    "Запрос на вход истёк. Вернитесь на сайт и начните вход заново."
+)
 STALE_TEXT = "Запрос на вход уже недействителен"
 FOREIGN_TEXT = "Этот запрос создан для другого пользователя"
-APPROVED_TEXT = "Вход подтверждён. Вернитесь в браузер."
+APPROVED_TEXT = "Вход AutoPostTelegram\n\nВход подтверждён. Вернитесь в браузер."
 DENIED_TEXT = (
+    "Вход AutoPostTelegram\n\n"
     "Вход отклонён. Если это были не вы, никаких дополнительных действий не требуется."
 )
 YES_BUTTON = "Это я"
@@ -49,6 +58,10 @@ NO_BUTTON = "Это не я"
 
 class TelegramAuthError(RuntimeError):
     """Telegram отказал или недоступен."""
+
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class TelegramAuthBot:
@@ -60,10 +73,29 @@ class TelegramAuthBot:
         *,
         bot_token: str,
         api_base: str = "https://api.telegram.org",
+        relay_url: str | None = None,
     ) -> None:
         self._client = client
         # Токен попадает только в URL запроса и никогда в журнал.
         self._base = f"{api_base.rstrip('/')}/bot{bot_token}"
+        self._relay_url = relay_url
+        self._relay_authorization = "Bearer " + hmac.new(
+            bot_token.encode(), b"autoposttg-auth-relay-v1", hashlib.sha256
+        ).hexdigest()
+        if relay_url:
+            url = urlsplit(relay_url)
+            if (
+                not url.hostname
+                or url.username is not None
+                or url.password is not None
+                or url.query
+                or url.fragment
+                or not (
+                    url.scheme == "https"
+                    or (url.scheme == "http" and url.hostname in {"127.0.0.1", "::1", "localhost"})
+                )
+            ):
+                raise ValueError("AUTH_BOT_RELAY_URL требует HTTPS или локальный SSH-туннель")
 
     async def _call(self, method: str, payload: dict[str, Any], *, timeout: float) -> Any:
         try:
@@ -78,7 +110,20 @@ class TelegramAuthBot:
             raise TelegramAuthError(f"{method}: некорректный ответ") from error
         if not isinstance(body, dict) or body.get("ok") is not True:
             description = body.get("description") if isinstance(body, dict) else None
-            raise TelegramAuthError(f"{method}: {description or response.status_code}")
+            # Повтор доставки из очереди не должен застревать на уже закрытом
+            # callback или уже обновлённом сообщении Telegram.
+            if isinstance(body, dict) and body.get("error_code") == 400:
+                harmless = {
+                    "answerCallbackQuery": ("query is too old", "query ID is invalid"),
+                    "editMessageText": ("message is not modified", "message to edit not found"),
+                }
+                if any(part in (description or "") for part in harmless.get(method, ())):
+                    return None
+            code = body.get("error_code") if isinstance(body, dict) else None
+            raise TelegramAuthError(
+                f"{method}: {description or response.status_code}",
+                retryable=code not in {400, 403},
+            )
         return body.get("result")
 
     async def get_me(self) -> dict[str, Any]:
@@ -86,6 +131,28 @@ class TelegramAuthBot:
         return result if isinstance(result, dict) else {}
 
     async def get_updates(self, *, offset: int, timeout: int = 25) -> list[dict[str, Any]]:
+        if self._relay_url:
+            try:
+                response = await self._client.post(
+                    self._relay_url,
+                    headers={"Authorization": self._relay_authorization},
+                    json={"offset": offset},
+                    timeout=15.0,
+                )
+                response.raise_for_status()
+                body = response.json()
+            except (httpx.HTTPError, ValueError) as error:
+                raise TelegramAuthError("Очередь общего бота недоступна") from error
+            if (
+                not isinstance(body, dict)
+                or body.get("ok") is not True
+                or not isinstance(body.get("result"), list)
+            ):
+                raise TelegramAuthError("Очередь общего бота: некорректный ответ")
+            updates = body["result"]
+            if not updates:
+                await asyncio.sleep(1.0)
+            return [item for item in updates if isinstance(item, dict)]
         result = await self._call(
             "getUpdates",
             {
@@ -129,8 +196,8 @@ class TelegramAuthBot:
 def confirmation_keyboard(telegram_token: str) -> dict[str, Any]:
     return {
         "inline_keyboard": [
-            [{"text": YES_BUTTON, "callback_data": f"login_yes_{telegram_token}"}],
-            [{"text": NO_BUTTON, "callback_data": f"login_no_{telegram_token}"}],
+            [{"text": YES_BUTTON, "callback_data": f"autopost_login_yes_{telegram_token}"}],
+            [{"text": NO_BUTTON, "callback_data": f"autopost_login_no_{telegram_token}"}],
         ]
     }
 
@@ -179,10 +246,17 @@ class AuthBotPoller:
                         offset=self._offset, timeout=self._poll_timeout
                     )
                     for update in updates:
+                        try:
+                            await self.handle(update)
+                        except TelegramAuthError as error:
+                            if error.retryable:
+                                raise
+                            # Заблокировавший бота пользователь не задерживает
+                            # вход остальных пользователей в общей очереди.
+                            LOGGER.warning("Ответ бота входа отклонён: %s", error)
                         update_id = update.get("update_id")
                         if isinstance(update_id, int):
                             self._offset = max(self._offset, update_id + 1)
-                        await self.handle(update)
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # цикл входа обязан пережить сбой Telegram
@@ -212,8 +286,17 @@ class AuthBotPoller:
                 identity=identity,
             )
         except LoginRequestExpired:
-            await self._bot.send_message(chat_id=chat.get("id"), text=EXPIRED_TEXT)
-            return
+            request = await self._to_thread(
+                self._service.repository.login_request_by_telegram_token, telegram_token
+            )
+            if not (
+                request is not None
+                and request.is_live(self._service.clock())
+                and request.status == CONFIRMATION
+                and request.telegram_user_id == identity.telegram_user_id
+            ):
+                await self._bot.send_message(chat_id=chat.get("id"), text=EXPIRED_TEXT)
+                return
         await self._bot.send_message(
             chat_id=chat.get("id"),
             text=CONFIRM_TEXT,
@@ -247,10 +330,16 @@ class AuthBotPoller:
                 approved=approved,
             )
         except LoginRequestExpired:
-            await self._bot.answer_callback_query(
-                callback_query_id=callback_id, text=STALE_TEXT, show_alert=True
-            )
-            return
+            if not (
+                request is not None
+                and request.is_live(self._service.clock())
+                and request.telegram_user_id == telegram_user_id
+                and request.status == (APPROVED if approved else DENIED)
+            ):
+                await self._bot.answer_callback_query(
+                    callback_query_id=callback_id, text=STALE_TEXT, show_alert=True
+                )
+                return
         await self._bot.answer_callback_query(callback_query_id=callback_id)
         message = callback.get("message")
         if isinstance(message, dict) and isinstance(message.get("chat"), dict):

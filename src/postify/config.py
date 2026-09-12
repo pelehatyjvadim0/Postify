@@ -30,10 +30,10 @@ class Settings(BaseSettings):
     # а не правкой кода. ``mock`` и ``openrouter`` — принудительный выбор.
     ai_media_provider: Literal["auto", "mock", "openrouter"] = "auto"
     postify_secret_key: SecretStr | None = None
-    # Вход в приложение идёт через отдельного Telegram-бота: у него собственный
-    # токен и собственный цикл getUpdates, не пересекающийся с доставкой в каналы.
+    # Общего бота опрашивает FakeTG; отдельного — само приложение.
     auth_bot_token: SecretStr | None = None
     auth_bot_username: str | None = None
+    auth_bot_relay_url: str | None = None
     # Пустая строка означает открытый вход: любой подтвердивший себя в боте
     # заводит аккаунт. Непустой список сужает вход до перечисленных id.
     auth_allowed_telegram_ids: str = ""

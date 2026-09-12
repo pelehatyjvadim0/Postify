@@ -75,7 +75,7 @@ def test_successful_login_walks_every_status_and_creates_the_user() -> None:
     request, url = service.start_login(ip="10.0.0.1")
     assert len(request.telegram_token) == 43
     assert request.browser_token != request.telegram_token
-    assert url == f"https://t.me/autopost_bot?start=login_{request.telegram_token}"
+    assert url == f"https://t.me/autopost_bot?start=autopost_login_{request.telegram_token}"
     assert request.expires_at == NOW + LOGIN_REQUEST_TTL
     assert service.complete_login.status(request.browser_token) == "pending"
 
@@ -233,7 +233,7 @@ def test_login_without_known_bot_username_is_unavailable() -> None:
 
     service.set_bot_username("@autopost_auth_bot")
     _, url = service.start_login(ip="10.0.0.1")
-    assert url.startswith("https://t.me/autopost_auth_bot?start=login_")
+    assert url.startswith("https://t.me/autopost_auth_bot?start=autopost_login_")
 
 
 def test_logout_drops_the_session_and_is_idempotent() -> None:

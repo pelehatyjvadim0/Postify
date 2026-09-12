@@ -96,6 +96,29 @@ def _api(page, path):
     return response.json()
 
 
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
+def test_browser_telegram_login(browser_application, viewport):
+    playwright = pytest.importorskip("playwright.sync_api")
+    base_url, auth, _ = browser_application
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        context = browser.new_context(viewport=viewport, base_url=base_url)
+        page = context.new_page()
+        page.set_default_timeout(10000)
+        page.goto(base_url)
+        with page.expect_response("**/api/auth/login") as response:
+            page.get_by_role("button", name="Войти через Telegram").click()
+        login = response.value.json()
+        token = login["telegram_url"].split("start=autopost_login_", 1)[1]
+        assert context.request.get("/api/me").status == 401
+        auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity("701", "browser_editor", "Browser Editor"))
+        assert context.request.get("/api/me").status == 401
+        auth.handle_bot_decision(telegram_token=token, telegram_user_id="701", approved=True)
+        page.get_by_role("button", name="Создать проект", exact=True).wait_for()
+        assert context.request.get("/api/me").json()["telegram_user_id"] == "701"
+        browser.close()
+
+
 def test_browser_editor_workflow(browser_application, tmp_path):
     playwright = pytest.importorskip("playwright.sync_api")
     base_url, auth, calls = browser_application
@@ -110,7 +133,7 @@ def test_browser_editor_workflow(browser_application, tmp_path):
         with page.expect_response("**/api/auth/login") as login_response:
             page.get_by_role("button", name="Войти через Telegram").click()
         login = login_response.value.json()
-        token = login["telegram_url"].split("start=login_", 1)[1]
+        token = login["telegram_url"].split("start=autopost_login_", 1)[1]
         auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity("701", "browser_editor", "Browser Editor"))
         auth.handle_bot_decision(telegram_token=token, telegram_user_id="701", approved=True)
         page.get_by_role("button", name="Создать проект", exact=True).click()

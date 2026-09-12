@@ -73,12 +73,12 @@ class StartLogin:
             now=now,
             expires_at=now + LOGIN_REQUEST_TTL,
         )
-        url = f"https://t.me/{bot_username}?start=login_{request.telegram_token}"
+        url = f"https://t.me/{bot_username}?start=autopost_login_{request.telegram_token}"
         return request, url
 
 
 class HandleBotStart:
-    """Бот получил ``/start login_<token>``: запрос переходит в confirmation."""
+    """Бот получил ``/start autopost_login_<token>``: запрос переходит в confirmation."""
 
     def __init__(self, repository, *, clock: Clock) -> None:
         self._repository = repository

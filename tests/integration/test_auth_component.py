@@ -88,7 +88,7 @@ def start_login(client: TestClient) -> tuple[str, str]:
     response = client.post("/api/auth/login", headers=ORIGIN)
     assert response.status_code == 201
     body = response.json()
-    telegram_token = body["telegram_url"].rsplit("start=login_", 1)[1]
+    telegram_token = body["telegram_url"].rsplit("start=autopost_login_", 1)[1]
     return body["browser_token"], telegram_token
 
 

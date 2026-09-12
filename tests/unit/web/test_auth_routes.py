@@ -91,7 +91,7 @@ def test_login_returns_the_deeplink_and_hides_the_telegram_token(context) -> Non
     body = response.json()
     assert response.status_code == 201
     assert set(body) == {"browser_token", "telegram_url", "expires_at"}
-    assert body["telegram_url"].startswith("https://t.me/autopost_auth_bot?start=login_")
+    assert body["telegram_url"].startswith("https://t.me/autopost_auth_bot?start=autopost_login_")
     assert body["expires_at"] == (NOW + LOGIN_REQUEST_TTL).isoformat()
     stored = service.repository.login_request_by_browser_token(body["browser_token"])
     # Токены разные: наружу уходит только browser_token, telegram_token живёт

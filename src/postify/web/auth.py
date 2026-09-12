@@ -132,9 +132,13 @@ async def _polling(service: AuthService, poller):
             yield
             return
         from postify.adapters.telegram.auth_bot import AuthBotPoller, TelegramAuthBot
+        from postify.config import Settings
 
         client = httpx.AsyncClient()
-        poller = AuthBotPoller(TelegramAuthBot(client, bot_token=token), service)
+        poller = AuthBotPoller(
+            TelegramAuthBot(client, bot_token=token, relay_url=Settings().auth_bot_relay_url),
+            service,
+        )
 
     task = asyncio.create_task(poller.run(), name="postify-auth-bot")
     try:
