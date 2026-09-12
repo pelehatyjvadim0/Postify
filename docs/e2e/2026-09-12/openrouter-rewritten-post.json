@@ -1,0 +1,115 @@
+{
+  "id": 1,
+  "slot_id": 1,
+  "status": "needs_review",
+  "post_text": "Зелёный квадрат на белом фоне — пример лаконичности в графическом дизайне. Как вы относитесь к таким минималистичным композициям?",
+  "char_count": 129,
+  "media": {
+    "asset_id": 2,
+    "caption": "На белом фоне изображен один темно-зеленый квадрат.",
+    "url": "/api/projects/1/media/2/file",
+    "rationale": "Изображение темно-зеленого квадрата на белом фоне визуально дополняет описание примера минималистичного графического дизайна.",
+    "last_used_at": "2026-09-12T05:37:20.616057Z"
+  },
+  "generation": {
+    "model": "google/gemini-3.1-flash-lite",
+    "provider": "openrouter",
+    "iterations": 2,
+    "generated_at": "2026-09-12T05:37:20.616057+00:00",
+    "media_asset_id": 2,
+    "media_rationale": "Изображение темно-зеленого квадрата на белом фоне визуально дополняет описание примера минималистичного графического дизайна.",
+    "publication_mode": "review",
+    "reasoning_effort": "medium",
+    "validation_passed": false
+  },
+  "validation": {
+    "passed": false,
+    "iterations": 2,
+    "layers": [
+      {
+        "items": [
+          {
+            "key": "length",
+            "detail": "129 из 1024",
+            "passed": true
+          },
+          {
+            "key": "non_empty",
+            "detail": "Текст заполнен",
+            "passed": true
+          },
+          {
+            "key": "utf8",
+            "detail": "Допустимый текст",
+            "passed": true
+          }
+        ],
+        "layer": "format",
+        "score": "3/3",
+        "passed": true
+      },
+      {
+        "items": [
+          {
+            "text": "Не употреблять слово скидка",
+            "passed": true,
+            "rule_id": 1,
+            "evidence": "Слово скидка в тексте отсутствует.",
+            "severity": "block"
+          }
+        ],
+        "layer": "rules",
+        "score": "1/1",
+        "passed": true
+      },
+      {
+        "items": [
+          {
+            "claim": "Зелёный квадрат на белом фоне является примером лаконичности в графическом дизайне.",
+            "detail": "Отсутствует в теме слота",
+            "verdict": "unsupported"
+          }
+        ],
+        "layer": "grounding",
+        "passed": false
+      },
+      {
+        "items": [
+          {
+            "detail": "На белом фоне изображен один темно-зеленый квадрат.",
+            "verdict": "match",
+            "asset_id": 2
+          }
+        ],
+        "layer": "image",
+        "passed": true
+      }
+    ]
+  },
+  "delivery": null,
+  "published": null,
+  "history": [
+    {
+      "status": "generating",
+      "reason": "generation",
+      "created_at": "2026-09-12T05:37:20.616057Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "generated",
+      "created_at": "2026-09-12T05:37:20.616057Z"
+    },
+    {
+      "status": "generating",
+      "reason": "regeneration",
+      "created_at": "2026-09-12T05:37:20.616057Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "generated",
+      "created_at": "2026-09-12T05:37:20.616057Z"
+    }
+  ],
+  "created_at": "2026-09-12T05:37:20.616057Z",
+  "updated_at": "2026-09-12T05:37:20.616057Z"
+}

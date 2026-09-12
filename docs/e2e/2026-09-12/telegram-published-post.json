@@ -1,0 +1,98 @@
+{
+  "id": 1,
+  "slot_id": 1,
+  "status": "published",
+  "post_text": "E2E AutoPostTelegram\n\nЗелёный квадрат на белом фоне. Тестовая публикация, будет удалена после проверки.",
+  "char_count": 103,
+  "media": {
+    "asset_id": 1,
+    "caption": "На изображении представлен зеленый квадрат на белом фоне.",
+    "url": "/api/projects/1/media/1/file",
+    "rationale": "Изображение зеленого квадрата на белом фоне выбрано для тестовой публикации в рамках проверки E2E AutoPostTelegram.",
+    "last_used_at": "2026-09-12T06:01:40.176960Z"
+  },
+  "generation": {
+    "model": "google/gemini-3.1-flash-lite",
+    "provider": "openrouter",
+    "iterations": 2,
+    "generated_at": "2026-09-12T06:01:40.176960+00:00",
+    "media_asset_id": 1,
+    "media_rationale": "Изображение зеленого квадрата на белом фоне выбрано для тестовой публикации в рамках проверки E2E AutoPostTelegram.",
+    "publication_mode": "review",
+    "reasoning_effort": "medium",
+    "validation_passed": true
+  },
+  "validation": {
+    "passed": true,
+    "iterations": 0,
+    "layers": [
+      {
+        "items": [
+          {
+            "key": "length",
+            "detail": "103 из 1024",
+            "passed": true
+          },
+          {
+            "key": "non_empty",
+            "detail": "Текст заполнен",
+            "passed": true
+          },
+          {
+            "key": "utf8",
+            "detail": "Допустимый текст",
+            "passed": true
+          }
+        ],
+        "layer": "format",
+        "score": "3/3",
+        "passed": true
+      },
+      {
+        "items": [],
+        "layer": "grounding",
+        "passed": true
+      }
+    ]
+  },
+  "delivery": {
+    "status": "published",
+    "message_id": 13,
+    "failure_code": null,
+    "failure_reason": null,
+    "published_at": "2026-09-13T06:02:40.176960Z"
+  },
+  "published": {
+    "published_at": "2026-09-13T06:02:40.176960Z",
+    "message_url": "https://t.me/c/4364928780/13"
+  },
+  "history": [
+    {
+      "status": "generating",
+      "reason": "generation",
+      "created_at": "2026-09-12T06:01:40.176960Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "generated",
+      "created_at": "2026-09-12T06:01:40.176960Z"
+    },
+    {
+      "status": "needs_review",
+      "reason": "edited",
+      "created_at": "2026-09-12T06:01:40.176960Z"
+    },
+    {
+      "status": "approved",
+      "reason": "review",
+      "created_at": "2026-09-12T06:01:40.176960Z"
+    },
+    {
+      "status": "published",
+      "reason": "channel_confirmed",
+      "created_at": "2026-09-13T06:02:40.176960Z"
+    }
+  ],
+  "created_at": "2026-09-12T06:01:40.176960Z",
+  "updated_at": "2026-09-13T06:02:40.176960Z"
+}

@@ -1,0 +1,15 @@
+{
+  "operation_id": 4,
+  "purpose": "generate_post",
+  "status": "failed",
+  "actor": "user",
+  "mode": "manual",
+  "outcome": null,
+  "result": {},
+  "error": {
+    "code": "generate_post_failed",
+    "message": "Не удалось сгенерировать пост"
+  },
+  "started_at": "2026-09-12T05:59:19.287593Z",
+  "finished_at": "2026-09-12T05:59:19.287593Z"
+}

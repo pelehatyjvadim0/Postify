@@ -1,0 +1,15 @@
+{
+  "operation_id": 1,
+  "purpose": "derive_rules",
+  "status": "failed",
+  "actor": "user",
+  "mode": "manual",
+  "outcome": null,
+  "result": {},
+  "error": {
+    "code": "derive_rules_failed",
+    "message": "Не удалось разобрать промпт проекта на правила"
+  },
+  "started_at": "2026-09-12T05:59:19.287593Z",
+  "finished_at": "2026-09-12T05:59:19.287593Z"
+}

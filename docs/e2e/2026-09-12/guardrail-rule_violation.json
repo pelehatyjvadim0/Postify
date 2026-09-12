@@ -1,0 +1,70 @@
+{
+  "text": "Зелёный квадрат: скидка каждому покупателю.",
+  "topic": "Зелёный квадрат на белом фоне: простая идея для графического дизайна.",
+  "passed": false,
+  "layers": [
+    {
+      "layer": "format",
+      "passed": true,
+      "score": "3/3",
+      "items": [
+        {
+          "key": "length",
+          "passed": true,
+          "detail": "43 из 1024"
+        },
+        {
+          "key": "non_empty",
+          "passed": true,
+          "detail": "Текст заполнен"
+        },
+        {
+          "key": "utf8",
+          "passed": true,
+          "detail": "Допустимый текст"
+        }
+      ]
+    },
+    {
+      "layer": "rules",
+      "passed": false,
+      "score": "0/1",
+      "items": [
+        {
+          "rule_id": 1,
+          "text": "Не употреблять слово скидка",
+          "severity": "block",
+          "passed": false,
+          "evidence": "В тексте поста обнаружено запрещенное слово 'скидка'."
+        }
+      ]
+    },
+    {
+      "layer": "grounding",
+      "passed": false,
+      "items": [
+        {
+          "claim": "Зелёный квадрат на белом фоне: простая идея для графического дизайна.",
+          "verdict": "supported",
+          "detail": "Есть в теме слота"
+        },
+        {
+          "claim": "Зелёный квадрат: скидка каждому покупателю.",
+          "verdict": "unsupported",
+          "detail": "Отсутствует в теме слота"
+        }
+      ]
+    },
+    {
+      "layer": "image",
+      "passed": true,
+      "items": [
+        {
+          "asset_id": 1,
+          "verdict": "match",
+          "detail": "На белом фоне изображен ярко-зеленый квадрат."
+        }
+      ]
+    }
+  ]
+}

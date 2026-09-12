@@ -1,0 +1,57 @@
+{
+  "text": "",
+  "topic": "Зелёный квадрат на белом фоне: простая идея для графического дизайна.",
+  "passed": false,
+  "layers": [
+    {
+      "layer": "format",
+      "passed": false,
+      "score": "1/3",
+      "items": [
+        {
+          "key": "length",
+          "passed": false,
+          "detail": "0 из 1024"
+        },
+        {
+          "key": "non_empty",
+          "passed": false,
+          "detail": "Текст пуст"
+        },
+        {
+          "key": "utf8",
+          "passed": true,
+          "detail": "Допустимый текст"
+        }
+      ]
+    },
+    {
+      "layer": "rules",
+      "passed": true,
+      "score": "0/0",
+      "items": []
+    },
+    {
+      "layer": "grounding",
+      "passed": false,
+      "items": [
+        {
+          "claim": "Зелёный квадрат на белом фоне представляет собой концепцию простого графического дизайна.",
+          "verdict": "unsupported",
+          "detail": "Отсутствует в теме слота"
+        }
+      ]
+    },
+    {
+      "layer": "image",
+      "passed": true,
+      "items": [
+        {
+          "asset_id": 1,
+          "verdict": "match",
+          "detail": "На изображении представлен зеленый квадрат на белом фоне."
+        }
+      ]
+    }
+  ]
+}

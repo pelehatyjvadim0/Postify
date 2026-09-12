@@ -1,0 +1,12 @@
+{
+  "operation_id": 3,
+  "purpose": "publish_once",
+  "status": "succeeded",
+  "actor": "scheduler",
+  "mode": "automatic",
+  "outcome": "published",
+  "result": {},
+  "error": null,
+  "started_at": "2026-09-12T06:02:02.562212Z",
+  "finished_at": "2026-09-13T06:02:40.176960Z"
+}

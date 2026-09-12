@@ -1,0 +1,57 @@
+{
+  "text": "Компания АгроВектор доказала пользу зелёного квадрата в исследовании Nature.",
+  "topic": "Зелёный квадрат на белом фоне: простая идея для графического дизайна.",
+  "passed": false,
+  "layers": [
+    {
+      "layer": "format",
+      "passed": true,
+      "score": "3/3",
+      "items": [
+        {
+          "key": "length",
+          "passed": true,
+          "detail": "76 из 1024"
+        },
+        {
+          "key": "non_empty",
+          "passed": true,
+          "detail": "Текст заполнен"
+        },
+        {
+          "key": "utf8",
+          "passed": true,
+          "detail": "Допустимый текст"
+        }
+      ]
+    },
+    {
+      "layer": "rules",
+      "passed": true,
+      "score": "0/0",
+      "items": []
+    },
+    {
+      "layer": "grounding",
+      "passed": false,
+      "items": [
+        {
+          "claim": "Компания АгроВектор доказала пользу зелёного квадрата в исследовании Nature.",
+          "verdict": "unsupported",
+          "detail": "Отсутствует в теме слота"
+        }
+      ]
+    },
+    {
+      "layer": "image",
+      "passed": true,
+      "items": [
+        {
+          "asset_id": 1,
+          "verdict": "match",
+          "detail": "На белом фоне изображен ярко-зеленый квадрат на переднем плане."
+        }
+      ]
+    }
+  ]
+}
