@@ -289,3 +289,25 @@ def test_logout_drops_the_session_and_requires_csrf(context) -> None:
 
 def _status(client: TestClient, browser_token: str):
     return client.get("/api/auth/login/status", params={"request": browser_token})
+
+
+def test_me_restores_csrf_for_a_valid_session_after_restart(context):
+    app, service, _, _ = context
+    client = TestClient(app)
+    token = login(client, service)
+    original = _status(client, token).json()['csrf']
+    app.state.csrf_secret = b'restarted-server-secret'
+    response = client.get('/api/me')
+    assert response.status_code == 200
+    restored = response.headers['x-postify-csrf']
+    assert restored and restored != original
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.json()['telegram_user_id'] == OWNER.telegram_user_id
+    assert client.post('/api/auth/logout', headers={**ORIGIN, 'x-postify-csrf': restored}).status_code == 204
+
+
+def test_me_never_discloses_csrf_without_valid_session(context):
+    app, *_ = context
+    response = TestClient(app).get('/api/me')
+    assert response.status_code == 401
+    assert 'x-postify-csrf' not in response.headers

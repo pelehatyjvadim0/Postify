@@ -139,7 +139,11 @@ def me(request: Request):
     if user is None:
         return auth_error(request, 401, "authentication_required")
     return JSONResponse(
-        status_code=200, content=user_payload(request.app.state.auth, user)
+        status_code=200, content=user_payload(request.app.state.auth, user),
+        headers={
+            "x-postify-csrf": csrf_token(request.app.state.csrf_secret, request.cookies[SESSION_COOKIE]),
+            "Cache-Control": "no-store",
+        },
     )
 
 

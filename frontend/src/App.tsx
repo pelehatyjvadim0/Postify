@@ -21,13 +21,21 @@ import { useToast } from '@/lib/toast'
 import type { Project, ProjectSummary } from '@/lib/types'
 
 export function App() {
-  const { user, loading } = useSession()
+  const { user, loading, error, retry } = useSession()
   if (loading) return <BootSkeleton />
+  if (error) return (
+    <div className="mx-auto max-w-lg space-y-4 p-8">
+      <Alert tone="error" title="Сервер временно недоступен">{error}</Alert>
+      <Button onClick={retry}>Повторить подключение</Button>
+    </div>
+  )
   if (!user) return <AuthScreen />
   return <Workspace />
 }
 
 function Workspace() {
+  const { user } = useSession()
+  const projectStorageKey = `autoposttg:last-project:${user!.id}`
   const route = useRoute()
   const screen = route.screen
   const [projects, setProjects] = React.useState<ProjectSummary[]>([])
@@ -46,9 +54,19 @@ function Workspace() {
   const loadProjects = React.useCallback(async () => {
     const list = await api.projects()
     setProjects(list)
-    setProjectId((current) => current ?? list[0]?.id ?? null)
+    setProjectId((current) => {
+      if (list.some((item) => item.id === current)) return current
+      let remembered: number | null = null
+      try { remembered = Number(localStorage.getItem(projectStorageKey)) } catch { /* storage unavailable */ }
+      return list.find((item) => item.id === remembered)?.id ?? list[0]?.id ?? null
+    })
     return list
-  }, [])
+  }, [projectStorageKey])
+
+  React.useEffect(() => {
+    if (projectId === null) return
+    try { localStorage.setItem(projectStorageKey, String(projectId)) } catch { /* storage unavailable */ }
+  }, [projectId, projectStorageKey])
 
   React.useEffect(() => {
     loadProjects()

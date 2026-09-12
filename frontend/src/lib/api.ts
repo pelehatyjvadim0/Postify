@@ -27,8 +27,8 @@ let csrfToken: string | null = null
 
 /**
  * Сессия живёт в httpOnly-куке, а токен защиты от подделки запросов — только
- * в браузере. Если кука есть, а токена нет, изменить ничего нельзя: такую
- * сессию считаем потерянной и возвращаем человека на вход.
+ * в браузере. При загрузке /api/me восстанавливает токен из действующей
+ * сессии, даже если localStorage очищен или открыт другой порт приложения.
  */
 let onSessionLost: (() => void) | null = null
 
@@ -121,6 +121,10 @@ async function request<T>(method: Method, path: string, options: RequestOptions 
       error?.message ?? 'Не удалось выполнить запрос',
       error?.field,
     )
+  }
+  if (path === '/api/me') {
+    const restored = response.headers.get('x-postify-csrf')
+    if (restored) setCsrfToken(restored)
   }
   return payload as T
 }

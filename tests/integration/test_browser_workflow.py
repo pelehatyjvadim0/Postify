@@ -103,12 +103,16 @@ def test_browser_telegram_login(browser_application, viewport):
     with playwright.sync_playwright() as driver:
         browser = driver.chromium.launch()
         context = browser.new_context(viewport=viewport, base_url=base_url)
+        context.route("https://t.me/**", lambda route: route.fulfill(status=200, body="Telegram launch page"))
         page = context.new_page()
         page.set_default_timeout(10000)
         page.goto(base_url)
-        with page.expect_response("**/api/auth/login") as response:
+        with page.expect_popup() as popup, page.expect_response("**/api/auth/login") as response:
             page.get_by_role("button", name="Войти через Telegram").click()
         login = response.value.json()
+        popup.value.wait_for_url(login["telegram_url"])
+        assert popup.value.evaluate("window.opener === null")
+        popup.value.close()
         token = login["telegram_url"].split("start=autopost_login_", 1)[1]
         assert context.request.get("/api/me").status == 401
         auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity("701", "browser_editor", "Browser Editor"))
@@ -125,6 +129,7 @@ def test_browser_editor_workflow(browser_application, tmp_path):
     with playwright.sync_playwright() as driver:
         browser = driver.chromium.launch()
         context = browser.new_context(viewport={"width": 1440, "height": 1000}, base_url=base_url)
+        context.route("https://t.me/**", lambda route: route.fulfill(status=200, body="Telegram launch page"))
         page = context.new_page()
         page.set_default_timeout(15000)
         errors = []
@@ -217,6 +222,7 @@ def test_browser_settings_and_media_management(browser_application, tmp_path, vi
     with playwright.sync_playwright() as driver:
         browser = driver.chromium.launch()
         context = browser.new_context(viewport=viewport, base_url=base_url)
+        context.route("https://t.me/**", lambda route: route.fulfill(status=200, body="Telegram launch page"))
         page = context.new_page()
         page.set_default_timeout(15000)
         errors = []
@@ -306,4 +312,96 @@ def test_browser_settings_and_media_management(browser_application, tmp_path, vi
             _assert_rendered(page, tmp_path / f"plan-{view}.png")
         assert errors == []
         context.close()
+        browser.close()
+
+
+@pytest.mark.parametrize('viewport', [{'width': 1440, 'height': 1000}, {'width': 390, 'height': 844}])
+def test_browser_restores_session_and_last_project(browser_application, tmp_path, viewport):
+    playwright = pytest.importorskip('playwright.sync_api')
+    base_url, auth, _ = browser_application
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        context = browser.new_context(viewport=viewport, base_url=base_url)
+        context.route('https://t.me/**', lambda route: route.fulfill(status=200, body='Telegram launch page'))
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.goto(base_url)
+        with page.expect_popup() as popup, page.expect_response('**/api/auth/login') as response:
+            page.get_by_role('button', name='Войти через Telegram').click()
+        login = response.value.json()
+        popup.value.wait_for_url(login['telegram_url'])
+        popup.value.close()
+        token = login['telegram_url'].split('start=autopost_login_', 1)[1]
+        auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity('701', 'browser_editor', 'Browser Editor'))
+        auth.handle_bot_decision(telegram_token=token, telegram_user_id='701', approved=True)
+        page.get_by_role('button', name='Создать проект', exact=True).click()
+        page.get_by_label('Название', exact=True).fill('Empty project')
+        page.get_by_role('dialog').get_by_role('button', name='Создать проект', exact=True).click()
+        page.get_by_role('button', name='Добавить слот', exact=True).wait_for()
+        if viewport['width'] < 768:
+            page.get_by_role('button', name='Открыть меню', exact=True).click()
+        page.get_by_role('button', name='EP Empty project', exact=True).click()
+        page.get_by_role('menuitem', name='Создать проект').click()
+        page.get_by_label('Название', exact=True).fill('My project')
+        page.get_by_role('dialog').get_by_role('button', name='Создать проект', exact=True).click()
+        page.get_by_role('button', name='Добавить слот', exact=True).wait_for()
+        if viewport['width'] < 768:
+            page.get_by_role('button', name='Открыть меню', exact=True).click()
+        page.get_by_role('button', name='Изображения', exact=True).click()
+        image_path = tmp_path / 'field.png'
+        Image.new('RGB', (400, 240), (30, 140, 60)).save(image_path)
+        page.locator('input[type="file"]').set_input_files(str(image_path))
+        page.get_by_text('Изображения загружены и описаны', exact=True).wait_for()
+        if viewport['width'] < 768:
+            page.get_by_role('button', name='Открыть меню', exact=True).click()
+        page.get_by_role('button', name='Контент-план', exact=True).click()
+        page.get_by_role('button', name='Добавить слот', exact=True).click()
+        page.get_by_label('Дата публикации', exact=True).fill((datetime.now(UTC) + timedelta(days=2)).date().isoformat())
+        page.get_by_label('Промпт поста', exact=True).fill('Green field saved plan')
+        page.get_by_role('dialog').get_by_role('button', name='Сохранить', exact=True).click()
+        page.get_by_role('button', name='Сгенерировать сейчас', exact=True).wait_for()
+        page.keyboard.press('Escape')
+        remembered = page.evaluate("localStorage.getItem('autoposttg:last-project:1')")
+        assert remembered == '2'
+        page.evaluate("localStorage.removeItem('csrf')")
+        page.reload()
+        page.locator('#root').get_by_text('Green field saved plan', exact=True).wait_for()
+        page.keyboard.press('Escape')
+        assert page.get_by_role('button', name='Войти через Telegram').count() == 0
+        assert page.evaluate("Boolean(localStorage.getItem('csrf'))")
+        if viewport['width'] < 768:
+            page.get_by_role('button', name='Открыть меню', exact=True).click()
+        page.get_by_role('button', name='Изображения', exact=True).click()
+        page.get_by_role('img', name='Green field', exact=True).wait_for()
+        with page.expect_response('**/media/1') as updated:
+            page.get_by_role('switch', name='Вывести картинку из подбора').click()
+        assert updated.value.ok, updated.value.text()
+        assert _api(page, '/api/projects/2/media')['items'][0]['enabled'] is False
+        context.route('**/api/me', lambda route: route.fulfill(status=503, json={'error': {'code': 'unavailable', 'message': 'unavailable'}}))
+        page.reload()
+        page.get_by_text('Сервер временно недоступен', exact=True).wait_for()
+        assert page.get_by_role('button', name='Войти через Telegram').count() == 0
+        context.unroute('**/api/me')
+        page.get_by_role('button', name='Повторить подключение').click()
+        page.get_by_role('img', name='Green field', exact=True).wait_for()
+        assert page.evaluate("localStorage.getItem('autoposttg:last-project:1')") == '2'
+        browser.close()
+
+
+def test_browser_closes_telegram_tab_when_login_request_fails(browser_application):
+    playwright = pytest.importorskip('playwright.sync_api')
+    base_url, *_ = browser_application
+    with playwright.sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        context = browser.new_context(base_url=base_url)
+        context.route('**/api/auth/login', lambda route: route.fulfill(status=503, json={
+            'error': {'code': 'telegram_unavailable', 'message': 'Вход временно недоступен'},
+        }))
+        page = context.new_page()
+        page.goto(base_url)
+        with page.expect_popup() as popup:
+            page.get_by_role('button', name='Войти через Telegram').click()
+        page.get_by_text('Вход временно недоступен', exact=True).wait_for()
+        assert popup.value.is_closed()
+        assert len(context.pages) == 1
         browser.close()

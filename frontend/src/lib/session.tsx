@@ -1,12 +1,13 @@
 import * as React from 'react'
-import { api, hasCsrfToken, restoreCsrfToken, setCsrfToken, setSessionLostHandler } from './api'
+import { api, restoreCsrfToken, setCsrfToken, setSessionLostHandler } from './api'
 import { ApiError } from './errors'
-import { supportLog } from './support'
 import type { User } from './types'
 
 interface SessionValue {
   user: User | null
   loading: boolean
+  error: string | null
+  retry: () => void
   /** Вызывается, когда статус входа пришёл со значением approved. */
   signedIn: (user: User, csrf: string) => void
   logout: () => Promise<void>
@@ -18,29 +19,31 @@ const SessionContext = React.createContext<SessionValue>(null as unknown as Sess
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<User | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const [attempt, setAttempt] = React.useState(0)
 
   React.useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError(null)
     restoreCsrfToken()
     api
       .me()
       .then((loaded) => {
-        if (hasCsrfToken()) {
-          setUser(loaded)
-          return
+        if (active) setUser(loaded)
+      })
+      .catch((caught) => {
+        if (!active) return
+        if (caught instanceof ApiError && caught.isUnauthorized) {
+          setUser(null)
+          setCsrfToken(null)
+        } else {
+          setError('Не удалось подключиться к серверу. Повторите подключение.')
         }
-        // Кука жива, а токен защиты потерян (очищено хранилище, приватный
-        // режим). Без него не пройдёт ни одно изменение, включая выход, —
-        // поэтому сразу отправляем на вход, а не в неработающий интерфейс.
-        supportLog('session_without_csrf', { user_id: loaded.id })
-        setUser(null)
       })
-      .catch((error) => {
-        // 401 — обычное состояние до входа, а не сбой.
-        if (!(error instanceof ApiError && error.isUnauthorized)) console.error(error)
-        setUser(null)
-      })
-      .finally(() => setLoading(false))
-  }, [])
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [attempt])
 
   React.useEffect(() => {
     setSessionLostHandler(() => {
@@ -54,6 +57,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       loading,
+      error,
+      retry: () => setAttempt((value) => value + 1),
       setUser,
       signedIn: (signedUser, csrf) => {
         setCsrfToken(csrf)
@@ -70,7 +75,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-    [user, loading],
+    [user, loading, error],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

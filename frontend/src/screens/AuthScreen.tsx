@@ -74,6 +74,10 @@ export function AuthScreen() {
   }, [request, waiting, signedIn])
 
   async function start() {
+    // Открываем вкладку прямо в обработчике клика: после await браузер
+    // может заблокировать её как незапрошенное всплывающее окно.
+    const telegram = window.open('about:blank', '_blank')
+    if (telegram) telegram.opener = null
     setStarting(true)
     setError(null)
     setStatus(null)
@@ -87,7 +91,9 @@ export function AuthScreen() {
       })
       setRequest(created)
       setStatus('pending')
+      if (telegram && !telegram.closed) telegram.location.replace(created.telegram_url)
     } catch (caught) {
+      telegram?.close()
       setError(
         caught instanceof ApiError ? caught.message : 'Не удалось начать вход',
       )
