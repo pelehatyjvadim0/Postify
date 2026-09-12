@@ -10,7 +10,7 @@ export const SLOT_STATUS: Record<
   generating: { label: 'Генерируется', dot: 'bg-sky-500 animate-pulse', tone: 'neutral' },
   needs_review: { label: 'На ревью', dot: 'bg-amber-500', tone: 'amber' },
   approved: { label: 'Готов', dot: 'bg-emerald-500', tone: 'emerald' },
-  published: { label: 'Опубликован', dot: 'bg-muted-foreground/40', tone: 'muted' },
+  published: { label: 'Опубликовано', dot: 'bg-emerald-500', tone: 'emerald' },
   failed: { label: 'Ошибка', dot: 'bg-red-500', tone: 'red' },
   skipped: { label: 'Пропущен', dot: 'bg-muted-foreground/20', tone: 'muted' },
 }

@@ -11,6 +11,7 @@ import {
   shiftDays,
   ymd,
 } from '@/lib/dates'
+import { PublishedBadge } from './PublishedBadge'
 import { SLOT_STATUS } from '@/lib/status'
 import type { Slot } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -141,10 +142,12 @@ function ListRow({
         {title || 'промпт не задан'}
       </span>
       <span className="flex shrink-0 items-center gap-1.5 max-md:w-full max-md:pl-[56px]">
-        <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
-        <span className="w-[92px] text-[12px] text-muted-foreground max-md:w-auto">
-          {status.label}
-        </span>
+        {slot.status === 'published' ? <PublishedBadge /> : <>
+          <span className={cn('h-1.5 w-1.5 rounded-full', status.dot)} />
+          <span className="w-[92px] text-[12px] text-muted-foreground max-md:w-auto">
+            {status.label}
+          </span>
+        </>}
       </span>
       <ChevronRight className="h-4 w-4 shrink-0 text-transparent transition-colors group-hover:text-muted-foreground/70 max-md:hidden" />
     </div>
@@ -200,7 +203,7 @@ export function WeekView({
                       )}
                     >
                       <div className="mb-1 flex items-center gap-1.5">
-                        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />
+                        {slot.status !== 'published' && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />}
                         <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
                           {timeOf(slot.publish_at)}
                         </span>
@@ -213,6 +216,7 @@ export function WeekView({
                       >
                         {title || 'промпт не задан'}
                       </p>
+                      {slot.status === 'published' && <div className="mt-2"><PublishedBadge /></div>}
                     </div>
                   )
                 })}
@@ -315,20 +319,22 @@ export function MonthView({
                     {...bindPeek(slot)}
                     onClick={() => onSelect(slot)}
                     className={cn(
-                      'flex h-6 cursor-pointer items-center gap-1.5 rounded px-1',
+                      'flex min-h-6 cursor-pointer flex-wrap items-center gap-x-1.5 gap-y-1 rounded px-1',
+                      slot.status === 'published' && 'py-1',
                       slot.id === selectedId ? 'bg-accent' : 'hover:bg-accent/60',
                       slot.status === 'skipped' && 'opacity-55',
                     )}
                   >
-                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />
+                    {slot.status !== 'published' && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />}
                     <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                       {timeOf(slot.publish_at)}
                     </span>
                     <span
-                      className={cn('truncate text-[11px]', !title && 'italic text-muted-foreground')}
+                      className={cn('min-w-0 flex-1 truncate text-[11px]', !title && 'italic text-muted-foreground')}
                     >
                       {title || 'нет темы'}
                     </span>
+                    {slot.status === 'published' && <div className="w-full"><PublishedBadge /></div>}
                   </div>
                 )
               })}

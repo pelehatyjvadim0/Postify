@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
+import { PublishedBadge } from './PublishedBadge'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { dateTimeLabel } from '@/lib/dates'
@@ -117,11 +118,13 @@ function PeekHead({ slot }: { slot: Slot }) {
   const status = SLOT_STATUS[slot.status]
   return (
     <div className="flex items-center gap-2 px-3.5 pb-2.5 pt-3">
-      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />
+      {slot.status !== 'published' && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', status.dot)} />}
       <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {dateTimeLabel(slot.publish_at)}
       </span>
-      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{status.label}</span>
+      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+        {slot.status === 'published' ? <PublishedBadge /> : status.label}
+      </span>
     </div>
   )
 }

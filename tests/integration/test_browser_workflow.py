@@ -185,6 +185,17 @@ def test_browser_editor_workflow(browser_application, tmp_path):
         page.get_by_role("button", name="Сгенерировать сейчас", exact=True).click()
         page.get_by_role("button", name="Править текст", exact=True).wait_for()
         assert calls
+        dialog = page.get_by_role("dialog")
+        assert not dialog.get_by_text("Проверки", exact=True).count()
+        assert not dialog.get_by_text("Формальные правила", exact=True).count()
+        assert dialog.get_by_role("heading").inner_text() == "Пост контент-плана"
+        prompt = dialog.locator("details")
+        assert prompt.get_attribute("open") is None
+        prompt.locator("summary").click()
+        assert prompt.locator("p").is_visible()
+        assert prompt.locator("p").inner_text() == "Green field and practical farming advice"
+        prompt.locator("summary").click()
+        assert not prompt.locator("p").is_visible()
         page.get_by_role("button", name="Править текст", exact=True).click()
         page.get_by_role("dialog").get_by_role("textbox").fill("Green field. Edited practical farming advice.")
         page.get_by_role("dialog").get_by_role("button", name="Сохранить", exact=True).click()
@@ -203,6 +214,29 @@ def test_browser_editor_workflow(browser_application, tmp_path):
         page.get_by_role("button", name="Одобрить", exact=True).wait_for()
         assert _api(page, f"/api/projects/{project_id}/posts")[0]["status"] == "needs_review"
         page.keyboard.press("Escape")
+        assert not page.get_by_text("Режим", exact=True).count()
+
+        # UI representation of a published slot; real Telegram delivery is tested separately.
+        published_slots = _api(page, f"/api/projects/{project_id}/plan?from={future.date()}&to={future.date()}")
+        for item in published_slots:
+            item["status"] = "published"
+            item["publish_at"] = datetime.now(UTC).replace(hour=12).isoformat()
+            if item.get("post"):
+                item["post"]["status"] = "published"
+
+        def published_plan(route):
+            route.fulfill(status=200, json=published_slots)
+
+        page.route("**/plan?*", published_plan)
+        for viewport in ({"width": 1440, "height": 1000}, {"width": 390, "height": 844}):
+            page.set_viewport_size(viewport)
+            for view in ("Неделя", "Месяц", "Список"):
+                page.get_by_role("button", name=view, exact=True).click()
+                badge = page.locator("#root").get_by_text("Опубликовано", exact=True)
+                badge.wait_for()
+                assert badge.locator("svg.lucide-check").count() == 1
+                _assert_rendered(page, tmp_path / f"published-{view}-{viewport['width']}.png")
+        page.unroute("**/plan?*", published_plan)
         page.get_by_role("button", name="Открыть меню", exact=True).click()
         page.get_by_role("button", name="Настройки", exact=True).click()
         page.get_by_role("button", name="Аккаунт", exact=True).click()
@@ -298,7 +332,7 @@ def test_browser_settings_and_media_management(browser_application, tmp_path, vi
         page.get_by_role("button", name="Изменить промпт", exact=True).click()
         page.get_by_label("Промпт поста", exact=True).fill("Green field edited")
         page.get_by_role("dialog").get_by_role("button", name="Сохранить", exact=True).click()
-        page.get_by_role("heading", name="Green field edited", exact=True).wait_for()
+        page.get_by_role("dialog").locator("summary").filter(has_text="Green field edited").wait_for()
         with page.expect_response("**/skip") as skipped:
             page.get_by_role("button", name="Пропустить", exact=True).click()
         assert skipped.value.ok

@@ -1,6 +1,5 @@
 import * as React from 'react'
 import { ExternalLink, ImagePlus, Loader2, Pencil, Trash2 } from 'lucide-react'
-import { ChecksReport } from './ChecksReport'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -168,18 +167,21 @@ export function PostPanel({
               </span>
               <Badge tone={status.tone}>{status.label}</Badge>
             </div>
-            <DialogTitle className="pr-8">
-              {slot.post?.title || slot.topic || 'Промпт не задан'}
-            </DialogTitle>
+            <DialogTitle className="sr-only">Пост контент-плана</DialogTitle>
           </div>
 
           <div className="rounded-lg border border-border">
-            <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Промпт поста
-            </div>
-            <p className="px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
-              {slot.topic || 'Промпт не заполнен — агент не возьмёт слот в работу.'}
-            </p>
+            <details key={slot.id} className="group">
+              <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                <span className="uppercase tracking-wide">Промпт поста</span>
+                <span className="mt-1 block truncate text-xs font-normal group-open:hidden">
+                  {slot.topic || 'Промпт не заполнен'}
+                </span>
+              </summary>
+              <p className="whitespace-pre-wrap border-t border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                {slot.topic || 'Промпт не заполнен — агент не возьмёт слот в работу.'}
+              </p>
+            </details>
             <div className="flex flex-wrap gap-2 border-t border-border px-3 py-2">
               <Button size="xs" variant="outline" onClick={() => onEditTopic(slot)}>
                 <Pencil className="h-3 w-3" />
@@ -323,14 +325,6 @@ export function PostPanel({
                     </div>
                   )}
                 </div>
-              )}
-
-              <ChecksReport report={post.validation} />
-
-              {post.media && (
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  Изображение: {post.media.caption}. {post.media.rationale}.
-                </p>
               )}
 
               {post.published && (

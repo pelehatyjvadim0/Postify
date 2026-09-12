@@ -187,18 +187,6 @@ export function PlanScreen({
         title="Контент-план"
         actions={
           <>
-            <div className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs">
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  project.publication_mode === 'auto' ? 'bg-sky-500' : 'bg-emerald-500',
-                )}
-              />
-              <span className="text-muted-foreground">Режим</span>
-              <span className="font-medium">
-                {project.publication_mode === 'auto' ? 'автопубликация' : 'ревью'}
-              </span>
-            </div>
             <Button onClick={() => setDraft({ slot: null, date: anchor })}>
               <Plus className="h-4 w-4" />
               Добавить слот
