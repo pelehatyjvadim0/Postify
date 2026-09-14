@@ -236,7 +236,9 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
               </FieldHelp>
             }
           >
+            <div className="relative">
             <Input
+              className="pr-16 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
               disabled={draft.media_reuse_blocked === false}
               type="number"
               min={1}
@@ -244,7 +246,8 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
               value={reuse}
               onChange={(event) => setReuse(event.target.value)}
             />
-            <Switch className="mt-3" aria-label="Блокировать повторное использование изображений" checked={draft.media_reuse_blocked ?? true} onCheckedChange={(value) => set('media_reuse_blocked', value)} />
+            <Switch className="absolute right-3 top-1/2 -translate-y-1/2" aria-label="Блокировать повторное использование изображений" checked={draft.media_reuse_blocked ?? true} onCheckedChange={(value) => set('media_reuse_blocked', value)} />
+            </div>
           </Field>
         </div>
         {draft.publication_mode === 'auto' && (
