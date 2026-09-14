@@ -236,10 +236,6 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
               </FieldHelp>
             }
           >
-            <label className="mb-3 flex items-center gap-3 text-sm">
-              <Switch checked={draft.media_reuse_blocked ?? true} onCheckedChange={(value) => set('media_reuse_blocked', value)} />
-              Блокировать повторное использование изображений
-            </label>
             <Input
               disabled={draft.media_reuse_blocked === false}
               type="number"
@@ -248,6 +244,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
               value={reuse}
               onChange={(event) => setReuse(event.target.value)}
             />
+            <Switch className="mt-3" aria-label="Блокировать повторное использование изображений" checked={draft.media_reuse_blocked ?? true} onCheckedChange={(value) => set('media_reuse_blocked', value)} />
           </Field>
         </div>
         {draft.publication_mode === 'auto' && (
