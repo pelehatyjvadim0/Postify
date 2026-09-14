@@ -215,8 +215,8 @@ export function PostPanel({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto p-0">
-        <div className="space-y-5 p-5">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl overflow-hidden p-0 [&>button]:bg-card [&>button]:z-10">
+        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto space-y-5 p-5">
           <div>
             <div className="mb-1 flex items-center justify-between gap-2 pr-8">
               <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
