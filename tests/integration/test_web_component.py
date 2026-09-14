@@ -16,6 +16,8 @@ from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import create_engine, text
 
+from postify.adapters.ai.codex_provider import CodexModelProvider
+from postify.adapters.ai.mock_provider import MockModelProvider
 from postify.config import Settings
 from postify.domain.projects.models import ProjectConfiguration
 from postify.web.app import create_app
@@ -41,11 +43,12 @@ def _settings(database_url: str, tmp_path) -> Settings:
     return Settings(
         database_url=database_url,
         content_media_dir=tmp_path,
+        ai_media_provider="mock",
         postify_secret_key=SecretStr(Fernet.generate_key().decode("ascii")),
     )
 
 
-def _seed(engine) -> None:
+def _seed(engine, media_path) -> None:
     """Два пользователя с проектом у каждого: чужой проект должен быть невидим."""
     with engine.begin() as connection:
         for user_id, telegram in ((OWNER.id, "101"), (OWNER.id + 1, "202")):
@@ -83,6 +86,15 @@ def _seed(engine) -> None:
                     "owner": owner_id,
                 },
             )
+        connection.execute(
+            text(
+                "INSERT INTO media_assets(id,project_id,file_path,mime,bytes,width,height,"
+                "content_hash,caption,caption_status,uploaded_at)"
+                " VALUES (1,:project,:path,'image/png',1,1,1,'test-image',"
+                "'Тестовая тема','ready',:now)"
+            ),
+            {"project": OWN_PROJECT, "path": str(media_path), "now": NOW},
+        )
         # Строки вставлены с явными id, поэтому последовательность надо
         # подвинуть: иначе следующий INSERT возьмёт занятый id.
         for table in ("users", "content_projects"):
@@ -98,9 +110,10 @@ def _seed_post(engine, *, post_id: int, scheduled_at: datetime) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO posts(id,project_id,post_text,status,scheduled_at,"
+                "INSERT INTO posts(id,project_id,post_text,status,scheduled_at,media_path,media_mime,"
                 "generation,created_at,updated_at)"
                 " VALUES (:id,:project,:post_text,'needs_review',:scheduled_at,"
+                "(SELECT file_path FROM media_assets WHERE id=1),'image/png',"
                 "CAST(:generation AS jsonb),:now,:now)"
             ),
             {
@@ -108,7 +121,7 @@ def _seed_post(engine, *, post_id: int, scheduled_at: datetime) -> None:
                 "project": OWN_PROJECT,
                 "post_text": "Первая версия поста",
                 "scheduled_at": scheduled_at,
-                "generation": json.dumps({"provider": "codex"}),
+                "generation": json.dumps({"provider": "codex", "media_asset_id": 1}),
                 "now": NOW,
             },
         )
@@ -131,9 +144,23 @@ def _seed_post(engine, *, post_id: int, scheduled_at: datetime) -> None:
 
 
 @pytest.fixture
-def component(migrated_database_url: str, tmp_path):
+def component(migrated_database_url: str, tmp_path, monkeypatch):
+    # Проверяем реальный валидатор и его сохранённый результат; внешний AI
+    # детерминирован, чтобы компонентный тест не зависел от Codex CLI.
+    def complete(self, prompt, **kwargs):
+        properties = (kwargs.get("output_schema") or {}).get("properties", {})
+        if "claims" in properties:
+            return '{"claims":[]}'
+        if "verdict" in properties:
+            return '{"verdict":"match","detail":"Изображение соответствует теме"}'
+        raise AssertionError(f"Неожиданный запрос модели: {sorted(properties)}")
+
+    monkeypatch.setattr(CodexModelProvider, "complete", complete)
+    monkeypatch.setattr(MockModelProvider, "caption_image", lambda self, path: "Тестовая тема")
     engine = create_engine(migrated_database_url)
-    _seed(engine)
+    media_path = tmp_path / "image.png"
+    media_path.write_bytes(b"test-image")
+    _seed(engine, media_path)
     api = WebApplication(_settings(migrated_database_url, tmp_path))
     app = create_app(
         WebContainer(api=api), auth=AuthStub(owned=(OWN_PROJECT,))
@@ -282,11 +309,33 @@ def test_post_is_planned_and_approved_through_http(component) -> None:
     # Время отдаётся в таймзоне проекта, а не в UTC.
     assert listed.json()[0]["publish_at"].endswith("+03:00")
     assert edited.json()["post_text"] == "Правка редактора"
+    assert edited.json()["validation"]["passed"] is True
+    assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
     assert [entry["status"] for entry in approved.json()["history"]] == [
         "needs_review",
         "approved",
     ]
+
+
+def test_editor_cannot_approve_an_unsupported_fact(component) -> None:
+    client, engine = component
+    _seed_post(engine, post_id=80, scheduled_at=datetime.now(UTC) + timedelta(days=1))
+    client.put(
+        f"/api/projects/{OWN_PROJECT}/channel",
+        json={"bot_token": "123:secret", "chat_id": "@agrotech"},
+    )
+
+    edited = client.patch(
+        f"/api/projects/{OWN_PROJECT}/posts/80",
+        json={"post_text": "Урожайность выросла на 999%."},
+    )
+    approved = client.post(f"/api/projects/{OWN_PROJECT}/posts/80/approve")
+
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["validation"]["passed"] is False
+    assert approved.status_code == 409
+    assert client.get(f"/api/projects/{OWN_PROJECT}/posts/80").json()["status"] == "needs_review"
 
 
 def test_expired_plan_is_a_conflict_not_a_crash(component) -> None:
