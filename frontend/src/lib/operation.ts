@@ -64,7 +64,10 @@ export function useOperation(projectId: number | null, concurrent = false) {
           setLastError(message)
           toast.error(message)
         } else {
-          if (options.successText) toast.ok(options.successText)
+          const result = operation.result as { validation_passed?: boolean } | undefined
+          if (result?.validation_passed === false) {
+            toast.error('Черновик сохранён, но проверка не пройдена. Откройте пост: там указаны причины.')
+          } else if (options.successText) toast.ok(options.successText)
           options.onDone?.(operation)
         }
         return operation

@@ -357,6 +357,9 @@ class WebApplication:
         return self._posts.reject_post(project_id, post_id)
 
     def regenerate_post(self, project_id: int, post_id: int, **options) -> dict[str, Any]:
+        if "without_image" not in options and options.get("media_asset_id") is None:
+            previous = self._posts.post(project_id, post_id)
+            options["without_image"] = (previous.get("generation") or {}).get("without_image") is True
         return {"operation_id": self._submit_operation(project_id, OperationKind.REGENERATE_POST, post_id=post_id, mode="manual", actor="user", **options), "status": "running"}
 
     def rules(self, project_id: int):
@@ -535,7 +538,7 @@ class WebApplication:
                     result = (action.regenerate(resumed_post_id, **options) if resumed_post_id is not None
                               else action.generate(slot_id, **options) if operation == OperationKind.GENERATE_POST
                               else action.regenerate(post_id, **options))
-                    self._finish(journal, run_id, scheduled_job_id, outcome="completed", result={"post_id": result.post_id})
+                    self._finish(journal, run_id, scheduled_job_id, outcome="completed", result={"post_id": result.post_id, "validation_passed": result.validation_passed})
                     return
                 if operation == OperationKind.DERIVE_RULES:
                     project = self._projects.get(project_id)

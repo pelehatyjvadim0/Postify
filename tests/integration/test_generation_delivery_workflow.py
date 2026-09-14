@@ -330,7 +330,9 @@ def test_manual_changes_preserve_all_guardrails_and_block_approval(workflow, mon
     assert {layer['layer'] for layer in report['layers']} == {"format", "rules", "grounding", "image"}
     assert report['passed'] is False
     assert next(layer for layer in report['layers'] if layer['layer'] == failed_layer)['passed'] is False
-    assert client.post(path + '/approve').status_code == 409
+    approval = client.post(path + '/approve')
+    assert approval.status_code == 409
+    assert ('Упомянута скидка' if failed_layer == 'rules' else 'Другой объект') in approval.text
     assert client.get('/api/projects/1/publications').json() == []
 
 
@@ -363,4 +365,41 @@ def test_empty_pool_can_generate_text_only(workflow):
     assert post["media"] is None
     assert post["status"] == "needs_review"
     assert post["post_text"]
+    assert post["validation"]["passed"] is True
+    assert post["generation"]["without_image"] is True
+    edited = client.patch(path, json={"post_text": "Хранение зерна: проверьте силосы."})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["validation"]["passed"] is True
+    approved = client.post(path + "/approve")
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+    assert not requests
+
+
+def test_generation_and_manual_edit_share_user_context(workflow, monkeypatch):
+    from postify.application.validation.service import ValidationService
+    client, _, engine, provider, _, requests = workflow
+    drafts = []
+    original = ValidationService.validate
+
+    def validate(self, draft):
+        drafts.append(draft)
+        return original(self, draft)
+
+    monkeypatch.setattr(ValidationService, "validate", validate)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE content_projects SET project_prompt='Добавляй анекдоты во все посты' WHERE id=1"))
+    slot = _create_slot(client)
+    provider.media_asset_id = None
+    generated = client.post(f"/api/projects/1/plan/{slot}/generate", json={"without_image": True})
+    post_id = _wait_operation(client, generated.json()["operation_id"])["result"]["post_id"]
+    edited = client.patch(f"/api/projects/1/posts/{post_id}", json={"post_text": "Хранение зерна: подготовьте силосы."})
+    assert edited.status_code == 200, edited.text
+    assert len(drafts) == 2
+    for draft in drafts:
+        assert draft.project_prompt == "Добавляй анекдоты во все посты"
+        assert draft.without_image is True
+        assert draft.slot.topic == "Хранение зерна"
+    assert drafts[0].common_prompt == drafts[1].common_prompt
+    assert drafts[0].system_prompt == drafts[1].system_prompt
     assert not requests

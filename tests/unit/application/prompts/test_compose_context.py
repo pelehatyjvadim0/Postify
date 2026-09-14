@@ -66,7 +66,7 @@ def test_context_forbids_borrowing_facts_from_neighbour_slots() -> None:
     context = compose()
 
     assert GROUNDING_RULE in context
-    assert "запрещено" in GROUNDING_RULE
+    assert "Соседние слоты плана не являются источниками фактов" in GROUNDING_RULE
     # Запрет читается раньше самих слотов, к которым относится.
     assert context.index(GROUNDING_RULE) < context.index(NEIGHBOUR.topic)
 

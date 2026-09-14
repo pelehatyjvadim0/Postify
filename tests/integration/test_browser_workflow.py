@@ -40,12 +40,12 @@ def browser_application(migrated_database_url, tmp_path, monkeypatch):
         calls.append(prompt)
         if "verdict" in (kwargs.get("output_schema") or {}).get("properties", {}):
             return '{"verdict":"match","detail":"The green field matches the farming post"}'
-        if "claims:[" in prompt:
+        if "claims" in (kwargs.get("output_schema") or {}).get("properties", {}):
             return json.dumps({"claims": []})
-        if '"items":' in prompt:
+        if "items" in (kwargs.get("output_schema") or {}).get("properties", {}):
             rule_ids = re.findall(r"^(\d+):", prompt, re.MULTILINE)
             return json.dumps({"items": [{"rule_id": int(rule_id), "passed": True, "evidence": "Matches"} for rule_id in rule_ids]})
-        if "rules:[" in prompt:
+        if "rules" in (kwargs.get("output_schema") or {}).get("properties", {}):
             return json.dumps({"rules": [{"text": "Use clear language", "severity": "warn"}]})
         generation_count = sum("Напиши готовый Telegram" in previous for previous in calls)
         post_text = "Green field. Practical farming advice."
@@ -548,6 +548,11 @@ def test_browser_missing_image_recovery(browser_application, tmp_path, viewport,
             page.get_by_role("button", name="Создать проект", exact=True).click()
             page.get_by_role("dialog").get_by_label("Название", exact=True).fill("Image recovery")
             page.get_by_role("dialog").get_by_role("button", name="Создать проект", exact=True).click()
+            page.get_by_role("button", name="Добавить слот", exact=True).wait_for()
+            project_id = _api(page, "/api/projects")[0]["id"]
+            csrf = page.request.get("/api/me").headers["x-postify-csrf"]
+            configured = page.request.put(f"/api/projects/{project_id}/channel", data={"chat_id": "@browser_test_channel", "bot_token": "777:browser-test-token"}, headers={"x-postify-csrf": csrf, "Origin": base_url})
+            assert configured.ok, configured.text()
             page.get_by_role("button", name="Добавить слот", exact=True).click()
             future = datetime.now(UTC) + timedelta(days=1)
             page.get_by_label("Дата публикации", exact=True).fill(future.date().isoformat())
@@ -571,7 +576,107 @@ def test_browser_missing_image_recovery(browser_application, tmp_path, viewport,
             expect(dialog.get_by_text("Собираем пост", exact=True)).to_have_count(0)
             expect(dialog.get_by_text("Упс, не нашли доступное изображение", exact=True)).to_have_count(0)
             expect(dialog.get_by_role("button", name="Одобрить", exact=True)).to_be_visible()
+            with page.expect_response("**/approve") as approved:
+                dialog.get_by_role("button", name="Одобрить", exact=True).click()
+            assert approved.value.ok, approved.value.text()
+            assert approved.value.json()["status"] == "approved"
+            assert approved.value.json()["media"] is None
+            expect(dialog.get_by_role("button", name="Вернуть на доработку", exact=True)).to_be_visible()
             assert not errors
             _assert_rendered(page, tmp_path / "text-only-draft.png")
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
+def test_browser_validation_reasons_and_repair(browser_application, tmp_path, viewport, monkeypatch):
+    """Real generation/repair/validation and polling; only model answers are replaced."""
+    from playwright.sync_api import sync_playwright, expect
+
+    base_url, auth, _ = browser_application
+    generated = []
+    repair_succeeds = {"value": False}
+    claim = "Илон Маск сказал: «Я купил Солнце»."
+    reason = "Цитата не подтверждена пользовательскими данными. Удалите цитату или добавьте источник."
+    final_text = "Анекдот: встречаются два программиста. Один спрашивает: «Ты спишь?» — «Нет, жду обновления»."
+
+    def complete(self, prompt, **kwargs):
+        properties = (kwargs.get("output_schema") or {}).get("properties", {})
+        if "claims" in properties:
+            return json.dumps({"claims": [] if final_text in prompt else [{
+                "claim": claim, "supported": False, "source_quote": "", "kind": "fact", "detail": reason,
+            }]}, ensure_ascii=False)
+        if "post_text" in properties:
+            generated.append(prompt)
+            fixed = repair_succeeds["value"] and "Почини черновик" in prompt
+            return json.dumps({"post_text": final_text if fixed else claim, "media_asset_id": None, "media_rationale": "Без изображения"}, ensure_ascii=False)
+        raise AssertionError("Unexpected model call")
+
+    monkeypatch.setattr(CodexModelProvider, "complete", complete)
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        page = browser.new_page(viewport=viewport, base_url=base_url)
+        page.set_default_timeout(15000)
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(base_url)
+            with page.expect_response("**/api/auth/login") as login:
+                page.get_by_role("button", name="Войти через Telegram").click()
+            token = login.value.json()["telegram_url"].split("start=autopost_login_", 1)[1]
+            auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity("711", "validation_editor", "Validation Editor"))
+            auth.handle_bot_decision(telegram_token=token, telegram_user_id="711", approved=True)
+            page.get_by_role("button", name="Создать проект", exact=True).click()
+            page.get_by_role("dialog").get_by_label("Название", exact=True).fill("Validation recovery")
+            page.get_by_role("dialog").get_by_role("button", name="Создать проект", exact=True).click()
+            page.get_by_role("button", name="Добавить слот", exact=True).wait_for()
+            project_id = _api(page, "/api/projects")[0]["id"]
+            csrf = page.request.get("/api/me").headers["x-postify-csrf"]
+            configured = page.request.put(f"/api/projects/{project_id}/channel", data={"chat_id": "@browser_test_channel", "bot_token": "777:browser-test-token"}, headers={"x-postify-csrf": csrf, "Origin": base_url})
+            assert configured.ok, configured.text()
+            page.get_by_role("button", name="Добавить слот", exact=True).click()
+            future = datetime.now(UTC) + timedelta(days=1)
+            page.get_by_label("Дата публикации", exact=True).fill(future.date().isoformat())
+            page.get_by_label("Промпт поста", exact=True).fill("Напиши анекдот про программистов")
+            page.get_by_role("dialog").get_by_role("button", name="Сохранить", exact=True).click()
+            page.get_by_role("button", name="Сгенерировать сейчас", exact=True).click()
+            dialog = page.get_by_role("dialog")
+            dialog.get_by_role("button", name="Опубликовать без изображения", exact=True).click()
+            expect(dialog.get_by_text("Не удалось пройти проверку", exact=True)).to_be_visible()
+            expect(dialog.get_by_role("alert")).to_contain_text(reason)
+            expect(dialog.get_by_role("alert")).to_contain_text(claim)
+            expect(dialog.get_by_role("alert")).to_contain_text("исправлений (2)")
+            expect(dialog.get_by_role("button", name="Править текст", exact=True)).to_be_enabled()
+            assert len(generated) == 3
+            assert all(reason in prompt and claim in prompt for prompt in generated[1:])
+            project_id = _api(page, "/api/projects")[0]["id"]
+            posts = _api(page, f"/api/projects/{project_id}/posts")
+            post_id = posts[0]["id"]
+            saved = _api(page, f"/api/projects/{project_id}/posts/{post_id}")
+            assert saved["post_text"] == claim and saved["validation"]["passed"] is False
+            with page.expect_response("**/approve") as blocked:
+                dialog.get_by_role("button", name="Одобрить", exact=True).click()
+            assert blocked.value.status == 409
+            assert reason in blocked.value.text()
+            _assert_rendered(page, tmp_path / "validation-failure.png")
+
+            # Same open panel, no reload: the next attempt repairs the draft successfully.
+            repair_succeeds["value"] = True
+            page.evaluate("window.validationPageMarker = 'same-page'")
+            dialog.get_by_role("button", name="Переписать", exact=True).click()
+            expect(dialog.get_by_text(final_text, exact=True)).to_be_visible()
+            expect(dialog.get_by_text("Не удалось пройти проверку", exact=True)).to_have_count(0)
+            expect(dialog.get_by_text("Собираем пост", exact=True)).to_have_count(0)
+            assert page.evaluate("window.validationPageMarker") == "same-page"
+            assert len(generated) == 5
+            saved = _api(page, f"/api/projects/{project_id}/posts/{post_id}")
+            assert saved["validation"]["passed"] is True
+            with page.expect_response("**/approve") as approved:
+                dialog.get_by_role("button", name="Одобрить", exact=True).click()
+            assert approved.value.ok, approved.value.text()
+            assert approved.value.json()["status"] == "approved"
+            assert approved.value.json()["media"] is None
+            assert not errors
+            _assert_rendered(page, tmp_path / "validation-repaired.png")
         finally:
             browser.close()

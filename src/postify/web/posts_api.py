@@ -139,7 +139,13 @@ class PostsApi:
             asset = SqlAlchemyMediaRepository(self._sessions, project_id).get(detail.media_asset_id, now=self._now())
             media = DraftMedia(asset.id, asset.file_path, asset.mime, asset.caption)
         report = ValidationService(self._gateway, SqlAlchemyRulesRepository(self._sessions)).validate(
-            PostDraft(project_id, detail.post_text, brief.slot, media, brief.user_id)
+            PostDraft(
+                project_id, detail.post_text, brief.slot, media, brief.user_id,
+                system_prompt=brief.system_prompt,
+                common_prompt=brief.common_prompt,
+                project_prompt=brief.project_prompt,
+                without_image=detail.generation.get("without_image") is True,
+            )
         )
         self._validation.save(post_id, iteration=0, report=report, now=self._now(),
                               expected_draft=(detail.post_text, media.file_path if media else None, detail.updated_at))

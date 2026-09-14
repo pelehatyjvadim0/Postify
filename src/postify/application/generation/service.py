@@ -28,6 +28,7 @@ from postify.application.ports.validation import (
     ValidationReport,
 )
 from postify.application.prompts.compose_context import (
+    GROUNDING_RULE,
     PlanSlot,
     compose_generation_context,
 )
@@ -133,7 +134,7 @@ class GeneratePost:
             by_id = {candidate.asset.id: candidate for candidate in candidates}
             prompt = _generation_prompt(brief, candidates)
             content, call = self._complete(brief, prompt, by_id)
-            report, media = self._validate(post_id, brief, content, by_id, iteration=0)
+            report, media = self._validate(post_id, brief, content, by_id, iteration=0, without_image=without_image)
 
             repairs = 0
             repair_error = None
@@ -153,7 +154,7 @@ class GeneratePost:
                 repairs += 1
                 content, call = next_content, next_call
                 report, media = self._validate(
-                    post_id, brief, content, by_id, iteration=repairs
+                    post_id, brief, content, by_id, iteration=repairs, without_image=without_image
                 )
 
             generated_at = self._clock()
@@ -169,6 +170,7 @@ class GeneratePost:
                 publication_mode=brief.publication_mode,
             )
             metadata = result.metadata(reasoning_effort=brief.reasoning_effort)
+            metadata["without_image"] = without_image
             if repair_error is not None:
                 metadata["repair_error"] = repair_error
             self._repository.complete(
@@ -210,7 +212,7 @@ class GeneratePost:
             )
         return content, call
 
-    def _validate(self, post_id, brief, content, candidates, *, iteration):
+    def _validate(self, post_id, brief, content, candidates, *, iteration, without_image=False):
         asset = candidates[content.media_asset_id].asset if candidates else None
         media = None if asset is None else DraftMedia(
             asset_id=asset.id,
@@ -225,6 +227,10 @@ class GeneratePost:
                 slot=brief.slot,
                 media=media,
                 user_id=brief.user_id,
+                system_prompt=brief.system_prompt,
+                common_prompt=brief.common_prompt,
+                project_prompt=brief.project_prompt,
+                without_image=without_image,
             )
         )
         self._journal.save(
@@ -271,13 +277,17 @@ def _repair_prompt(
     report: ValidationReport,
     iteration: int,
 ) -> str:
-    violations = [item.message for item in report.blocking]
+    violations = [{"layer": item.layer, "message": item.message} for item in report.blocking]
+    failed_layers = [dict(layer) for layer in report.layers if not layer.get("passed")]
     return (
         f"Почини черновик. Это итерация {iteration} из {MAX_REPAIR_ITERATIONS}. "
-        "Устрани все перечисленные нарушения, не добавляя фактов вне текущего "
-        "слота. Можно выбрать другое изображение, но только из того же шортлиста. "
+        "Устрани перечисленные нарушения: найди указанный фрагмент и исправь его "
+        "с учётом причины и требования проверки. Сохрани жанр и замысел пользователя. "
+        f"{GROUNDING_RULE} "
+        "Можно выбрать другое изображение, но только из того же шортлиста. "
         "Верни только объект заданной JSON-схемы.\n\n"
         f"## Нарушения\n{json.dumps(violations, ensure_ascii=False)}\n\n"
+        f"## Подробности проваленных проверок\n{json.dumps(failed_layers, ensure_ascii=False)}\n\n"
         f"## Предыдущий черновик\n{json.dumps(_content_json(previous), ensure_ascii=False)}\n\n"
         f"{_generation_prompt(brief, candidates)}"
     )

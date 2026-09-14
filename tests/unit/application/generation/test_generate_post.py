@@ -225,6 +225,10 @@ def test_generates_structured_post_and_selects_only_shortlisted_media() -> None:
     assert prompt.index("Системный") < prompt.index("Общий") < prompt.index("Проектный")
     assert "Сделай нумерованный список" in prompt
     assert '"asset_id": 2' in prompt and "Силосы" in prompt
+    assert validator.drafts[0].system_prompt == "Системный"
+    assert validator.drafts[0].common_prompt == "Общий"
+    assert validator.drafts[0].project_prompt == "Проектный"
+    assert validator.drafts[0].without_image is False
     assert validator.drafts[0].slot.slot_id == 41
     assert validator.drafts[0].media.asset_id == 2
     assert journal.events[:2] == [("clear", 77), ("save", 77, 0, passed)]
@@ -238,6 +242,7 @@ def test_generates_structured_post_and_selects_only_shortlisted_media() -> None:
         "media_rationale": "Подходит",
         "validation_passed": True,
         "publication_mode": "review",
+        "without_image": False,
     }
 
 
@@ -248,6 +253,7 @@ def test_repairs_blocking_violations_and_journals_each_iteration() -> None:
             Violation("grounding", "block", "Удали неподтверждённые 30%"),
             Violation("rules", "warn", "Добавь вопрос"),
         ),
+        layers=({"layer": "grounding", "passed": False, "items": [{"claim": "30%", "detail": "Уберите обещание результата"}]},),
     )
     passed = ValidationReport(True)
     service, _, gateway, _, validator, journal = _service(
@@ -264,6 +270,10 @@ def test_repairs_blocking_violations_and_journals_each_iteration() -> None:
     repair_prompt = gateway.calls[1][0]
     assert "Удали неподтверждённые 30%" in repair_prompt
     assert "Добавь вопрос" not in repair_prompt
+    assert "Уберите обещание результата" in repair_prompt
+    assert '"claim": "30%"' in repair_prompt
+    assert "Общий" in repair_prompt and "Проектный" in repair_prompt
+    assert "не добавляя фактов вне текущего слота" not in repair_prompt
     assert [event[2] for event in journal.events if event[0] == "save"] == [0, 1]
     assert [draft.media.asset_id for draft in validator.drafts] == [2, 1]
 
@@ -388,6 +398,8 @@ def test_text_only_generation_skips_shortlist_and_validates_without_media():
     assert result.content.media_asset_id is None
     assert shortlist.calls == []
     assert validator.drafts[0].media is None
+    assert validator.drafts[0].without_image is True
+    assert repository.completed["generation"]["without_image"] is True
     assert gateway.calls[0][1]["output_schema"]["properties"]["media_asset_id"] == {"type": "null"}
 
 

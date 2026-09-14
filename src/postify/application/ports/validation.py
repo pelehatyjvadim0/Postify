@@ -55,7 +55,7 @@ class DraftMedia:
 
 @dataclass(frozen=True, slots=True)
 class DraftSlot:
-    """Слот плана — единственная опора слоя сверки фактов.
+    """Тема и инструкции текущего слота плана.
 
     Соседние слоты сюда не попадают намеренно: заимствовать из них конкретику
     запрещено (риск Р6), и проверка обязана этого не знать.
@@ -79,6 +79,10 @@ class PostDraft:
     media: DraftMedia | None = None
     # Нужен шлюзу вызовов модели для учёта расхода; у планировщика его нет.
     user_id: int | None = None
+    system_prompt: str = ""
+    common_prompt: str = ""
+    project_prompt: str = ""
+    without_image: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -130,6 +130,7 @@ export interface ValidationItem {
 }
 
 export interface ValidationLayer {
+  detail?: string
   layer: CheckLayer
   passed: boolean
   score?: string

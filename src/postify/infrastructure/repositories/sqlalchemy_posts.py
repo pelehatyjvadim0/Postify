@@ -261,11 +261,11 @@ class SqlAlchemyPostRepository:
                         )
                     self._require_channel(session)
                     reports = session.execute(text(
-                        "SELECT layer,passed FROM validation_reports WHERE post_id=:id"
+                        "SELECT layer,passed,details FROM validation_reports WHERE post_id=:id"
                         " AND iteration=(SELECT max(iteration) FROM validation_reports WHERE post_id=:id)"
                     ), {"id": post_id}).all()
                     if not {"format", "rules", "grounding", "image"}.issubset({row.layer for row in reports}) or not all(row.passed for row in reports):
-                        raise InvalidPostTransition("Пост не прошёл обязательные проверки")
+                        raise InvalidPostTransition(_validation_failure_reason(reports))
                 session.execute(
                     text(
                         "UPDATE posts SET status=:status,updated_at=:now"
@@ -333,3 +333,28 @@ class SqlAlchemyPostRepository:
                 "now": now,
             },
         )
+
+
+def _validation_failure_reason(reports) -> str:
+    labels = {"format": "Формат", "rules": "Правила проекта", "grounding": "Факты", "image": "Изображение"}
+    reasons = []
+    for row in reports:
+        if row.passed:
+            continue
+        details = row.details or {}
+        messages = [str(value) for value in details.get("messages", []) if value]
+        if details.get("detail"):
+            messages.append(str(details["detail"]))
+        for item in details.get("items", []):
+            if item.get("severity") == "warn" or item.get("passed") is True or item.get("verdict") in {"supported", "match", "creative"}:
+                continue
+            explanation = item.get("detail") or item.get("evidence") or item.get("message")
+            if explanation:
+                fragment = item.get("claim") or item.get("text")
+                messages.append(f"«{fragment}»: {explanation}" if fragment else str(explanation))
+        reason = "; ".join(dict.fromkeys(messages)) or "Проверка не пройдена, исправьте или перегенерируйте пост"
+        reasons.append(f"{labels.get(row.layer, row.layer)}: {reason}")
+    missing = labels.keys() - {row.layer for row in reports}
+    if missing:
+        reasons.append("Не выполнены проверки: " + ", ".join(labels[layer] for layer in labels if layer in missing))
+    return "Пост не прошёл обязательные проверки. " + " · ".join(reasons)

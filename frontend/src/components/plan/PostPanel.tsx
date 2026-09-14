@@ -10,7 +10,7 @@ import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
 import { dateTimeLabel } from '@/lib/dates'
 import { SLOT_STATUS } from '@/lib/status'
-import type { MediaAsset, Post, Slot } from '@/lib/types'
+import type { MediaAsset, Post, Slot, ValidationReport } from '@/lib/types'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import { useOperation } from '@/lib/operation'
@@ -305,11 +305,14 @@ export function PostPanel({
                   <p className="text-xs text-muted-foreground">Подготовим черновик без изображения. Перед публикацией его можно будет проверить и одобрить.</p>
                 </div>
               )}
-              {post.generation?.repair_error && (
+              {!assembling && post.generation?.repair_error && (
                 <Alert tone="warning" title="Не удалось исправить черновик">
                   Сервис генерации прервал исправление текста. Черновик сохранён с результатами
                   проверки. Можно отредактировать его или повторить генерацию.
                 </Alert>
+              )}
+              {!assembling && !missingMedia && post.validation.passed === false && (
+                <ValidationFailure report={post.validation} />
               )}
               <div className="relative overflow-hidden rounded-lg border border-border bg-card" aria-busy={assembling}>
                 <div className={assembling ? 'pointer-events-none select-none blur-sm' : undefined} aria-hidden={assembling || undefined}>
@@ -448,5 +451,30 @@ function AssemblyOverlay() {
         <p className="text-sm font-medium">Собираем пост</p>
       </div>
     </div>
+  )
+}
+
+function ValidationFailure({ report }: { report: ValidationReport }) {
+  const labels = { format: 'Формат текста', rules: 'Требования проекта', grounding: 'Факты', image: 'Изображение' }
+  const failures = report.layers.filter((layer) => !layer.passed).flatMap((layer) => {
+    const items = layer.items.filter((item) => item.severity !== 'warn' && (
+      item.passed === false || ['unsupported', 'contradicted', 'weak', 'mismatch'].includes(item.verdict ?? '')
+    ))
+    return (items.length ? items : [{ detail: layer.detail || 'Проверка не пройдена. Попробуйте переписать пост.' }]).map((item) => ({
+      label: labels[layer.layer],
+      excerpt: item.claim || item.text,
+      reason: item.detail || item.evidence || 'Требование не выполнено.',
+    }))
+  })
+  return (
+    <Alert tone="error" title="Не удалось пройти проверку">
+      <div className="space-y-2 break-words" role="alert">
+        <p>{report.iterations > 0 ? `После автоматических исправлений (${report.iterations}) остались проблемы.` : 'В черновике найдены проблемы.'} Черновик сохранён.</p>
+        {failures.map((failure, index) => (
+          <p key={index}><strong>{failure.label}.</strong>{failure.excerpt ? <> «{failure.excerpt}».</> : null} {failure.reason}</p>
+        ))}
+        <p>Исправьте текст или нажмите «Переписать». Затем пост можно проверить и одобрить.</p>
+      </div>
+    </Alert>
   )
 }
