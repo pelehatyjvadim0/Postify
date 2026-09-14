@@ -48,7 +48,7 @@ def _settings(database_url: str, tmp_path) -> Settings:
     )
 
 
-def _seed(engine, media_path) -> None:
+def _seed(engine, media_path=None) -> None:
     """Два пользователя с проектом у каждого: чужой проект должен быть невидим."""
     with engine.begin() as connection:
         for user_id, telegram in ((OWNER.id, "101"), (OWNER.id + 1, "202")):
@@ -86,18 +86,22 @@ def _seed(engine, media_path) -> None:
                     "owner": owner_id,
                 },
             )
-        connection.execute(
-            text(
-                "INSERT INTO media_assets(id,project_id,file_path,mime,bytes,width,height,"
-                "content_hash,caption,caption_status,uploaded_at)"
-                " VALUES (1,:project,:path,'image/png',1,1,1,'test-image',"
-                "'Тестовая тема','ready',:now)"
-            ),
-            {"project": OWN_PROJECT, "path": str(media_path), "now": NOW},
-        )
+        if media_path is not None:
+            connection.execute(
+                text(
+                    "INSERT INTO media_assets(id,project_id,file_path,mime,bytes,width,height,"
+                    "content_hash,caption,caption_status,uploaded_at)"
+                    " VALUES (1,:project,:path,'image/png',1,1,1,'test-image',"
+                    "'Тестовая тема','ready',:now)"
+                ),
+                {"project": OWN_PROJECT, "path": str(media_path), "now": NOW},
+            )
         # Строки вставлены с явными id, поэтому последовательность надо
         # подвинуть: иначе следующий INSERT возьмёт занятый id.
-        for table in ("users", "content_projects"):
+        tables = ["users", "content_projects"]
+        if media_path is not None:
+            tables.append("media_assets")
+        for table in tables:
             connection.execute(
                 text(
                     f"SELECT setval(pg_get_serial_sequence('{table}','id'),"
