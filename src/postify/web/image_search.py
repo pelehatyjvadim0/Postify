@@ -67,7 +67,7 @@ def _items(data):
             continue
         seen.add(image_id)
         result.append({'id': image_id, 'title': _plain(item.get('title')).strip() or 'Фото Flickr',
-                       'thumbnail_url': url, 'source_url': source,
+                       'thumbnail_url': re.sub(r'_m(?=\.[^.]+$)', '_b', url), 'source_url': source,
                        'author': _plain(item.get('author')), 'license': 'Права — на странице источника'})
     return result
 
