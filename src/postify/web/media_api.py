@@ -161,7 +161,7 @@ class MediaApi:
                 clock=self._now,
             ).execute(frozen)
 
-        return self._accept(project_id, work, _upload_result)
+        return self._accept(project_id, work, _upload_result, independent=True)
 
     def recaption_media(self, project_id: int, asset_id: int) -> dict[str, Any]:
         """Перевыпуск подписи одного изображения (202)."""
@@ -215,12 +215,13 @@ class MediaApi:
         project_id: int,
         work: Callable[[], Any],
         view: Callable[[Any], dict[str, Any]],
+        *,
+        independent: bool = False,
     ) -> dict[str, Any]:
         """Заводит строку журнала и уводит работу в фон.
 
-        Второй running ``caption_media`` на проект запрещён частичным
-        уникальным индексом, поэтому параллельная загрузка отвечает 409
-        ``operation_busy``, а не падает.
+        Каждая загрузка получает отдельную операцию. Общий пул ограничивает
+        число исполнителей; следующие пачки ждут свободного исполнителя.
         """
         journal = SqlAlchemyOperationRunRepository(self._sessions, project_id)
         run_id = journal.start(
@@ -244,7 +245,8 @@ class MediaApi:
             )
 
         try:
-            self._operations.submit(project_id, OperationKind.CAPTION_MEDIA.value, run)
+            key = f"caption_media:{run_id}" if independent else "caption_media"
+            self._operations.submit(project_id, key, run)
         except BaseException:
             # Строку журнала нельзя оставлять running: UI опрашивал бы её вечно.
             self._fail(journal, run_id)

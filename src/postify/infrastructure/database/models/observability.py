@@ -56,7 +56,7 @@ class OperationRunModel(Base):
             "project_id",
             "operation",
             unique=True,
-            postgresql_where=text("status = 'running'"),
+            postgresql_where=text("status = 'running' AND operation <> 'caption_media'"),
         ),
     )
 

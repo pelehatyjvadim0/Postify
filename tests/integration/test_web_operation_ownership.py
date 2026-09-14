@@ -207,3 +207,52 @@ def test_restarted_worker_executes_accepted_scheduler_job_exactly_once(
     assert _operation_rows(migrated_database_url, "publish_once") == [
         ("succeeded", "published")
     ]
+
+
+def test_upload_accepts_another_batch_while_captioning(
+    migrated_database_url, tmp_path, monkeypatch
+):
+    from io import BytesIO
+    from PIL import Image
+    from postify.adapters.ai.mock_provider import MockModelProvider
+
+    started = Event()
+    release = Event()
+
+    def caption(self, path):
+        started.set()
+        assert release.wait(timeout=10)
+        return "Полное описание изображения"
+
+    monkeypatch.setattr(MockModelProvider, "caption_image", caption)
+    engine = create_engine(migrated_database_url)
+    _seed(engine)
+    engine.dispose()
+    settings = _settings(migrated_database_url, tmp_path).model_copy(
+        update={"ai_media_provider": "mock"}
+    )
+    app = WebApplication(settings)
+
+    def image(color):
+        payload = BytesIO()
+        Image.new("RGB", (32, 32), color).save(payload, format="PNG")
+        return payload.getvalue()
+
+    try:
+        first = app.upload_media(PROJECT, [image("red"), image("green")])
+        assert started.wait(timeout=3)
+        # Все файлы первой пачки видны, хотя модель ещё не ответила.
+        assert len(app.media_assets(PROJECT)["items"]) == 2
+        second = app.upload_media(PROJECT, [image("blue")])
+        third = app.upload_media(PROJECT, [image("yellow")])
+        assert len({item["operation_id"] for item in (first, second, third)}) == 3
+        assert _operation_rows(migrated_database_url, "caption_media") == [
+            ("running", None), ("running", None), ("running", None)
+        ]
+    finally:
+        release.set()
+        app.close()
+    assert _operation_rows(migrated_database_url, "caption_media") == [
+        ("succeeded", "completed"), ("succeeded", "completed"),
+        ("succeeded", "completed"),
+    ]

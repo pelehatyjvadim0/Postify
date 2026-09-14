@@ -441,3 +441,64 @@ def test_browser_closes_telegram_tab_when_login_request_fails(browser_applicatio
         assert popup.value.is_closed()
         assert len(context.pages) == 1
         browser.close()
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
+def test_browser_uploads_while_captioning_and_reads_full_description(
+    browser_application, tmp_path, monkeypatch, viewport
+):
+    from threading import Event
+    from playwright.sync_api import sync_playwright, expect
+
+    started, release = Event(), Event()
+    caption = "На переднем плане — река. " * 80 + "Конец полного описания."
+
+    def slow_caption(self, path):
+        started.set()
+        assert release.wait(timeout=30)
+        return caption
+
+    monkeypatch.setattr(MockModelProvider, "caption_image", slow_caption)
+    base_url, auth, _ = browser_application
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        page = browser.new_page(viewport=viewport, base_url=base_url)
+        page.set_default_timeout(10000)
+        try:
+            page.goto(base_url)
+            with page.expect_response("**/api/auth/login") as response:
+                page.get_by_role("button", name="Войти через Telegram").click()
+            token = response.value.json()["telegram_url"].split("start=autopost_login_", 1)[1]
+            auth.handle_bot_start(telegram_token=token, identity=TelegramIdentity("709", "media_editor", "Media Editor"))
+            auth.handle_bot_decision(telegram_token=token, telegram_user_id="709", approved=True)
+            page.get_by_role("button", name="Создать проект", exact=True).click()
+            page.get_by_role("dialog").get_by_label("Название", exact=True).fill("Media test")
+            page.get_by_role("dialog").get_by_role("button", name="Создать проект", exact=True).click()
+            page.get_by_role("button", name="Добавить слот", exact=True).wait_for()
+            project_id = _api(page, "/api/projects")[0]["id"]
+            page.goto(base_url + "/#/media")
+            page.get_by_role("button", name="Загрузить", exact=True).wait_for()
+            files = []
+            for color in ("red", "blue", "green"):
+                path = tmp_path / f"{color}.png"
+                Image.new("RGB", (400, 240), color).save(path)
+                files.append(str(path))
+            for batch in (files[:2], files[2:]):
+                with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith(f"/api/projects/{project_id}/media")) as response:
+                    page.locator('input[type="file"]').set_input_files(batch)
+                assert response.value.status == 202
+                expect(page.get_by_role("button", name="Загрузить", exact=True)).to_be_enabled()
+                assert started.wait(timeout=3)
+            expect(page.get_by_text("описание готовится", exact=True)).to_have_count(3)
+            release.set()
+            expect(page.get_by_text("описано", exact=True)).to_have_count(3)
+            page.get_by_role("button", name="Смотреть описание", exact=True).first.click()
+            dialog = page.get_by_role("dialog")
+            expect(dialog.get_by_text(caption, exact=True)).to_be_visible()
+            page.wait_for_function("Array.from(document.getAnimations()).every(a => a.effect.getComputedTiming().iterations === Infinity || a.playState === 'finished')")
+            _assert_rendered(page, tmp_path / "full-description.png")
+            dialog.get_by_role("button", name="Закрыть", exact=True).click()
+            expect(dialog).not_to_be_visible()
+        finally:
+            release.set()
+            browser.close()

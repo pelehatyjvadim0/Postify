@@ -9,11 +9,11 @@ import { useToast } from './toast'
  * Сценарий «202 + поллинг»: запрос возвращает operation_id, дальше
  * GET /operations/{id} раз в 2 секунды до succeeded или failed.
  */
-export function useOperation(projectId: number | null) {
+export function useOperation(projectId: number | null, concurrent = false) {
   const [running, setRunning] = useState(false)
   const [lastError, setLastError] = useState<string | null>(null)
   const aborted = useRef(false)
-  const controller = useRef<AbortController | null>(null)
+  const controllers = useRef(new Set<AbortController>())
   const toast = useToast()
 
   useEffect(() => {
@@ -22,7 +22,8 @@ export function useOperation(projectId: number | null) {
     aborted.current = false
     return () => {
       aborted.current = true
-      controller.current?.abort()
+      controllers.current.forEach((controller) => controller.abort())
+      controllers.current.clear()
     }
   }, [])
 
@@ -37,9 +38,9 @@ export function useOperation(projectId: number | null) {
       } = {},
     ) => {
       if (projectId === null) return null
-      if (controller.current && !controller.current.signal.aborted) return null
+      if (!concurrent && controllers.current.size > 0) return null
       const activeController = new AbortController()
-      controller.current = activeController
+      controllers.current.add(activeController)
       setRunning(true)
       setLastError(null)
       try {
@@ -77,11 +78,11 @@ export function useOperation(projectId: number | null) {
         }
         return null
       } finally {
-        if (controller.current === activeController) controller.current = null
-        if (!aborted.current) setRunning(false)
+        controllers.current.delete(activeController)
+        if (!aborted.current) setRunning(controllers.current.size > 0)
       }
     },
-    [projectId, toast],
+    [projectId, toast, concurrent],
   )
 
   return { run, running, lastError }

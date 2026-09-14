@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
@@ -28,6 +29,11 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   const [items, setItems] = React.useState<MediaAsset[]>([])
   const [cursor, setCursor] = React.useState<string | null>(null)
   const [loadingMore, setLoadingMore] = React.useState(false)
+  const [viewing, setViewing] = React.useState<MediaAsset | null>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const uploadInFlight = React.useRef(false)
+  const visibleCount = React.useRef(60)
+  const foregroundLoading = React.useRef(false)
   const [removing, setRemoving] = React.useState<MediaAsset | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [query, setQuery] = React.useState('')
@@ -40,30 +46,48 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
   const toast = useToast()
   const act = useAction()
   const operation = useOperation(project.id)
+  const uploads = useOperation(project.id, true)
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => setSearch(query), 300)
     return () => window.clearTimeout(timer)
   }, [query])
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (quiet = false) => {
+    if (quiet && foregroundLoading.current) return
     const id = ++requestId.current
-    setLoading(true)
-    setLoadingMore(false)
+    if (!quiet) {
+      foregroundLoading.current = true
+      setLoading(true)
+      setLoadingMore(false)
+    }
     try {
       const page = await api.media(project.id, {
         available: availableOnly || undefined,
         q: search || undefined,
         limit: 60,
       })
+      const refreshed = [...page.items]
+      while (quiet && page.next_cursor && refreshed.length < visibleCount.current) {
+        const next = await api.media(project.id, {
+          available: availableOnly || undefined, q: search || undefined,
+          limit: 60, cursor: page.next_cursor,
+        })
+        if (id !== requestId.current) return
+        refreshed.push(...next.items)
+        page.next_cursor = next.next_cursor
+      }
       if (id !== requestId.current) return
-      setItems(page.items)
+      setItems(refreshed)
       setCursor(page.next_cursor)
     } catch (error) {
-      if (id === requestId.current)
+      if (!quiet && id === requestId.current)
         toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пул')
     } finally {
-      if (id === requestId.current) setLoading(false)
+      if (id === requestId.current && !quiet) {
+        foregroundLoading.current = false
+        setLoading(false)
+      }
     }
   }, [project.id, availableOnly, search, toast])
 
@@ -71,10 +95,25 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
     void load()
   }, [load])
 
+  visibleCount.current = Math.max(60, items.length)
+
+  // Обновляем и после возвращения на экран: работа продолжается на сервере.
+  React.useEffect(() => {
+    let stopped = false
+    let timer: number
+    async function refresh() {
+      await load(true)
+      if (!stopped) timer = window.setTimeout(refresh, 2000)
+    }
+    timer = window.setTimeout(refresh, 2000)
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [load])
+
   /** Пул больше страницы: остальное догружается по кнопке, а не теряется. */
   async function loadMore() {
-    if (!cursor) return
-    const id = requestId.current
+    if (!cursor || foregroundLoading.current) return
+    const id = ++requestId.current
+    foregroundLoading.current = true
     setLoadingMore(true)
     try {
       const page = await api.media(project.id, {
@@ -89,12 +128,15 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить ещё')
     } finally {
-      if (id === requestId.current) setLoadingMore(false)
+      if (id === requestId.current) {
+        foregroundLoading.current = false
+        setLoadingMore(false)
+      }
     }
   }
 
   async function upload(files: FileList | null) {
-    if (!files || files.length === 0) return
+    if (!files || files.length === 0 || uploadInFlight.current) return
     if (files.length > 20) {
       toast.error('За один раз можно загрузить не больше 20 изображений')
       return
@@ -102,15 +144,29 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
     const form = new FormData()
     for (const file of Array.from(files)) form.append('files', file)
     setUploadError(null)
-    const result = await operation.run(() => api.uploadMedia(project.id, form), {
+    uploadInFlight.current = true
+    setUploading(true)
+    const releaseUpload = () => {
+      uploadInFlight.current = false
+      setUploading(false)
+    }
+    let accepted = false
+    const result = await uploads.run(() => api.uploadMedia(project.id, form), {
+      onStarted: () => {
+        accepted = true
+        releaseUpload()
+        toast.ok('Файлы приняты. Описания готовятся в фоне')
+        void load(true)
+      },
       successText: 'Изображения загружены и описаны',
     })
+    if (!accepted) releaseUpload()
     if (result?.status === 'failed') {
       // Техническую причину видит только поддержка, пользователю — что делать.
       supportLog('media_upload_failed', { code: result.error?.code ?? null, message: result.error?.message ?? null })
       setUploadError('Описания к загруженным изображениям составить не удалось.')
     }
-    await load()
+    await load(true)
     onChanged()
   }
 
@@ -121,8 +177,8 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
       <AppHeader
         title="Изображения"
         actions={
-          <Button disabled={operation.running} onClick={() => fileInput.current?.click()}>
-            {operation.running ? (
+          <Button disabled={uploading} onClick={() => fileInput.current?.click()}>
+            {uploading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Upload className="h-4 w-4" />
@@ -171,10 +227,10 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
 
       <div className="flex-1 overflow-auto">
         <div className="space-y-4 p-4 md:p-6">
-          {operation.running && (
+          {(operation.running || uploads.running || items.some((item) => item.caption_status === 'pending')) && (
             <Alert tone="info" title="Идёт обработка">
-              Файлы загружены. Система рассматривает их и составляет описание — обычно это
-              занимает несколько секунд. Пока описания нет, картинка в подбор не попадает.
+              Система составляет описания в фоне. Можно загружать следующие изображения,
+              не дожидаясь завершения. Пока описания нет, картинка в подбор не попадает.
             </Alert>
           )}
 
@@ -185,7 +241,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
             </Alert>
           )}
 
-          {!operation.running && !uploadError && noCaption > 0 && (
+          {!operation.running && !uploads.running && !uploadError && noCaption > 0 && (
             <Alert tone="error" title="Подбор изображения недоступен">
               Среди показанных изображений у {noCaption} не получилось составить описание. Такие
               картинки агент выбрать не может — попробуйте «Описать заново» на карточке.
@@ -219,6 +275,7 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
                   onChanged={async () => { await load(); onChanged() }}
                   operation={operation}
                   onRemoveRequest={setRemoving}
+                  onView={setViewing}
                 />
               ))}
             </div>
@@ -234,6 +291,17 @@ export function MediaScreen({ project, onChanged }: { project: Project; onChange
           )}
         </div>
       </div>
+
+      <Dialog open={viewing !== null} onOpenChange={(open) => { if (!open) setViewing(null) }}>
+        <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto">
+          <DialogTitle>Описание изображения</DialogTitle>
+          <DialogDescription className="sr-only">Полный текст описания выбранного изображения</DialogDescription>
+          {viewing && <>
+            <img src={viewing.url} alt="" className="mt-4 max-h-[35vh] w-full rounded-md object-contain" />
+            <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-relaxed">{viewing.caption}</p>
+          </>}
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={removing !== null}
@@ -262,11 +330,13 @@ function AssetCard({
   onChanged,
   operation,
   onRemoveRequest,
+  onView,
 }: {
   asset: MediaAsset
   projectId: number
   onChanged: () => Promise<void>
   operation: ReturnType<typeof useOperation>
+  onView: (asset: MediaAsset) => void
   onRemoveRequest: (asset: MediaAsset) => void
 }) {
   const caption = CAPTION_LABEL[asset.caption_status]
@@ -284,6 +354,11 @@ function AssetCard({
         <p className="line-clamp-2 min-h-[2.4em] text-[12px] leading-snug">
           {asset.caption ?? <span className="italic text-muted-foreground">описания нет</span>}
         </p>
+        {asset.caption && (
+          <Button size="xs" variant="ghost" className="px-0 text-muted-foreground" onClick={() => onView(asset)}>
+            Смотреть описание
+          </Button>
+        )}
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge tone={caption.tone}>{caption.text}</Badge>
           {asset.available ? (
@@ -316,7 +391,7 @@ function AssetCard({
             size="xs"
             variant="ghost"
             className="px-1.5 text-muted-foreground"
-            disabled={operation.running}
+            disabled={operation.running || asset.caption_status === 'pending'}
             onClick={async () => {
               await operation.run(() => api.recaptionAsset(projectId, asset.id), {
                 successText: 'Описание обновлено',

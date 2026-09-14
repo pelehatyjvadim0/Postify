@@ -23,12 +23,13 @@ class SqlAlchemyOperationRunRepository:
     def start(self, operation: OperationKind, *, now, mode: str = "automatic", actor: str = "scheduler") -> int:
         with self.sf() as session:
             try:
-                # Частичный уникальный индекс допускает одну running-операцию
-                # каждого вида на проект: конфликт означает занятость, не ошибку.
+                # Описания независимы; остальные виды операций по-прежнему
+                # допускают только один running на проект.
                 run_id = session.execute(text("""
                     INSERT INTO operation_runs(project_id,operation,status,mode,actor,started_at)
                     VALUES (:project,:operation,'running',:mode,:actor,:now)
-                    ON CONFLICT (project_id,operation) WHERE status='running'
+                    ON CONFLICT (project_id,operation)
+                    WHERE status='running' AND operation <> 'caption_media'
                     DO NOTHING RETURNING id
                 """), {"project": self.project_id, "operation": OperationKind(operation).value, "mode": mode, "actor": actor, "now": now}).scalar_one_or_none()
                 if run_id is None:

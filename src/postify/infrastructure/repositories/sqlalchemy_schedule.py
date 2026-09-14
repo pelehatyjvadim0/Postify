@@ -133,7 +133,7 @@ class SqlAlchemyScheduleRepository:
                         INSERT INTO operation_runs
                             (project_id,operation,status,mode,actor,started_at)
                         VALUES (:project_id,:kind,'running','automatic','scheduler',CURRENT_TIMESTAMP)
-                        ON CONFLICT (project_id,operation) WHERE status='running'
+                        ON CONFLICT (project_id,operation) WHERE status='running' AND operation <> 'caption_media'
                         DO NOTHING RETURNING id
                         """
                     ),
@@ -248,7 +248,7 @@ class SqlAlchemyScheduleRepository:
                                 "WHERE NOT EXISTS ("
                                 "SELECT 1 FROM operation_runs "
                                 "WHERE project_id=:project AND status='running') "
-                                "ON CONFLICT (project_id,operation) WHERE status='running' "
+                                "ON CONFLICT (project_id,operation) WHERE status='running' AND operation <> 'caption_media' "
                                 "DO NOTHING RETURNING id"
                             ),
                             {"project": row.project_id, "now": now},

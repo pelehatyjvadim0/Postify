@@ -101,3 +101,17 @@ def test_not_an_image_is_reported_and_does_not_stop_the_batch(tmp_path) -> None:
     assert report.created == 1
     assert report.failed == 1
     assert len(repository.assets) == 1
+
+
+def test_whole_batch_is_saved_before_captioning_starts(tmp_path) -> None:
+    repository = FakeMediaRepository()
+
+    class CheckingGateway(FakeGateway):
+        def caption_image(self, *args, **kwargs):
+            assert len(repository.assets) == 2
+            return super().caption_image(*args, **kwargs)
+
+    report = _upload(tmp_path, CheckingGateway(), repository).execute(
+        [png(), png(color=(200, 10, 10))]
+    )
+    assert report.captioned == 2

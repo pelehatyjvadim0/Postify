@@ -58,6 +58,7 @@ class UploadMedia:
         asset_ids: list[int] = []
         errors: list[dict[str, str]] = []
         created = duplicates = captioned = 0
+        pending: list[tuple[int, str]] = []
         for index, payload in enumerate(payloads):
             try:
                 stored = self._store.save(payload, project_id=self._project_id)
@@ -79,7 +80,11 @@ class UploadMedia:
                 duplicates += 1
                 continue
             created += 1
-            outcome = self._captioner.execute(asset_id, file_path=stored.file_path)
+            pending.append((asset_id, stored.file_path))
+
+        # Вся пачка появляется в пуле до первого медленного вызова модели.
+        for asset_id, file_path in pending:
+            outcome = self._captioner.execute(asset_id, file_path=file_path)
             if outcome.succeeded:
                 captioned += 1
             else:
