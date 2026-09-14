@@ -20,6 +20,8 @@ from sqlalchemy.orm import sessionmaker
 from postify.application.delivery.manual_operations import DeliveryNotRetryable
 from postify.application.ai.factory import build_model_gateway
 from postify.application.generation.service import GeneratePost
+from postify.application.generation.models import GenerationError
+from postify.application.media.models import MediaCandidate
 from postify.application.media.shortlist import MediaShortlist
 from postify.application.validation.service import ValidationService
 from postify.application.validation.rules import ManageRules, DeriveRules
@@ -273,8 +275,8 @@ class WebApplication:
     def skip_slot(self, project_id: int, slot_id: int) -> dict[str, Any]:
         return self._plan.skip(project_id, slot_id)
 
-    def generate_slot(self, project_id: int, slot_id: int) -> dict[str, Any]:
-        return self._plan.generate(project_id, slot_id)
+    def generate_slot(self, project_id: int, slot_id: int, **options) -> dict[str, Any]:
+        return self._plan.generate(project_id, slot_id, **options)
 
     # --- канал ------------------------------------------------------------
 
@@ -354,8 +356,8 @@ class WebApplication:
     def reject_post(self, project_id: int, post_id: int) -> dict[str, Any]:
         return self._posts.reject_post(project_id, post_id)
 
-    def regenerate_post(self, project_id: int, post_id: int) -> dict[str, Any]:
-        return {"operation_id": self._submit_operation(project_id, OperationKind.REGENERATE_POST, post_id=post_id, mode="manual", actor="user"), "status": "running"}
+    def regenerate_post(self, project_id: int, post_id: int, **options) -> dict[str, Any]:
+        return {"operation_id": self._submit_operation(project_id, OperationKind.REGENERATE_POST, post_id=post_id, mode="manual", actor="user", **options), "status": "running"}
 
     def rules(self, project_id: int):
         return ManageRules(SqlAlchemyRulesRepository(self._sessions)).list(project_id)
@@ -462,13 +464,13 @@ class WebApplication:
             slot_id=command.slot_id,
         )
 
-    def _start_generation(self, project_id: int, slot_id: int) -> int:
+    def _start_generation(self, project_id: int, slot_id: int, **options) -> int:
         """Генерация по кнопке.
 
         Обработчика ещё нет: операция честно падает с generate_post_failed,
         а не висит в running. Его приносит трек агента генерации.
         """
-        return self._submit_operation(project_id, OperationKind.GENERATE_POST, slot_id=slot_id, mode="manual", actor="user")
+        return self._submit_operation(project_id, OperationKind.GENERATE_POST, slot_id=slot_id, mode="manual", actor="user", **options)
 
     def _submit_operation(
         self,
@@ -482,6 +484,8 @@ class WebApplication:
         delivery_id: int | None = None,
         mode: str = "automatic",
         actor: str = "scheduler",
+        without_image: bool = False,
+        media_asset_id: int | None = None,
     ) -> int:
         journal = SqlAlchemyOperationRunRepository(self._sessions, project_id)
         failure_code = f"{operation.value}_failed"
@@ -521,9 +525,16 @@ class WebApplication:
                             # The prior worker stopped after creating the post but before finishing it.
                             resumed_post_id = row.slot.post_id
                             repository.fail(resumed_post_id, now=self._now())
-                    result = (action.regenerate(resumed_post_id) if resumed_post_id is not None
-                              else action.generate(slot_id) if operation == OperationKind.GENERATE_POST
-                              else action.regenerate(post_id))
+                    candidates = None
+                    if media_asset_id is not None:
+                        asset = SqlAlchemyMediaRepository(self._sessions, project_id).get(media_asset_id, now=self._now())
+                        if not asset.available:
+                            raise GenerationError("media_no_longer_available")
+                        candidates = (MediaCandidate(asset, 0.0),)
+                    options = {"without_image": without_image, "candidates": candidates}
+                    result = (action.regenerate(resumed_post_id, **options) if resumed_post_id is not None
+                              else action.generate(slot_id, **options) if operation == OperationKind.GENERATE_POST
+                              else action.regenerate(post_id, **options))
                     self._finish(journal, run_id, scheduled_job_id, outcome="completed", result={"post_id": result.post_id})
                     return
                 if operation == OperationKind.DERIVE_RULES:
@@ -541,8 +552,8 @@ class WebApplication:
                     outcome = action.execute(
                         post_id=post_id, delivery_id=delivery_id
                     ).outcome
-            except BaseException:
-                self._finish(journal, run_id, scheduled_job_id, code=failure_code)
+            except BaseException as error:
+                self._finish(journal, run_id, scheduled_job_id, code=failure_code, result={"error_code": getattr(error, "code", failure_code)})
                 raise
             self._finish(journal, run_id, scheduled_job_id, outcome=outcome)
 
@@ -570,7 +581,7 @@ class WebApplication:
             if outcome is not None:
                 journal.succeed(run_id, outcome=outcome, now=now, result=result)
             else:
-                journal.fail(run_id, failure_code=code, now=now)
+                journal.fail(run_id, failure_code=code, now=now, result=result)
         except BaseException:
             pass
         if scheduled_job_id is not None:
@@ -607,8 +618,8 @@ def _operation(item, zone: ZoneInfo) -> dict[str, Any]:
             None
             if item.failure_code is None
             else {
-                "code": item.failure_code,
-                "message": message_for(item.failure_code),
+                "code": (item.result or {}).get("error_code", item.failure_code),
+                "message": message_for((item.result or {}).get("error_code", item.failure_code)),
             }
         ),
         "started_at": at(item.started_at, zone),

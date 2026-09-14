@@ -249,7 +249,7 @@ def test_empty_pool_failure_can_be_retried_after_upload(workflow):
     generated = client.post(f"/api/projects/1/plan/{slot_id}/generate")
     assert generated.status_code == 202
     result = _wait_operation(client, generated.json()["operation_id"], expected_status="failed")
-    assert result["error"]["code"] == "generate_post_failed"
+    assert result["error"]["code"] == "media_pool_empty"
     posts = client.get("/api/projects/1/posts").json()
     assert len(posts) == 1
     assert posts[0]["status"] == "failed"
@@ -343,3 +343,24 @@ def test_approval_rejects_partial_validation_report(workflow):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM validation_reports WHERE post_id=:id AND layer='image'"), {"id": post_id})
     assert client.post(f'/api/projects/1/posts/{post_id}/approve').status_code == 409
+
+
+def test_empty_pool_can_generate_text_only(workflow):
+    client, api, engine, provider, current_time, requests = workflow
+    slot_id = _create_slot(client)
+    response = client.post(f"/api/projects/1/plan/{slot_id}/generate")
+    failed = _wait_operation(client, response.json()["operation_id"], expected_status="failed")
+    assert failed["error"]["message"] == "Упс, не нашли доступное изображение"
+    with engine.connect() as connection:
+        post_id = connection.execute(text("SELECT post_id FROM content_plan_slots WHERE id=:id"), {"id": slot_id}).scalar_one()
+    path = f"/api/projects/1/posts/{post_id}"
+    assert client.get(path).json()["generation"]["error_code"] == "media_pool_empty"
+    provider.media_asset_id = None
+    response = client.post(path + "/regenerate", json={"without_image": True})
+    assert response.status_code == 202, response.text
+    _wait_operation(client, response.json()["operation_id"])
+    post = client.get(path).json()
+    assert post["media"] is None
+    assert post["status"] == "needs_review"
+    assert post["post_text"]
+    assert not requests

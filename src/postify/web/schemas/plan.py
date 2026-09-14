@@ -69,3 +69,14 @@ class SlotResponse(ResponseSchema):
     topic: str
     status: str
     post: SlotPostResponse | None = None
+
+
+class GeneratePostRequest(RequestSchema):
+    without_image: bool = False
+    media_asset_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def check_media_choice(self):
+        if self.without_image and self.media_asset_id is not None:
+            raise ValueError("Нельзя одновременно выбрать изображение и режим без изображения")
+        return self

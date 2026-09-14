@@ -5,6 +5,8 @@
 без проверки владения.
 """
 
+from postify.web import image_search
+
 from postify.web.routes import (
     media,
     operations,
@@ -24,6 +26,7 @@ API_ROUTERS = (
     plan.router,
     posts.router,
     media.router,
+    image_search.router,
     operations.router,
     prompts.router,
     rules.router,

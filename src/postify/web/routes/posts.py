@@ -16,6 +16,7 @@ from postify.web.schemas.posts import (
     PostResponse,
     PostSummaryResponse,
 )
+from postify.web.schemas.plan import GeneratePostRequest
 from postify.web.schemas.operations import AcceptedOperationResponse
 
 
@@ -70,5 +71,6 @@ def reject_post(project_id: int, post_id: int, container: Container):
 
 
 @router.post("/{post_id}/regenerate", response_model=AcceptedOperationResponse, status_code=202)
-def regenerate_post(project_id: int, post_id: int, container: Container):
-    return container.api.regenerate_post(project_id, post_id)
+def regenerate_post(project_id: int, post_id: int, container: Container, body: GeneratePostRequest | None = None):
+    options = body.model_dump(exclude_defaults=True) if body else {}
+    return container.api.regenerate_post(project_id, post_id, **options)

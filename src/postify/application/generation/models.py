@@ -29,6 +29,9 @@ GENERATION_OUTPUT_SCHEMA: dict[str, object] = {
 }
 
 
+TEXT_ONLY_OUTPUT_SCHEMA = {**GENERATION_OUTPUT_SCHEMA, "properties": {**GENERATION_OUTPUT_SCHEMA["properties"], "media_asset_id": {"type": "null"}}}
+
+
 class GenerationError(RuntimeError):
     """Предсказуемая ошибка конвейера с машинным кодом."""
 
@@ -57,11 +60,11 @@ class GenerationBrief:
 @dataclass(frozen=True, slots=True)
 class GeneratedContent:
     post_text: str
-    media_asset_id: int
+    media_asset_id: int | None
     media_rationale: str
 
     @classmethod
-    def parse(cls, raw: str) -> "GeneratedContent":
+    def parse(cls, raw: str, *, without_image: bool = False) -> "GeneratedContent":
         try:
             value = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as error:
@@ -81,7 +84,7 @@ class GeneratedContent:
         rationale = value["media_rationale"]
         if not isinstance(post_text, str) or not post_text.strip():
             raise GenerationError("invalid_generation_output", "Текст поста пуст")
-        if type(asset_id) is not int or asset_id <= 0:
+        if (asset_id is not None if without_image else type(asset_id) is not int or asset_id <= 0):
             raise GenerationError(
                 "invalid_generation_output", "Некорректный media_asset_id"
             )
@@ -96,7 +99,7 @@ class GeneratedContent:
 class GenerationResult:
     post_id: int
     content: GeneratedContent
-    media: DraftMedia
+    media: DraftMedia | None
     validation: ValidationReport
     repair_iterations: int
     provider: str

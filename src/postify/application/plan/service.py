@@ -61,12 +61,12 @@ class PlanService:
         plan, view = self._for(project_id)
         return view(plan.skip(slot_id))
 
-    def generate(self, project_id: int, slot_id: int) -> dict[str, Any]:
+    def generate(self, project_id: int, slot_id: int, **options) -> dict[str, Any]:
         """202 по контракту: проверки синхронны, генерация — операция."""
         plan, _ = self._for(project_id)
         slot = plan.prepare_generation(slot_id)
         return {
-            "operation_id": self._submit_generation(project_id, slot.id),
+            "operation_id": self._submit_generation(project_id, slot.id, **options),
             "status": "running",
         }
 

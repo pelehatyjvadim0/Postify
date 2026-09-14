@@ -78,7 +78,14 @@ class PostsApi:
 
     def post(self, project_id: int, post_id: int) -> dict[str, Any]:
         detail = self._dashboard.post(project_id, post_id)
-        return _post(detail, self._zone(project_id), project_id=project_id, validation=self._validation.report(post_id))
+        result = _post(detail, self._zone(project_id), project_id=project_id, validation=self._validation.report(post_id))
+        # Старые ошибки записаны без причины: предлагаем восстановление, только
+        # если пост пуст и сейчас действительно нет доступных изображений.
+        if (result["status"] == "failed" and not result["post_text"]
+                and not (result.get("generation") or {}).get("error_code")
+                and SqlAlchemyMediaRepository(self._sessions, project_id).counts(now=self._now()).available == 0):
+            result["generation"] = {**(result.get("generation") or {}), "error_code": "media_pool_empty"}
+        return result
 
     def post_media(self, project_id: int, post_id: int) -> tuple[bytes, str]:
         media_path, media_mime = self._dashboard.post_media_path(project_id, post_id)

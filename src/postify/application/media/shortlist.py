@@ -25,6 +25,8 @@ class MediaPoolEmpty(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("media_pool_empty")
+        self.code = "media_pool_empty"
+        self.reason = "Упс, не нашли доступное изображение"
 
 
 class MediaShortlist:

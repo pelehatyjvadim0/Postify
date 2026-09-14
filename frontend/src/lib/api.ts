@@ -226,11 +226,17 @@ export const api = {
     request<Post>('POST', `${p(id)}/posts/${postId}/approve`),
   rejectPost: (id: number, postId: number) =>
     request<Post>('POST', `${p(id)}/posts/${postId}/reject`),
-  regeneratePost: (id: number, postId: number) =>
+  regeneratePost: (id: number, postId: number, body?: { without_image?: boolean; media_asset_id?: number }) =>
     request<{ operation_id: number; status: 'running' }>(
       'POST',
       `${p(id)}/posts/${postId}/regenerate`,
+      { body },
     ),
+
+  searchPostImages: (id: number, postId: number, q: string, cursor = 0) =>
+    request<{ items: { id: number; title: string; thumbnail_url: string; source_url: string }[]; next_cursor: number | null }>('GET', `${p(id)}/posts/${postId}/image-search`, { query: { q, cursor } }),
+  selectPostImage: (id: number, postId: number, imageId: number) =>
+    request<{ operation_id: number; status: 'running' }>('POST', `${p(id)}/posts/${postId}/image-search/select`, { body: { id: imageId } }),
 
   // Пул изображений
   media: (id: number, query: { available?: boolean; q?: string; limit?: number; cursor?: string }) =>

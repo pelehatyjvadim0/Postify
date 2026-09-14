@@ -26,6 +26,7 @@ from postify.web.dependencies import Container
 from postify.web.errors import ApiError
 from postify.web.schemas.operations import AcceptedOperationResponse
 from postify.web.schemas.plan import (
+    GeneratePostRequest,
     SlotCreateRequest,
     SlotPatchRequest,
     SlotResponse,
@@ -89,8 +90,9 @@ def delete_slot(project_id: int, slot_id: int, container: Container) -> Response
 @router.post(
     "/{slot_id}/generate", response_model=AcceptedOperationResponse, status_code=202
 )
-def generate_slot(project_id: int, slot_id: int, container: Container):
-    return _translated(lambda: container.api.generate_slot(project_id, slot_id))
+def generate_slot(project_id: int, slot_id: int, container: Container, body: GeneratePostRequest | None = None):
+    options = body.model_dump(exclude_defaults=True) if body else {}
+    return _translated(lambda: container.api.generate_slot(project_id, slot_id, **options))
 
 
 @router.post("/{slot_id}/skip", response_model=SlotResponse)

@@ -11,6 +11,7 @@ from typing import Protocol
 from postify.application.ai.gateway import CallContext, ModelGateway
 from postify.application.generation.models import (
     GENERATION_OUTPUT_SCHEMA,
+    TEXT_ONLY_OUTPUT_SCHEMA,
     MAX_REPAIR_ITERATIONS,
     GeneratedContent,
     GenerationBrief,
@@ -51,13 +52,13 @@ class GenerationRepository(Protocol):
         post_id: int,
         *,
         content: GeneratedContent,
-        media: DraftMedia,
+        media: DraftMedia | None,
         generation: Mapping[str, object],
         status: str = "needs_review",
         now: datetime,
     ) -> None: ...
 
-    def fail(self, post_id: int, *, now: datetime) -> None: ...
+    def fail(self, post_id: int, *, now: datetime, error_code: str = "generation_failed", error_message: str = "") -> None: ...
 
 
 class MediaShortlistProvider(Protocol):
@@ -98,15 +99,15 @@ class GeneratePost:
         self._shortlist_limit = shortlist_limit
         self._model = model
 
-    def generate(self, slot_id: int) -> GenerationResult:
+    def generate(self, slot_id: int, *, without_image: bool = False, candidates: Sequence[MediaCandidate] | None = None) -> GenerationResult:
         brief = self._repository.brief_for_slot(slot_id)
         post_id = self._repository.begin_generation(slot_id, now=self._clock())
-        return self._execute(post_id, brief)
+        return self._execute(post_id, brief, without_image=without_image, selected_candidates=candidates)
 
-    def regenerate(self, post_id: int) -> GenerationResult:
+    def regenerate(self, post_id: int, *, without_image: bool = False, candidates: Sequence[MediaCandidate] | None = None) -> GenerationResult:
         brief = self._repository.brief_for_post(post_id)
         self._repository.begin_regeneration(post_id, now=self._clock())
-        return self._execute(post_id, brief)
+        return self._execute(post_id, brief, without_image=without_image, selected_candidates=candidates)
 
     def run(
         self, *, slot_id: int | None = None, post_id: int | None = None
@@ -118,7 +119,7 @@ class GeneratePost:
             return self.generate(slot_id)
         return self.regenerate(post_id)
 
-    def _execute(self, post_id: int, brief: GenerationBrief) -> GenerationResult:
+    def _execute(self, post_id: int, brief: GenerationBrief, *, without_image: bool = False, selected_candidates: Sequence[MediaCandidate] | None = None) -> GenerationResult:
         try:
             # Реализация журнала из T8 очищает старые итерации при save(0).
             # Внешние журналы могут предоставить явный clear — используем его,
@@ -126,9 +127,9 @@ class GeneratePost:
             clear = getattr(self._journal, "clear", None)
             if callable(clear):
                 clear(post_id)
-            candidates = self._shortlist.execute(
+            candidates = (() if without_image else selected_candidates if selected_candidates is not None else self._shortlist.execute(
                 brief.slot.topic, limit=self._shortlist_limit
-            )
+            ))
             by_id = {candidate.asset.id: candidate for candidate in candidates}
             prompt = _generation_prompt(brief, candidates)
             content, call = self._complete(brief, prompt, by_id)
@@ -175,7 +176,7 @@ class GeneratePost:
                 content=content,
                 media=media,
                 generation=metadata,
-                status=("approved" if brief.publication_mode == "auto" and report.passed else "needs_review"),
+                status=("approved" if brief.publication_mode == "auto" and report.passed and not without_image else "needs_review"),
                 now=generated_at,
             )
             return result
@@ -184,7 +185,7 @@ class GeneratePost:
                            post_id, type(error).__name__, getattr(error, "code", "internal_error"))
             # Не маскируем исходную ошибку, если фиксация failed сама не удалась.
             try:
-                self._repository.fail(post_id, now=self._clock())
+                self._repository.fail(post_id, now=self._clock(), error_code=getattr(error, "code", "generation_failed"), error_message=getattr(error, "reason", ""))
             except Exception:
                 pass
             raise
@@ -197,12 +198,12 @@ class GeneratePost:
                 project_id=brief.project_id,
                 user_id=brief.user_id,
             ),
-            output_schema=GENERATION_OUTPUT_SCHEMA,
+            output_schema=GENERATION_OUTPUT_SCHEMA if candidates else TEXT_ONLY_OUTPUT_SCHEMA,
             model=self._model or brief.model,
             reasoning_effort=brief.reasoning_effort,
         )
-        content = GeneratedContent.parse(call.text)
-        if content.media_asset_id not in candidates:
+        content = GeneratedContent.parse(call.text, without_image=not candidates)
+        if candidates and content.media_asset_id not in candidates:
             raise GenerationError(
                 "media_not_in_shortlist",
                 "Модель выбрала изображение вне переданного шортлиста",
@@ -210,8 +211,8 @@ class GeneratePost:
         return content, call
 
     def _validate(self, post_id, brief, content, candidates, *, iteration):
-        asset = candidates[content.media_asset_id].asset
-        media = DraftMedia(
+        asset = candidates[content.media_asset_id].asset if candidates else None
+        media = None if asset is None else DraftMedia(
             asset_id=asset.id,
             file_path=asset.file_path,
             mime=asset.mime,
@@ -251,9 +252,12 @@ def _generation_prompt(
         f"\n\n## Инструкции текущей рубрики\n{rubric}" if rubric else ""
     )
     return (
+        ("Напиши готовый Telegram-пост без изображения. media_asset_id должен быть null. "
+         "Укажи в media_rationale, что пользователь выбрал пост без изображения.\n\n" if not candidates else
         "Напиши готовый Telegram-пост по текущему слоту. Выбери ровно одно "
         "изображение из шортлиста. Верни только объект заданной JSON-схемы; "
-        "media_asset_id обязан быть идентификатором из шортлиста.\n\n"
+        "media_asset_id обязан быть идентификатором из шортлиста.\n\n")
+        +
         f"{context}{rubric_block}\n\n"
         "## Шортлист изображений\n"
         f"{_candidates_json(candidates)}"

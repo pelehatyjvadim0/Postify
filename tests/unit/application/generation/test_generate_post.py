@@ -118,7 +118,8 @@ class Repository:
         self.events.append(("complete", post_id))
         self.completed = values
 
-    def fail(self, post_id, *, now):
+    def fail(self, post_id, *, now, error_code="generation_failed", error_message=""):
+        self.error = {"code": error_code, "message": error_message}
         self.events.append(("fail", post_id))
 
 
@@ -375,3 +376,36 @@ def test_provider_failure_during_second_repair_keeps_first_repair():
     assert result.repair_iterations == 1
     assert repository.completed['generation']['repair_error'] == 'provider_unavailable'
     assert 'private provider detail' not in str(repository.completed)
+
+
+def test_text_only_generation_skips_shortlist_and_validates_without_media():
+    service, repository, gateway, shortlist, validator, _ = _service(
+        [_json("Текст без картинки", None, "Пользователь выбрал без изображения")],
+        [ValidationReport(True)],
+    )
+    result = service.regenerate(77, without_image=True)
+    assert result.media is None
+    assert result.content.media_asset_id is None
+    assert shortlist.calls == []
+    assert validator.drafts[0].media is None
+    assert gateway.calls[0][1]["output_schema"]["properties"]["media_asset_id"] == {"type": "null"}
+
+
+def test_media_pool_empty_records_actionable_error():
+    from postify.application.media.shortlist import MediaPoolEmpty
+
+    class EmptyShortlist:
+        def execute(self, *args, **kwargs):
+            raise MediaPoolEmpty()
+
+    service, repository, *_ = _service([], [], shortlist=EmptyShortlist())
+    with pytest.raises(MediaPoolEmpty):
+        service.generate(41)
+    assert repository.error == {"code": "media_pool_empty", "message": "Упс, не нашли доступное изображение"}
+
+
+def test_explicit_image_uses_only_selected_candidate():
+    service, _, _, shortlist, _, _ = _service([_json("Текст", 1)], [ValidationReport(True)])
+    result = service.regenerate(77, candidates=(CANDIDATES[0],))
+    assert result.media.asset_id == 1
+    assert shortlist.calls == []
