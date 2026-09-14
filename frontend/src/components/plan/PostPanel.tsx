@@ -52,18 +52,22 @@ export function PostPanel({
   const toast = useToast()
 
   const postId = slot?.post?.id ?? null
+  const loadedKey = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     let active = true
     setEditing(false)
     setChoosingMedia(false)
     setMissing(false)
-    setPost(null)
+    const key = `${projectId}:${postId}`
+    const samePost = loadedKey.current === key
+    loadedKey.current = key
+    if (!samePost) setPost(null)
     if (postId === null) {
       setLoading(false)
       return
     }
-    setLoading(true)
+    if (!samePost) setLoading(true)
     api
       .post(projectId, postId)
       .then((loaded) => {
@@ -91,10 +95,39 @@ export function PostPanel({
     return () => { active = false }
   }, [projectId, postId, slot?.status, toast, operationRunning])
 
+  const generating = slot?.status === 'generating' || post?.status === 'generating'
+  const changed = React.useRef(onChanged)
+  changed.current = onChanged
+
+  // Продолжаем наблюдать и за генерацией, начатой до открытия панели.
+  React.useEffect(() => {
+    if (!generating || postId === null) return
+    let active = true
+    let timer: number
+    async function refresh() {
+      try {
+        const loaded = await api.post(projectId, postId!)
+        if (!active) return
+        setPost(loaded)
+        setDraft(loaded.post_text)
+        if (loaded.status !== 'generating') {
+          changed.current()
+          return
+        }
+      } catch {
+        // Временная ошибка сети не прекращает наблюдение за постом.
+      }
+      if (active) timer = window.setTimeout(refresh, 1000)
+    }
+    timer = window.setTimeout(refresh, 1000)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [projectId, postId, generating])
+
   if (!slot) return null
 
   const status = SLOT_STATUS[slot.status]
-  const editable = post?.status === 'needs_review' || post?.status === 'approved'
+  const assembling = post ? post.status === 'generating' : slot.status === 'generating'
+  const editable = !assembling && (post?.status === 'needs_review' || post?.status === 'approved')
   const canSkip = ['planned', 'no_topic', 'failed'].includes(slot.status)
   const canDelete = !slot.post && slot.status !== 'generating'
 
@@ -223,19 +256,19 @@ export function PostPanel({
             </div>
           </div>
 
-          {slot.status === 'generating' && (
-            <Alert tone="info" title="Агент пишет пост">
-              Идёт генерация. Статус обновится сам.
-            </Alert>
-          )}
-
           {missing && (
             <Alert tone="error" title="Пост не найден">
               Объект удалён или недоступен.
             </Alert>
           )}
 
-          {loading && <Skeleton className="h-48 w-full" />}
+          {loading && !assembling && <Skeleton className="h-48 w-full" />}
+          {assembling && (!post || loading) && (
+            <div className="relative overflow-hidden rounded-lg border border-border" aria-busy="true">
+              <div className="h-80 bg-muted/40 blur-sm" />
+              <AssemblyOverlay />
+            </div>
+          )}
 
           {post && !loading && (
             <>
@@ -245,7 +278,8 @@ export function PostPanel({
                   проверки. Можно отредактировать его или повторить генерацию.
                 </Alert>
               )}
-              <div className="overflow-hidden rounded-lg border border-border bg-card">
+              <div className="relative overflow-hidden rounded-lg border border-border bg-card" aria-busy={assembling}>
+                <div className={assembling ? 'pointer-events-none select-none blur-sm' : undefined} aria-hidden={assembling || undefined}>
                 {post.media ? (
                   <img
                     src={post.media.url}
@@ -301,6 +335,8 @@ export function PostPanel({
                     </div>
                   )}
                 </div>
+                </div>
+                {assembling && <AssemblyOverlay />}
               </div>
 
               {editable && !editing && (
@@ -368,5 +404,16 @@ export function PostPanel({
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function AssemblyOverlay() {
+  return (
+    <div className="absolute inset-0 grid place-items-center bg-background/60">
+      <div role="status" className="flex flex-col items-center gap-3 p-6 text-center">
+        <Loader2 aria-hidden="true" className="h-7 w-7 animate-spin text-muted-foreground" />
+        <p className="text-sm font-medium">Собираем пост</p>
+      </div>
+    </div>
   )
 }

@@ -184,7 +184,21 @@ def test_browser_editor_workflow(browser_application, tmp_path):
         page.get_by_label("Дата публикации", exact=True).fill(future.date().isoformat())
         page.get_by_label("Промпт поста", exact=True).fill("Green field and practical farming advice")
         page.get_by_role("dialog").get_by_role("button", name="Сохранить", exact=True).click()
+        # Держим ответ поста в generating, затем отпускаем без reload страницы.
+        pending_preview = {"value": True}
+        def preview_response(route):
+            response = route.fetch()
+            body = response.json()
+            if pending_preview["value"]:
+                body["status"] = "generating"
+            route.fulfill(response=response, json=body)
+        page.route(re.compile(r"/api/projects/\d+/posts/\d+$"), preview_response)
         page.get_by_role("button", name="Сгенерировать сейчас", exact=True).click()
+        page.get_by_text("Собираем пост", exact=True).wait_for()
+        assert page.locator('[aria-busy="true"] .blur-sm').count() == 1
+        pending_preview["value"] = False
+        page.get_by_text("Собираем пост", exact=True).wait_for(state="hidden")
+        page.unroute(re.compile(r"/api/projects/\d+/posts/\d+$"), preview_response)
         page.get_by_role("button", name="Править текст", exact=True).wait_for()
         assert calls
         dialog = page.get_by_role("dialog")
