@@ -1,8 +1,11 @@
-"""Поиск и импорт изображений Wikimedia Commons без произвольных URL."""
+"""Поиск по тегам Flickr через public feed и импорт через официальный oEmbed."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from html import unescape
 import re
+from threading import Lock
+from time import monotonic
 from urllib.parse import urlparse
 
 import httpx
@@ -14,18 +17,23 @@ from postify.web.dependencies import Container
 from postify.web.errors import ApiError
 from postify.web.schemas.common import RequestSchema
 
-API = 'https://commons.wikimedia.org/w/api.php'
-HEADERS = {'User-Agent': 'AutoPostTG/1.0 (image selection; Wikimedia Commons)'}
+API = 'https://www.flickr.com/services/feeds/photos_public.gne'
+OEMBED = 'https://www.flickr.com/services/oembed/'
+HEADERS = {'User-Agent': 'AutoPostTG/1.0 (image selection)'}
 router = APIRouter(prefix='/api/projects/{project_id}/posts/{post_id}/image-search', dependencies=[Depends(owned_project)])
+# Feed содержит до 20 снимков. Snapshot сохраняет порядок при «Найти другие».
+_snapshots: OrderedDict[tuple[int, int, str], tuple[float, list[dict]]] = OrderedDict()
+_lock = Lock()
+TTL = 1800
 
 
-def _query(params):
+def _query(params, url=API):
     try:
-        response = httpx.get(API, params={'action': 'query', 'format': 'json', **params}, headers=HEADERS, timeout=20)
+        response = httpx.get(url, params={'format': 'json', **params}, headers=HEADERS, timeout=20)
         response.raise_for_status()
         data = response.json()
-        if 'error' in data:
-            raise ValueError('Commons API error')
+        if not isinstance(data, dict):
+            raise ValueError('Invalid Flickr response')
         return data
     except (httpx.HTTPError, ValueError) as error:
         raise ApiError(502, 'image_search_unavailable', 'Не удалось найти изображения. Попробуйте ещё раз.') from error
@@ -35,41 +43,65 @@ def _plain(value):
     return unescape(re.sub('<[^>]*>', '', value or ''))[:500]
 
 
+def _safe_image(url):
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (parsed.scheme == 'https' and parsed.hostname == 'live.staticflickr.com'
+            and port in (None, 443) and not parsed.username and not parsed.password
+            and bool(re.fullmatch(r'/\d+/\d+_[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)?\.(?:jpg|png|webp)', parsed.path)))
+
+
 def _items(data):
-    result = []
-    for page in sorted(data.get('query', {}).get('pages', {}).values(), key=lambda p: p.get('index', 0)):
-        info = (page.get('imageinfo') or [{}])[0]
-        if info.get('mime') not in {'image/jpeg', 'image/png', 'image/webp'}:
+    result, seen = [], set()
+    for item in data.get('items', []):
+        source = item.get('link', '')
+        match = re.fullmatch(r'https://www\.flickr\.com/photos/[\w@-]+/(\d+)/', source)
+        url = item.get('media', {}).get('m', '')
+        if not match or not _safe_image(url):
             continue
-        url = (info.get('thumburl') or info.get('url', '')).split('?', 1)[0]
-        if urlparse(url).scheme != 'https' or urlparse(url).hostname not in {'upload.wikimedia.org', 'thumb.wikimedia.org'}:
+        image_id = int(match[1])
+        if image_id in seen:
             continue
-        meta = info.get('extmetadata', {})
-        result.append({'id': page['pageid'], 'title': page['title'].removeprefix('File:'),
-                       'thumbnail_url': url, 'source_url': info.get('descriptionurl'),
-                       'author': _plain(meta.get('Artist', {}).get('value')),
-                       'license': _plain(meta.get('LicenseShortName', {}).get('value'))})
+        seen.add(image_id)
+        result.append({'id': image_id, 'title': _plain(item.get('title')).strip() or 'Фото Flickr',
+                       'thumbnail_url': url, 'source_url': source,
+                       'author': _plain(item.get('author')), 'license': 'Права — на странице источника'})
     return result
 
 
-INFO = {'prop': 'imageinfo', 'iiprop': 'url|mime|extmetadata', 'iiurlwidth': 1200}
+def _prune():
+    for key, (created, _) in list(_snapshots.items()):
+        if monotonic() - created > TTL:
+            del _snapshots[key]
 
 
 @router.get('')
 def search(project_id: int, post_id: int, container: Container,
            q: str = Query(min_length=1, max_length=200), cursor: int = Query(default=0, ge=0, le=10000)):
     container.api.post(project_id, post_id)
-    items = []
-    offset = cursor
-    # Отбрасываем PDF/SVG и собираем пять растровых изображений, если они есть.
-    for _ in range(5):
-        data = _query({**INFO, 'generator': 'search', 'gsrsearch': q + ' filetype:bitmap',
-                       'gsrnamespace': 6, 'gsrlimit': 5 - len(items), 'gsroffset': offset})
-        items.extend(_items(data))
-        offset = data.get('continue', {}).get('gsroffset')
-        if len(items) == 5 or offset is None:
-            break
-    return {'items': items, 'next_cursor': offset}
+    # Flickr normalizes multi-word tags: "Haad Rin" -> "haadrin".
+    tag = ''.join(q.strip().lower().split())
+    if not tag or ',' in tag:
+        raise ApiError(400, 'invalid_search_query', 'Введите одно место или тег для поиска.')
+    key = (project_id, post_id, tag)
+    with _lock:
+        _prune()
+        snapshot = _snapshots.get(key)
+    if snapshot is None:
+        if cursor:
+            raise ApiError(409, 'image_search_expired', 'Результаты устарели. Нажмите «Найти» ещё раз.')
+        items = _items(_query({'tags': tag, 'tagmode': 'all', 'nojsoncallback': 1}))
+        with _lock:
+            _snapshots[key] = (monotonic(), items)
+            while len(_snapshots) > 128:
+                _snapshots.popitem(last=False)
+    else:
+        items = snapshot[1]
+    offset = cursor + 5
+    return {'items': items[cursor:offset], 'next_cursor': offset if offset < len(items) else None}
 
 
 class Selection(RequestSchema):
@@ -79,13 +111,19 @@ class Selection(RequestSchema):
 @router.post('/select', status_code=202)
 def select(project_id: int, post_id: int, body: Selection, container: Container):
     container.api.post(project_id, post_id)
-    items = _items(_query({**INFO, 'pageids': body.id}))
-    if not items:
+    with _lock:
+        _prune()
+        item = next((item for key, (_, items) in _snapshots.items()
+                     if key[:2] == (project_id, post_id) for item in items if item['id'] == body.id), None)
+    if item is None:
+        raise ApiError(400, 'image_unavailable', 'Изображение больше недоступно. Повторите поиск.')
+    info = _query({'url': item['source_url']}, OEMBED)
+    url = info.get('url', '')
+    if info.get('type') != 'photo' or not _safe_image(url):
         raise ApiError(400, 'image_unavailable', 'Изображение больше недоступно. Выберите другое.')
-    item = items[0]
     limit = container.api.media_upload_limit()
     try:
-        with httpx.stream('GET', item['thumbnail_url'], headers=HEADERS, timeout=30, follow_redirects=False) as response:
+        with httpx.stream('GET', url, headers=HEADERS, timeout=30, follow_redirects=False) as response:
             response.raise_for_status()
             payload = bytearray()
             for chunk in response.iter_bytes():

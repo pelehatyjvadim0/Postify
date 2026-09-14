@@ -20,7 +20,7 @@ export function WebImagePicker({ images, loading, selecting, hasMore, onNext, on
 }) {
   return (
     <div className="space-y-3 rounded-lg border border-border p-3" aria-busy={loading || selecting}>
-      <p className="text-xs text-muted-foreground">Выберите изображение для поста</p>
+      <p className="text-xs text-muted-foreground">Flickr · Выберите изображение для поста</p>
       {loading ? (
         <div role="status" className="flex min-h-28 items-center justify-center gap-2 text-sm text-muted-foreground">
           <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> Ищем изображения
@@ -44,7 +44,7 @@ export function WebImagePicker({ images, loading, selecting, hasMore, onNext, on
       <Button size="sm" variant="outline" disabled={loading || selecting || !hasMore} onClick={onNext}>
         <RefreshCw className="h-4 w-4" /> Найти другие
       </Button>
-      {!hasMore && !loading && images.length > 0 && <p className="text-xs text-muted-foreground">Других изображений по этому запросу нет.</p>}
+      {!hasMore && !loading && images.length > 0 && <p className="text-xs text-muted-foreground">Показаны доступные фото Flickr по этому тегу (до 20). Для нового поиска измените место или тег.</p>}
     </div>
   )
 }

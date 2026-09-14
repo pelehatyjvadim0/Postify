@@ -363,8 +363,9 @@ export function PostPanel({
               )}
               {webError && <Alert tone="error" title="Не удалось найти изображение">{webError}</Alert>}
               {showWebImages && <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">Поиск Flickr по тегу: укажите короткое название места или предмета, например Haad Rin.</p>
                 <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void searchWeb() }}>
-                  <Input aria-label="Запрос для поиска изображений" value={webQuery} onChange={(event) => { setWebQuery(event.target.value); setWebCursor(null) }} />
+                  <Input placeholder="Место или тег, например Haad Rin" aria-label="Запрос для поиска изображений" value={webQuery} onChange={(event) => { setWebQuery(event.target.value); setWebCursor(null) }} />
                   <Button type="submit" size="sm" disabled={searchingWeb || busy || !webQuery.trim()}>Найти</Button>
                 </form>
                 <WebImagePicker images={webImages} loading={searchingWeb} selecting={busy} hasMore={webCursor !== null} onNext={() => void searchWeb(webCursor ?? undefined)} onSelect={(image) => void selectWebImage(image)} /></div>}
