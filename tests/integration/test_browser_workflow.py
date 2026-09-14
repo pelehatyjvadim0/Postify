@@ -520,7 +520,6 @@ def test_browser_uploads_while_captioning_and_reads_full_description(
 
 @pytest.mark.parametrize("viewport", [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}])
 def test_browser_missing_image_recovery(browser_application, tmp_path, viewport, monkeypatch):
-    from urllib.parse import parse_qs, urlparse
     from playwright.sync_api import sync_playwright, expect
 
     original_complete = CodexModelProvider.complete
@@ -559,25 +558,9 @@ def test_browser_missing_image_recovery(browser_application, tmp_path, viewport,
             expect(dialog.get_by_text("Упс, не нашли доступное изображение", exact=True)).to_be_visible()
             expect(dialog.get_by_role("button", name="Опубликовать без изображения", exact=True)).to_be_enabled()
 
-            cursors = []
-            def image_search(route):
-                cursor = int(parse_qs(urlparse(route.request.url).query).get("cursor", ["0"])[0])
-                cursors.append(cursor)
-                route.fulfill(json={"items": [
-                    {"id": index, "title": f"Field {index}", "thumbnail_url": "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "source_url": f"https://commons.wikimedia.org/wiki/File:Field_{index}.jpg"}
-                    for index in range(cursor + 1, cursor + 6)
-                ], "next_cursor": cursor + 5})
-            page.route("**/image-search?*", image_search)
-            dialog.get_by_role("button", name="Найти в сети", exact=True).click()
-            choices = dialog.get_by_role("button", name=re.compile(r"^Выбрать: Field"))
-            expect(choices).to_have_count(5)
-            expect(dialog.get_by_role("button", name="Выбрать: Field 1", exact=True)).to_be_visible()
-            dialog.get_by_role("button", name="Найти другие", exact=True).click()
-            expect(dialog.get_by_role("button", name="Выбрать: Field 6", exact=True)).to_be_visible()
-            expect(choices).to_have_count(5)
-            expect(dialog.get_by_role("button", name="Выбрать: Field 1", exact=True)).to_have_count(0)
-            assert cursors == [0, 5]
-            _assert_rendered(page, tmp_path / "missing-image-search.png")
+            expect(dialog.get_by_role("button", name="Найти в сети", exact=True)).to_have_count(0)
+            expect(dialog.get_by_label("Запрос для поиска изображений")).to_have_count(0)
+            _assert_rendered(page, tmp_path / "missing-image.png")
 
             # Real text-only backend; polling reveals the draft without a reload.
             with page.expect_response("**/regenerate") as regenerated:

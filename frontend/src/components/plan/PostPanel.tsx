@@ -1,11 +1,10 @@
 import * as React from 'react'
-import { ExternalLink, ImagePlus, Loader2, Pencil, Search, Trash2 } from 'lucide-react'
+import { ExternalLink, ImagePlus, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/errors'
@@ -15,7 +14,6 @@ import type { MediaAsset, Post, Slot } from '@/lib/types'
 import { supportLog } from '@/lib/support'
 import { useToast } from '@/lib/toast'
 import { useOperation } from '@/lib/operation'
-import { WebImagePicker, type WebImage } from './WebImagePicker'
 
 interface Props {
   projectId: number
@@ -54,24 +52,10 @@ export function PostPanel({
   const [loadingMedia, setLoadingMedia] = React.useState(false)
   const toast = useToast()
   const recovery = useOperation(projectId)
-  const [webImages, setWebImages] = React.useState<WebImage[]>([])
-  const [webCursor, setWebCursor] = React.useState<number | null>(null)
-  const [webQuery, setWebQuery] = React.useState(slot?.topic ?? '')
-  const [searchingWeb, setSearchingWeb] = React.useState(false)
-  const [showWebImages, setShowWebImages] = React.useState(false)
-  const [webError, setWebError] = React.useState<string | null>(null)
   const currentPostId = React.useRef(slot?.post?.id ?? null)
 
   const postId = slot?.post?.id ?? null
   currentPostId.current = postId
-  React.useEffect(() => {
-    setShowWebImages(false)
-    setWebQuery(slot?.topic ?? '')
-    setWebImages([])
-    setSearchingWeb(false)
-    setWebCursor(null)
-    setWebError(null)
-  }, [projectId, postId])
   const loadedKey = React.useRef<string | null>(null)
 
   React.useEffect(() => {
@@ -155,7 +139,6 @@ export function PostPanel({
   async function recover(body: { without_image?: boolean; media_asset_id?: number }) {
     if (!post) return
     const recoveringPostId = post.id
-    setShowWebImages(false)
     await recovery.run(() => api.regeneratePost(projectId, recoveringPostId, body), {
       onStarted: onChanged,
       successText: 'Пост подготовлен',
@@ -170,44 +153,6 @@ export function PostPanel({
       toast.error(error instanceof ApiError ? error.message : 'Не удалось загрузить пост')
     }
     onChanged()
-  }
-
-  async function searchWeb(cursor = 0) {
-    if (!post || !webQuery.trim()) return
-    const searchingPostId = post.id
-    setShowWebImages(true)
-    setSearchingWeb(true)
-    setWebImages([])
-    setWebCursor(null)
-    setWebError(null)
-    try {
-      const results = await api.searchPostImages(projectId, searchingPostId, webQuery.trim(), cursor)
-      if (currentPostId.current !== searchingPostId) return
-      setWebImages(results.items)
-      setWebCursor(results.next_cursor)
-    } catch (error) {
-      if (currentPostId.current === searchingPostId) setWebError(error instanceof ApiError ? error.message : 'Попробуйте ещё раз')
-    } finally {
-      if (currentPostId.current === searchingPostId) setSearchingWeb(false)
-    }
-  }
-
-  async function selectWebImage(image: WebImage) {
-    if (!post) return
-    const selectingPostId = post.id
-    setBusy(true)
-    try {
-      const operation = await recovery.run(() => api.selectPostImage(projectId, selectingPostId, image.id))
-      if (currentPostId.current !== selectingPostId || operation?.status !== 'succeeded') return
-      const assetIds = (operation.result as { asset_ids?: number[] } | undefined)?.asset_ids
-      if (!Array.isArray(assetIds) || typeof assetIds[0] !== 'number') {
-        toast.error('Не удалось сохранить изображение')
-        return
-      }
-      await recover({ media_asset_id: assetIds[0] })
-    } finally {
-      setBusy(false)
-    }
   }
 
   async function loadMedia(cursor?: string) {
@@ -356,19 +301,10 @@ export function PostPanel({
                   <p className="text-sm font-medium">Упс, не нашли доступное изображение</p>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" disabled={busy || operationRunning} onClick={() => void recover({ without_image: true })}>Опубликовать без изображения</Button>
-                    <Button size="sm" variant="outline" disabled={busy || operationRunning || searchingWeb} onClick={() => void searchWeb()}><Search className="h-4 w-4" /> Найти в сети</Button>
                   </div>
                   <p className="text-xs text-muted-foreground">Подготовим черновик без изображения. Перед публикацией его можно будет проверить и одобрить.</p>
                 </div>
               )}
-              {webError && <Alert tone="error" title="Не удалось найти изображение">{webError}</Alert>}
-              {showWebImages && <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">Поиск Flickr по тегу: укажите короткое название места или предмета, например Haad Rin.</p>
-                <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); void searchWeb() }}>
-                  <Input placeholder="Место или тег, например Haad Rin" aria-label="Запрос для поиска изображений" value={webQuery} onChange={(event) => { setWebQuery(event.target.value); setWebCursor(null) }} />
-                  <Button type="submit" size="sm" disabled={searchingWeb || busy || !webQuery.trim()}>Найти</Button>
-                </form>
-                <WebImagePicker images={webImages} loading={searchingWeb} selecting={busy} hasMore={webCursor !== null} onNext={() => void searchWeb(webCursor ?? undefined)} onSelect={(image) => void selectWebImage(image)} /></div>}
               {post.generation?.repair_error && (
                 <Alert tone="warning" title="Не удалось исправить черновик">
                   Сервис генерации прервал исправление текста. Черновик сохранён с результатами
