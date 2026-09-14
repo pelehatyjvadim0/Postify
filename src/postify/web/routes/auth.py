@@ -138,13 +138,21 @@ def me(request: Request):
     user = getattr(request.state, "user", None)
     if user is None:
         return auth_error(request, 401, "authentication_required")
-    return JSONResponse(
+    response = JSONResponse(
         status_code=200, content=user_payload(request.app.state.auth, user),
         headers={
             "x-postify-csrf": csrf_token(request.app.state.csrf_secret, request.cookies[SESSION_COOKIE]),
             "Cache-Control": "no-store",
         },
     )
+
+    if request.url.scheme == "https":
+        response.set_cookie(
+            SESSION_COOKIE, request.cookies[SESSION_COOKIE],
+            max_age=int(SESSION_TTL.total_seconds()), httponly=True,
+            samesite="strict", secure=True, path="/",
+        )
+    return response
 
 
 def _iso(value: datetime) -> str:

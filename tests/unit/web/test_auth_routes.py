@@ -311,3 +311,14 @@ def test_me_never_discloses_csrf_without_valid_session(context):
     response = TestClient(app).get('/api/me')
     assert response.status_code == 401
     assert 'x-postify-csrf' not in response.headers
+
+
+def test_https_me_upgrades_existing_cookie_to_secure(context):
+    app, service, *_ = context
+    client = TestClient(app)
+    token = login(client, service)
+    _status(client, token)
+    response = client.get('https://testserver/api/me')
+    assert response.status_code == 200
+    cookie = response.headers['set-cookie'].lower()
+    assert 'secure' in cookie and 'httponly' in cookie and 'samesite=strict' in cookie

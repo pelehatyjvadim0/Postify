@@ -1,0 +1,2 @@
+# IP certificates last six days; check renewal every six hours.
+19 */6 * * * root bash /opt/autoposttg-next/deploy/renew-certificate.sh >> /var/log/autoposttg-cert-renew.log 2>&1

@@ -31,7 +31,8 @@ def main() -> None:
     subprocess.run(["alembic", "upgrade", "head"], check=True)
     argv = [
         "uvicorn", "postify.web.app:create_app", "--factory",
-        "--host", "0.0.0.0", "--port", "8000", "--workers", "1",
+        "--host", os.environ.get("AUTOPOST_LISTEN_HOST", "0.0.0.0"),
+        "--port", os.environ.get("AUTOPOST_LISTEN_PORT", "8000"), "--workers", "1",
     ]
     if os.environ.get("AUTOPOST_RELOAD") == "1":
         argv.extend(["--reload", "--reload-dir", "/app/src"])
