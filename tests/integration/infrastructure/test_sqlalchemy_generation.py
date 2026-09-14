@@ -146,7 +146,7 @@ def test_reads_all_context_and_atomically_completes_post(repository, engine) -> 
         ).scalar_one()
         usage = connection.execute(
             text("SELECT asset_id,post_id FROM media_usages")
-        ).one()
+        ).one_or_none()
         use_count = connection.execute(
             text("SELECT use_count FROM media_assets WHERE id=9")
         ).scalar_one()
@@ -164,8 +164,8 @@ def test_reads_all_context_and_atomically_completes_post(repository, engine) -> 
     assert post["media_path"] == "/media/9.jpg"
     assert post["generation"] == {"provider": "codex", "iterations": 1}
     assert slot_post == post_id
-    assert usage == (9, post_id)
-    assert use_count == 1
+    assert usage is None
+    assert use_count == 0
 
 
 def test_regeneration_resets_status_and_failure_is_visible(repository, engine) -> None:

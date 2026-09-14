@@ -25,7 +25,7 @@ CREATE_FIELDS = frozenset({"name", "timezone"})
 EDITABLE_FIELDS = frozenset(
     {
         "name", "timezone", "language", "audience", "tone", "project_prompt",
-        "publication_mode", "generation_lead_minutes", "media_reuse_days",
+        "publication_mode", "generation_lead_minutes", "media_reuse_days", "media_reuse_blocked",
     }
 )
 

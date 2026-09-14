@@ -96,6 +96,7 @@ class SqlAlchemyProjectRepository:
                     "generation_lead_minutes",
                     "publication_mode",
                     "media_reuse_days",
+                    "media_reuse_blocked",
                 )
                 for name in fields:
                     setattr(model, name, getattr(project, name))
@@ -412,6 +413,7 @@ def _project(model: ContentProjectModel) -> ContentProject:
         model.generation_lead_minutes,
         model.publication_mode,
         model.media_reuse_days,
+        model.media_reuse_blocked,
     )
 
 

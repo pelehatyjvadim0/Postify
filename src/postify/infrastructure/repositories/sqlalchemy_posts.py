@@ -173,7 +173,7 @@ class SqlAlchemyPostRepository:
                 asset = session.execute(
                     text(
                         "SELECT a.file_path,a.mime,a.caption,a.caption_status,"
-                        "a.embedding,a.last_used_at,p.media_reuse_days "
+                        "a.embedding,a.last_used_at,p.media_reuse_days,p.media_reuse_blocked "
                         "FROM media_assets a JOIN content_projects p ON p.id=a.project_id"
                         " WHERE a.project_id=:project AND a.id=:asset AND a.enabled"
                         " FOR UPDATE OF a"
@@ -187,7 +187,7 @@ class SqlAlchemyPostRepository:
                 if (
                     asset.caption_status != "ready"
                     or asset.embedding is None
-                    or (asset.last_used_at is not None and
+                    or (asset.media_reuse_blocked and asset.last_used_at is not None and
                         asset.last_used_at >= now - timedelta(days=asset.media_reuse_days))
                 ):
                     raise InvalidPostTransition("Изображение пока недоступно для повторного использования")
@@ -202,14 +202,6 @@ class SqlAlchemyPostRepository:
                     {"project": self.project_id, "post": post_id, "asset": asset_id,
                      "path": asset.file_path, "mime": asset.mime, "now": now},
                 )
-                session.execute(text(
-                    "UPDATE media_assets SET use_count=use_count+1,last_used_at=:now"
-                    " WHERE project_id=:project AND id=:asset"
-                ), {"project": self.project_id, "asset": asset_id, "now": now})
-                session.execute(text(
-                    "INSERT INTO media_usages(project_id,asset_id,post_id,used_at)"
-                    " VALUES (:project,:asset,:post,:now)"
-                ), {"project": self.project_id, "asset": asset_id, "post": post_id, "now": now})
                 session.execute(text("DELETE FROM validation_reports WHERE post_id=:id"), {"id": post_id})
                 self._history(session, post_id, "needs_review", "media_changed", now)
         return self.get_post(post_id)
@@ -266,6 +258,9 @@ class SqlAlchemyPostRepository:
                     ), {"id": post_id}).all()
                     if not {"format", "rules", "grounding", "image"}.issubset({row.layer for row in reports}) or not all(row.passed for row in reports):
                         raise InvalidPostTransition(_validation_failure_reason(reports))
+                    if post.media_path is not None:
+                        from postify.infrastructure.repositories.media_approval import record_approval
+                        record_approval(session, self.project_id, post_id, post.media_path, now)
                 session.execute(
                     text(
                         "UPDATE posts SET status=:status,updated_at=:now"

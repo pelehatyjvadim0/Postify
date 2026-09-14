@@ -4,6 +4,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -130,6 +131,7 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
           publication_mode: draft.publication_mode,
           generation_lead_minutes: leadMinutes,
           media_reuse_days: reuseDays,
+          media_reuse_blocked: draft.media_reuse_blocked ?? true,
         }),
       { ok: 'Настройки проекта сохранены' },
     )
@@ -230,12 +232,16 @@ function ProjectForm({ project, onChanged }: { project: Project; onChanged: () =
             label="Повтор изображений, дней"
             help={
               <FieldHelp title="Повтор изображений">
-                Сколько дней изображение не возвращается в подбор после использования. Не даёт
-                одной и той же картинке выходить в канал слишком часто.
+                После одобрения поста изображение блокируется на указанный срок. Если выключить, изображения можно использовать без ограничений по повторам.
               </FieldHelp>
             }
           >
+            <label className="mb-3 flex items-center gap-3 text-sm">
+              <Switch checked={draft.media_reuse_blocked ?? true} onCheckedChange={(value) => set('media_reuse_blocked', value)} />
+              Блокировать повторное использование изображений
+            </label>
             <Input
+              disabled={draft.media_reuse_blocked === false}
               type="number"
               min={1}
               max={3650}

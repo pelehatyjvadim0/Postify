@@ -77,6 +77,7 @@ export interface Project {
   publication_mode: PublicationMode
   generation_lead_minutes: number
   media_reuse_days: number
+  media_reuse_blocked?: boolean
   channel: ProjectChannel
   media: { total: number; available: number }
 }

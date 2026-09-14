@@ -126,6 +126,7 @@ def test_browser_telegram_login(browser_application, viewport):
 
 
 def test_browser_editor_workflow(browser_application, tmp_path):
+    from playwright.sync_api import expect
     playwright = pytest.importorskip("playwright.sync_api")
     base_url, auth, calls = browser_application
     with playwright.sync_playwright() as driver:
@@ -161,6 +162,16 @@ def test_browser_editor_workflow(browser_application, tmp_path):
         page.reload()
         page.get_by_role("button", name="Настройки", exact=True).click()
         assert page.get_by_role("textbox", name="Промпт агента", exact=True).input_value() == "Practical farming guidance"
+        reuse_toggle = page.get_by_role("switch", name="Блокировать повторное использование изображений")
+        expect(reuse_toggle).to_be_checked()
+        reuse_toggle.click()
+        with page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith(f"/api/projects/{project_id}")) as reuse_saved:
+            page.get_by_role("button", name="Сохранить настройки", exact=True).click()
+        assert reuse_saved.value.ok
+        assert _api(page, f"/api/projects/{project_id}")["media_reuse_blocked"] is False
+        page.reload()
+        page.get_by_role("button", name="Настройки", exact=True).click()
+        expect(page.get_by_role("switch", name="Блокировать повторное использование изображений")).not_to_be_checked()
         page.get_by_placeholder("@channel", exact=True).fill("@browser_test_channel")
         page.locator('input[type="password"]').fill("777:browser-test-token")
         with page.expect_response(f"**/api/projects/{project_id}/channel") as channel_response:

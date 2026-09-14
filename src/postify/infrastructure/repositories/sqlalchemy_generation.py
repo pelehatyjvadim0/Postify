@@ -229,7 +229,7 @@ class SqlAlchemyGenerationRepository:
                         session.execute(
                             text(
                                 "SELECT a.file_path,a.mime,a.enabled,a.caption_status,"
-                                "a.embedding,a.last_used_at,p.media_reuse_days "
+                                "a.embedding,a.last_used_at,p.media_reuse_days,p.media_reuse_blocked "
                                 "FROM media_assets a JOIN content_projects p "
                                 "ON p.id=a.project_id WHERE a.project_id=:project "
                                 "AND a.id=:asset FOR UPDATE OF a"
@@ -246,7 +246,7 @@ class SqlAlchemyGenerationRepository:
                         or asset["caption_status"] != "ready"
                         or asset["embedding"] is None
                         or (
-                            asset["last_used_at"] is not None
+                            asset["media_reuse_blocked"] and asset["last_used_at"] is not None
                             and asset["last_used_at"]
                             >= now - timedelta(days=asset["media_reuse_days"])
                         )
@@ -276,30 +276,9 @@ class SqlAlchemyGenerationRepository:
                 )
                 if updated.rowcount != 1:
                     raise GenerationError("generation_not_running")
-                if media is not None:
-                    session.execute(
-                        text(
-                            "UPDATE media_assets SET use_count=use_count+1,"
-                            "last_used_at=:now WHERE project_id=:project AND id=:asset"
-                        ),
-                        {
-                            "project": self._project_id,
-                            "asset": media.asset_id,
-                            "now": now,
-                        },
-                    )
-                    session.execute(
-                        text(
-                            "INSERT INTO media_usages(project_id,asset_id,post_id,used_at) "
-                            "VALUES (:project,:asset,:post,:now)"
-                        ),
-                        {
-                            "project": self._project_id,
-                            "asset": media.asset_id,
-                            "post": post_id,
-                            "now": now,
-                        },
-                    )
+                if media is not None and status == "approved":
+                    from postify.infrastructure.repositories.media_approval import record_approval
+                    record_approval(session, self._project_id, post_id, asset["file_path"], now)
                 self._history(session, post_id, status, "generated", now)
                 session.commit()
             except BaseException:

@@ -54,6 +54,7 @@ class ContentProjectModel(Base):
     media_reuse_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("30")
     )
+    media_reuse_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

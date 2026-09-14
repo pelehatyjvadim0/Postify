@@ -122,6 +122,7 @@ class ContentProject:
     publication_mode: str = "review"
     # Сколько дней изображение не предлагается повторно.
     media_reuse_days: int = 30
+    media_reuse_blocked: bool = True
 
     def __post_init__(self) -> None:
         """

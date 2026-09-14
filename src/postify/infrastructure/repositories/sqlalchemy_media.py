@@ -27,7 +27,7 @@ from postify.application.media.models import (
 # в разделе 10 контракта.
 _AVAILABLE = (
     "(a.enabled AND a.caption_status = 'ready' AND a.embedding IS NOT NULL"
-    " AND (a.last_used_at IS NULL"
+    " AND (NOT p.media_reuse_blocked OR a.last_used_at IS NULL"
     "      OR a.last_used_at < :now - make_interval(days => p.media_reuse_days)))"
 )
 

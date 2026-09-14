@@ -452,6 +452,7 @@ class WebApplication:
             "publication_mode": project.publication_mode,
             "generation_lead_minutes": project.generation_lead_minutes,
             "media_reuse_days": project.media_reuse_days,
+            "media_reuse_blocked": project.media_reuse_blocked,
             "channel": self._channel_view(project.id),
             "media": self._media.media_counts(project.id),
         }

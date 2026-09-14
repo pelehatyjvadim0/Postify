@@ -28,6 +28,7 @@ class ProjectUpdateRequest(RequestSchema):
     project_prompt: str | None = Field(default=None, max_length=20_000)
     generation_lead_minutes: int | None = Field(default=None, gt=0, le=43_200)
     publication_mode: Literal["review", "auto"] | None = None
+    media_reuse_blocked: bool | None = None
     media_reuse_days: int | None = Field(default=None, gt=0, le=3650)
 
 
@@ -63,6 +64,7 @@ class ProjectResponse(ResponseSchema):
     publication_mode: str
     generation_lead_minutes: int
     media_reuse_days: int
+    media_reuse_blocked: bool = True
     channel: ChannelResponse
     media: ProjectMediaResponse
 

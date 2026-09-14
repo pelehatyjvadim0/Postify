@@ -132,7 +132,7 @@ def _create_slot(client, *, offset=1):
     return created.json()["id"]
 
 
-def test_manual_media_selection_records_usage_and_enforces_reuse(workflow):
+def test_media_blocks_only_on_approval_and_toggle_releases_it(workflow):
     client, _, engine, provider, _, _ = workflow
     _upload_image(client, provider)
     slot_id = _create_slot(client)
@@ -147,7 +147,19 @@ def test_manual_media_selection_records_usage_and_enforces_reuse(workflow):
     assert client.patch(path, json={"media_asset_id": replacement}).status_code == 200
     assets = client.get("/api/projects/1/media").json()["items"]
     asset = next(item for item in assets if item["id"] == replacement)
+    assert asset["use_count"] == 0
+    assert asset["available"] is True
+    assert client.post(path + "/approve").status_code == 200
+    assert client.post(path + "/approve").status_code == 200
+    asset = next(item for item in client.get("/api/projects/1/media").json()["items"] if item["id"] == replacement)
     assert asset["use_count"] == 1
+    assert asset["available"] is False
+    assert client.put("/api/projects/1", json={"media_reuse_blocked": False}).status_code == 200
+    assert client.get("/api/projects/1").json()["media_reuse_blocked"] is False
+    asset = next(item for item in client.get("/api/projects/1/media").json()["items"] if item["id"] == replacement)
+    assert asset["available"] is True
+    assert client.put("/api/projects/1", json={"media_reuse_blocked": True}).status_code == 200
+    asset = next(item for item in client.get("/api/projects/1/media").json()["items"] if item["id"] == replacement)
     assert asset["available"] is False
     with engine.connect() as connection:
         assert connection.execute(text(
@@ -403,3 +415,23 @@ def test_generation_and_manual_edit_share_user_context(workflow, monkeypatch):
     assert drafts[0].common_prompt == drafts[1].common_prompt
     assert drafts[0].system_prompt == drafts[1].system_prompt
     assert not requests
+
+
+def test_two_drafts_share_photo_until_approval_and_unlimited_reuse(workflow):
+    client, _, _, provider, _, _ = workflow
+    asset_id = _upload_image(client, provider)
+    posts = []
+    for offset in (1, 2):
+        slot_id = _create_slot(client, offset=offset)
+        accepted = client.post(f"/api/projects/1/plan/{slot_id}/generate")
+        posts.append(_wait_operation(client, accepted.json()["operation_id"])["result"]["post_id"])
+    assert client.get("/api/projects/1/media").json()["items"][0]["available"] is True
+    assert client.post(f"/api/projects/1/posts/{posts[0]}/approve").status_code == 200
+    blocked = client.post(f"/api/projects/1/posts/{posts[1]}/approve")
+    assert blocked.status_code == 409 and "другого поста" in blocked.text
+    assert client.put("/api/projects/1", json={"media_reuse_blocked": False}).status_code == 200
+    assert client.post(f"/api/projects/1/posts/{posts[1]}/approve").status_code == 200
+    slot_id = _create_slot(client, offset=3)
+    accepted = client.post(f"/api/projects/1/plan/{slot_id}/generate")
+    third = _wait_operation(client, accepted.json()["operation_id"])["result"]["post_id"]
+    assert client.get(f"/api/projects/1/posts/{third}").json()["media"]["asset_id"] == asset_id
